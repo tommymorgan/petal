@@ -60,3 +60,6 @@ apps/desktop/vendor/**/Cargo.lock
 site/.pii-patterns.local.json
 .pii-patterns.local.json
 .omp/
+
+# Local slice-flow acceptance coverage; never commit the working ledger.
+plans/*.prd-coverage.md
