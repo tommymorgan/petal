@@ -273,18 +273,14 @@ windows-future = { version = "0.3.2", features = ["std"] }
 # a direct dep adds no new build surface, same reasoning as percent-encoding above.
 webview2-com = "0.39"
 
+[target.'cfg(unix)'.dependencies]
+# Descriptor limits are queried on Linux as well as macOS; Windows must not
+# carry this Unix-only dependency.
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = { version = "8.0.0", features = ["macos_15_0", "async"] }
 yuv-sys = "0.3"
-# Backs `instance_lock.rs`'s `flock(2)` call and Unix-socket handoff --
-# genuinely Unix-only (`std::os::unix::io::AsRawFd`, `libc::flock`,
-# `std::os::unix::net::UnixStream`), and that module is itself macOS-only
-# (see its `mod instance_lock;` gate in lib.rs), so this must stay scoped
-# here rather than in the unconditional `[dependencies]` table -- an earlier
-# version put it there and broke the Windows build outright (`std::os::unix`
-# doesn't exist on that target). Already present transitively (e.g. via
-# screencapturekit); promoted to a direct, macOS-scoped dependency here.
-libc = "0.2"
 # Menubar pill (menubar.rs) adds NSStatusBar/NSStatusItem/NSView/NSButton/
 # NSColor/NSBezierPath/NSGraphicsContext/NSFont/NSScreen/NSApplication to the
 # feature set already used by window_source.rs (NSWorkspace etc.) — needed to

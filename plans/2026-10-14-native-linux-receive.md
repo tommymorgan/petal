@@ -29,11 +29,11 @@ A working build is not acceptance. Build and launch the executable in this compu
 
 **Soft-cap flag**: low-confidence estimate; one scenario, preserved atomically.
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: apps/desktop/features/linux-room-membership.feature::Launch the Linux app in the graphical session
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Launch the Linux app in the graphical session
   Given the locally built Linux executable is available on this computer

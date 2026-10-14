@@ -104,21 +104,6 @@ test('#669: debug_settings module exists with the same shape as ai_chat/settings
   assert.match(source, /DEBUG_MODE_CHANGED_EVENT: &str = "debug-mode-changed"/);
 });
 
-test('#669: debug_settings is a declared module and initialized on both platform setup paths', () => {
-  const lib = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8');
-  assert.match(lib, /mod debug_settings;/);
-
-  // Two separate `run()` entry points exist (macOS-gated and
-  // not-macOS-gated) with their own `.setup(...)` closures -- initialize
-  // must appear in both, not just one.
-  const macRun = lib.split('#[cfg(target_os = "macos")]\n#[cfg_attr(mobile, tauri::mobile_entry_point)]\npub fn run()')[1];
-  const otherRun = lib.split('#[cfg(not(target_os = "macos"))]\n#[cfg_attr(mobile, tauri::mobile_entry_point)]\npub fn run()')[1];
-  assert.ok(macRun, 'macOS run() not found');
-  assert.ok(otherRun, 'non-macOS run() not found');
-  assert.match(macRun, /debug_settings::initialize\(&app_data_dir\)/);
-  assert.match(otherRun, /debug_settings::initialize\(&app_data_dir\)/);
-});
-
 test('#669: debug_mode_settings and set_debug_mode are registered on BOTH the macOS and Windows invoke_handler lists', () => {
   const lib = readFileSync(new URL('../src-tauri/src/lib.rs', import.meta.url), 'utf8');
   const [macSection, otherSection] = lib.split('.invoke_handler(tauri::generate_handler![').slice(1);

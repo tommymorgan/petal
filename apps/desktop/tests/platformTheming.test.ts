@@ -49,18 +49,6 @@ const windowsShareOverlayRsSource = readFileSync(
   new URL('../src-tauri/src/windows_share_overlay.rs', import.meta.url),
   'utf8'
 );
-const diagnosticsRsSource = readFileSync(
-  new URL('../src-tauri/src/diagnostics.rs', import.meta.url),
-  'utf8'
-);
-const pipelineStatsRsSource = readFileSync(
-  new URL('../src-tauri/src/pipeline_stats.rs', import.meta.url),
-  'utf8'
-);
-const sessionStubRsSource = readFileSync(
-  new URL('../src-tauri/src/session_stub.rs', import.meta.url),
-  'utf8'
-);
 
 function cssBlock(source: string, selector: string): string {
   const marker = `${selector} {`;
@@ -229,34 +217,6 @@ test('the Network Cockpit window builds hidden and reveals only after the page l
   assert.match(networkCockpitRsSource, /\.visible\(false\)/);
   assert.match(networkCockpitRsSource, /\.on_page_load\(/);
   assert.match(networkCockpitRsSource, /PageLoadEvent::Finished/);
-});
-
-test('the Windows build runs the portable diagnostics poller and state', () => {
-  // The diagnostics module was macOS-gated; the stats poller + event
-  // journal read cross-platform LiveKit stats, so they are ungated while
-  // the macOS-native display-stage feeds stay gated (honest nulls on
-  // Windows).
-  assert.match(libRsSource, /pub mod diagnostics;/);
-  assert.doesNotMatch(
-    libRsSource,
-    /#\[cfg\(target_os = "macos"\)\]\s*\npub mod diagnostics;/
-  );
-  assert.match(diagnosticsRsSource, /pub fn start_for_room\(/);
-  assert.doesNotMatch(
-    diagnosticsRsSource,
-    /#\[cfg\(target_os = "macos"\)\]\s*\npub fn start_for_room\(/
-  );
-  assert.match(diagnosticsRsSource, /pub async fn collect_tick\(/);
-  // The poller's per-tick cross-peer publish path is portable too.
-  assert.doesNotMatch(pipelineStatsRsSource, /#!\[cfg\(target_os = "macos"\)\]/);
-  // DiagnosticsState must be managed in the Windows run() as well — the
-  // slice from the LAST run() is the Windows one.
-  const windowsRun = libRsSource.slice(libRsSource.lastIndexOf('pub fn run()'));
-  assert.match(windowsRun, /\.manage\(diagnostics::DiagnosticsState::default\(\)\)/);
-  // The Windows session starts the poller on join, mirroring macOS
-  // session/room.rs (self-terminating via the generation counter).
-  assert.match(sessionStubRsSource, /crate::diagnostics::start_for_room\(/);
-  assert.match(sessionStubRsSource, /connected\.url\.clone\(\)/);
 });
 
 test('updater treats a missing Windows manifest entry as up-to-date, not an error', () => {

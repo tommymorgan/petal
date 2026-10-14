@@ -36,6 +36,8 @@ pub enum CameraError {
     Configuration(String),
     #[error("{0}")]
     Operation(String),
+    #[error("camera publication is unsupported on Linux")]
+    UnsupportedPlatform,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -408,6 +410,25 @@ pub fn open_camera(
         preferred_device_id,
         on_frame,
     )?))
+}
+
+#[cfg(target_os = "linux")]
+pub fn list_devices() -> Result<Vec<CameraDeviceInfo>, CameraError> {
+    Err(CameraError::UnsupportedPlatform)
+}
+
+#[cfg(target_os = "linux")]
+pub fn list_modes(_preferred_device_id: Option<&str>) -> Result<Vec<CameraMode>, CameraError> {
+    Err(CameraError::UnsupportedPlatform)
+}
+
+#[cfg(target_os = "linux")]
+pub fn open_camera(
+    _preferred_device_id: Option<&str>,
+    _preferred_mode: Option<PreferredCameraMode>,
+    _on_frame: impl Fn(CameraFrame) + Send + Sync + 'static,
+) -> Result<Box<dyn CameraBackend>, CameraError> {
+    Err(CameraError::UnsupportedPlatform)
 }
 
 // ---------------------------------------------------------------------------

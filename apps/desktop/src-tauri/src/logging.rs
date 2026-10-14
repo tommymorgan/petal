@@ -2863,6 +2863,7 @@ pub fn log_updater_event(level: FrontendLogLevel, message: String) {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn log_startup_hardware() {
     let arch = std::env::consts::ARCH;
     let hw_model =
@@ -2878,6 +2879,15 @@ fn log_startup_hardware() {
         .map(|count| count.to_string())
         .unwrap_or_else(|| "unknown".into());
     log::info!("startup: gpu recoveryCount={gpu_restarts}");
+}
+
+#[cfg(not(target_os = "macos"))]
+fn log_startup_hardware() {
+    log::info!(
+        "startup: hardware arch={} os={}",
+        std::env::consts::ARCH,
+        std::env::consts::OS
+    );
 }
 
 /// Sum every accelerator's `"recoveryCount"=N` out of `ioreg -r -c

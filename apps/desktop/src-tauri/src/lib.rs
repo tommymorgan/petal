@@ -1,7 +1,5 @@
-// Windows and macOS both carry a working (still maturing) media stack: macOS
-// uses the modules under `#[cfg(target_os = "macos")]`, Windows uses the
-// `windows_*` modules and the real session in session_stub.rs. The non-macOS
-// stubs below exist only where a macOS module has no Windows counterpart yet.
+// macOS and Windows retain their native media sessions. Linux selects its
+// own startup/session boundary rather than compiling the Windows adapter.
 #![cfg_attr(
     not(target_os = "macos"),
     allow(
@@ -192,11 +190,16 @@ pub mod video_color;
 // `examples/` -- which are separate crate-root binaries linking against
 // `desktop_lib`, same as `window_source`/`transport` already are -- can call
 // it directly for verification, same pattern this crate already uses.
+#[cfg(target_os = "linux")]
+mod linux_startup;
 pub mod rooms;
 #[cfg(target_os = "macos")]
 mod session;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 #[path = "session_stub.rs"]
+mod session;
+#[cfg(target_os = "linux")]
+#[path = "session_linux.rs"]
 mod session;
 mod share_border;
 #[cfg(target_os = "windows")]
@@ -779,9 +782,9 @@ pub(crate) fn show_and_activate_main_window(app: &tauri::AppHandle, reason: &'st
 
 /// Has the main window been put on screen yet? (#636)
 ///
-/// The window is built `visible: false` so nothing can see it before the
-/// frontend has painted. It is revealed exactly once, by whichever of these
-/// happens first:
+/// macOS/Windows build the window `visible: false` so nothing can see it
+/// before the frontend has painted. Those clients reveal it exactly once,
+/// by whichever of these happens first:
 ///
 ///   * `frontend_ready` for the `main` label -- the real first-paint signal;
 ///   * [`MAIN_WINDOW_REVEAL_FALLBACK`] elapsing.
@@ -791,6 +794,8 @@ pub(crate) fn show_and_activate_main_window(app: &tauri::AppHandle, reason: &'st
 /// load, a JS exception before `onMount`, a missing Tauri bridge -- leaves the
 /// user with NO window and no way to get one. An unstyled window beats an
 /// invisible app.
+/// Linux uses a normally visible GTK toplevel before WebKit loads and marks
+/// this state during setup rather than hiding/remapping its native surface.
 static MAIN_WINDOW_REVEALED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -1571,7 +1576,7 @@ pub fn run() {
         });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let log_path = logging::init();
@@ -1876,6 +1881,11 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Petal");
+}
+
+#[cfg(target_os = "linux")]
+pub fn run() {
+    linux_startup::run();
 }
 
 fn load_env_file(path: &'static str) {

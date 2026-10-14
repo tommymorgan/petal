@@ -312,6 +312,12 @@ fn lock() -> MutexGuard<'static, ControlState> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+#[cfg(test)]
+pub(crate) fn serialize_tests() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 /// Run `f` against the process-wide gate state.
 pub fn with_state<T>(f: impl FnOnce(&mut ControlState) -> T) -> T {
     f(&mut lock())
@@ -532,6 +538,7 @@ mod tests {
 
     #[test]
     fn beginning_a_session_drops_every_previous_grant() {
+        let _serial = serialize_tests();
         let first = begin_session();
         with_state(|state| {
             state.standing = Standing::Session;

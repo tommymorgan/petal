@@ -71,8 +71,9 @@ impl PlatformControl for MacPlatformControl {
         input::clear_all_ax_control_state_except_sl_drag();
     }
 
-    fn release_window_gestures(&self, window_id: u32) {
-        input::release_session_tap_gestures_for_window(window_id);
+    fn release_window_gestures(&self, _window_id: u32) {
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        input::release_session_tap_gestures_for_window(_window_id);
     }
 }
 
@@ -96,6 +97,11 @@ fn remote_window_exists(owner_identity: &str, window_id: u32) -> bool {
     crate::windows_compositor::remote_control_window_exists(window_id, Some(owner_identity))
 }
 
+#[cfg(target_os = "linux")]
+fn remote_window_exists(_owner_identity: &str, _window_id: u32) -> bool {
+    false
+}
+
 #[cfg(target_os = "macos")]
 fn remote_window_owner(window_id: u32, owner_identity: Option<&str>) -> Option<String> {
     crate::compositor::owner_identity_for_window(window_id, owner_identity)
@@ -105,6 +111,11 @@ fn remote_window_owner(window_id: u32, owner_identity: Option<&str>) -> Option<S
 fn remote_window_owner(window_id: u32, owner_identity: Option<&str>) -> Option<String> {
     crate::windows_compositor::remote_control_target_metadata(window_id, owner_identity)
         .map(|target| target.owner_identity)
+}
+
+#[cfg(target_os = "linux")]
+fn remote_window_owner(_window_id: u32, _owner_identity: Option<&str>) -> Option<String> {
+    None
 }
 
 #[cfg(target_os = "macos")]
@@ -125,6 +136,16 @@ fn set_remote_window_control_active(
     active: bool,
 ) -> Result<(), String> {
     crate::windows_compositor::set_remote_control_active(app, window_id, owner_identity, active)
+}
+
+#[cfg(target_os = "linux")]
+fn set_remote_window_control_active(
+    _app: &AppHandle,
+    _window_id: u32,
+    _owner_identity: Option<&str>,
+    _active: bool,
+) -> Result<(), String> {
+    Err("Remote control is unsupported on Linux".to_string())
 }
 
 struct TauriControlSurface<'a> {

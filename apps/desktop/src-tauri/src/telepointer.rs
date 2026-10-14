@@ -622,7 +622,7 @@ pub fn start_sender(app: &AppHandle) {
     let app = app.clone();
     #[cfg(target_os = "macos")]
     std::thread::spawn(move || sender_loop(app));
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
     std::thread::spawn(move || sender_loop_windows(app));
 }
 
@@ -896,7 +896,7 @@ fn sender_loop(app: AppHandle) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct WindowsPointerKey {
     kind: PointerTargetKind,
@@ -904,7 +904,7 @@ struct WindowsPointerKey {
     owner_identity: String,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone, PartialEq)]
 struct WindowsPointerTarget {
     key: WindowsPointerKey,
@@ -913,7 +913,7 @@ struct WindowsPointerTarget {
     root_hwnds: Vec<isize>,
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn select_windows_pointer_target<'a>(
     cursor: (f64, f64),
     topmost_root: Option<isize>,
@@ -933,7 +933,7 @@ fn select_windows_pointer_target<'a>(
         })
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn windows_visibility_decisions(
     targets: &[WindowsPointerTarget],
     selected: Option<&WindowsPointerKey>,
@@ -1387,7 +1387,7 @@ pub fn start_receiver_for_room(
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 pub fn start_receiver_for_room(
     app: &AppHandle,
     room: Arc<livekit::Room>,
@@ -1572,6 +1572,7 @@ mod windows_tests {
         assert_eq!(targets[1].frame.width, 200);
     }
 
+    #[cfg(target_os = "windows")]
     fn windows_target(
         kind: PointerTargetKind,
         window_id: u32,
@@ -1591,6 +1592,7 @@ mod windows_tests {
         }
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn display_target_selects_by_monitor_containment_without_a_root_window() {
         let mut target = windows_target(
@@ -1619,6 +1621,7 @@ mod windows_tests {
         assert!(select_windows_pointer_target((1920.0, 540.0), None, &[target]).is_none());
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn topmost_native_root_selects_exactly_one_overlapping_surface() {
         let overlap = WindowFrame {
@@ -1655,6 +1658,7 @@ mod windows_tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn selector_handles_remote_local_collisions_overlays_and_occluders() {
         let overlap = WindowFrame {
@@ -1698,6 +1702,7 @@ mod windows_tests {
         assert!(select_windows_pointer_target((75.0, 75.0), None, &targets).is_none());
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn disjoint_and_unknown_roots_never_select_more_than_one_visible_target() {
         let targets = vec![
@@ -1740,6 +1745,7 @@ mod windows_tests {
         }
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn switching_overlapping_surfaces_hides_the_loser_and_shows_one_winner() {
         let overlap = WindowFrame {
@@ -1786,6 +1792,7 @@ mod windows_tests {
         );
     }
 
+    #[cfg(target_os = "windows")]
     #[test]
     fn disappearing_selected_surface_gets_a_prompt_hide() {
         let key = WindowsPointerKey {

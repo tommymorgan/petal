@@ -1864,9 +1864,9 @@ mod tests {
     /// `audio::is_playing`, `remote_audio::tapped_identity`): every test that
     /// touches them via `begin_capture`/`end_capture` must hold this lock,
     /// or counter-delta asserts flake under parallel test threads.
+    /// The same lock protects authorization epochs used by control-gate tests.
     fn serialize() -> std::sync::MutexGuard<'static, ()> {
-        static SERIAL: Mutex<()> = Mutex::new(());
-        SERIAL.lock().unwrap_or_else(|p| p.into_inner())
+        super::super::control_gate::serialize_tests()
     }
 
     fn reset_slot() {
@@ -2312,6 +2312,7 @@ mod tests {
 
     #[test]
     fn an_answer_for_a_finished_session_authorizes_nothing() {
+        let _serial = serialize();
         // A card answered after teardown must not authorize the next session's
         // first action.
         use super::super::control_gate::{

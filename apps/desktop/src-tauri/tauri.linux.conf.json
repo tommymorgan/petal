@@ -1,0 +1,25 @@
+{
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Petal",
+        "url": "main.html",
+        "width": 400,
+        "height": 640,
+        "minWidth": 380,
+        "minHeight": 360,
+        "resizable": true,
+        "decorations": true,
+        "transparent": false,
+        "theme": "Dark",
+        "visible": true,
+        "center": true,
+        "focus": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": false
+  }
+}

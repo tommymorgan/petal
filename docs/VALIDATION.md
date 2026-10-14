@@ -130,6 +130,121 @@ workflow. Validate B-local behavior, when needed, by using the target
 application's reachable in-window context menu, toolbar, or dropdown for both
 operations; do not mix that UI Copy with Petal keyboard Paste.
 
+### Native Linux launch boundary
+
+Prepare the local executable with Linux tooling only, from the repository root:
+
+```sh
+npm --prefix apps/desktop ci
+npm --prefix apps/desktop run build
+cargo build --manifest-path apps/desktop/src-tauri/Cargo.toml --bin desktop
+```
+
+Launch it directly in this computer's existing Wayland desktop:
+
+```sh
+XDG_RUNTIME_DIR=/run/user/1000 \
+DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus \
+WAYLAND_DISPLAY=wayland-0 GDK_BACKEND=wayland \
+apps/desktop/src-tauri/target/debug/desktop
+```
+
+No `tauri dev`, browser, macOS signing/permissions, Windows SDK, or installer
+step is involved. This requires the system GTK3/WebKitGTK runtime and normal
+Linux build dependencies; general distribution packaging is not this gate.
+
+The Linux main window uses an ordinary opaque, decorated GTK toplevel that is
+visible before WebKit loads, rather than the macOS/Windows hidden-window
+first-paint reveal lifecycle.
+
+Linux startup selects WebKit's shared-memory renderer transport before GTK
+initialization. In the installed
+[WebKitGTK 2.52.6 implementation](https://github.com/WebKit/WebKit/blob/webkitgtk-2.52.6/Source/WebKit/UIProcess/gtk/AcceleratedBackingStore.cpp),
+`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` retains shared-memory transport and its
+backing store without enabling hardware-buffer imports. Disabling the DMA-BUF
+renderer entirely instead leaves an empty transport and a null backing store;
+the actual Petal frontend reproduced a native compositor-callback crash in
+that configuration. This process-local UI policy needs no launch workaround
+variables and does not change macOS/Windows or the independent native
+GTK/Cairo incoming-video design.
+
+`/usr/bin/python3 apps/desktop/scripts/check-linux-launch.py
+apps/desktop/src-tauri/target/debug/desktop` runs the same production executable
+with a fresh Linux profile. AT-SPI drives native actions and requires the actual
+visible room-entry window and entry controls. This WebKit's accessible editor
+does not advertise `EditableText`, so the driver enables the toolkit's existing
+loopback inspector for its owned child only. It verifies listener socket
+ownership before dispatching the real name input event and checks native
+accessible text plus the real Done button; it never seeds onboarding stores,
+changes validation, sends desktop-wide keys, or opens an inspector browser.
+Its owned execution trace rejects browser/openers and foreign-platform setup
+programs. The driver requires the system Soup 3 GI bindings alongside AT-SPI.
+Failed runs retain their owned scratch directory and logs for diagnosis.
+Before launch, a private session-bus monitor watches only relevant URI-open and
+application-action message headers. Connection credentials attribute requests
+to owned process IDs; unrelated requests are ignored and message bodies are
+never accessed. Together with the execution trace, this checks browser
+activation even when no new browser process would be created. AT-SPI requires
+a showing native window with positive geometry and real entry controls, not
+a screenshot or an unfulfilled manual approval.
+
+After the launch observations, the check terminates only its temporary traced
+process group. `strace --kill-on-exit` prevents traced children from being
+detached and left running; PASS is printed only after cleanup completes.
+This does not assert or change the application's separate normal Quit flow.
+
+The focused check also exercises two real onboarding fixtures: the fresh blank
+name cannot enable Done, while an escaped name containing quotes, markup-like
+text and Unicode must pass the actual input handler, enable Done and reach the
+native room-entry screen. Neither fixture writes application stores directly.
+
+The executable living contract uses the same native launch operations, with
+each exact Given/When/Then step bound separately:
+
+```sh
+/usr/bin/python3 apps/desktop/scripts/check-linux-launch.py \
+  apps/desktop/src-tauri/target/debug/desktop \
+  --feature apps/desktop/features/linux-room-membership.feature
+```
+
+Both modes require the actual desktop session variables documented above.
+Unknown or missing living steps fail rather than silently skipping an assertion.
+
+This launch gate does not establish hosted membership, audio, camera, incoming
+share rendering, or remote-control support. Task 1.1's native launch scenario
+passed the actual-session focused and bound living checks, including real
+blank/escaped identity fixtures and every acceptance clause.
+
+The production-window mutation was confined to an independent plain copy of
+frozen candidate `c601226c886b5511638e3b3cc71d77ed4a4292c5`: changing only the
+Linux main-window URL from `main.html` to `settings.html` made both checks exit
+1 at the real room-entry assertion. Both native processes remained alive until
+the deadline and logged frontend first paint; no mapped Settings AX surface or
+inspector URL observation is claimed. All 73,294 original non-VCS files matched
+their SHA256/kind/mode manifest afterward, and all 464 traced process IDs had
+no living tracees. Only the copied config was restored; the unchanged original
+focused and living checks independently passed after mutation (7.77 s and
+12.72 s).
+
+#### Separate Linux validation constraints
+
+The existing rendered-UI Playwright tests use packaged browser runtimes, not
+Petal's production GTK/WebKit path. On Arch, the Ubuntu-targeted WebKit test
+runtime required ICU 74, libxml2 and libflite compatibility libraries. The
+Chromium and WebKit chat-wheel tests passed with SHA256-verified Ubuntu packages
+in an owned, isolated browser cache and library search path. This required no
+host installation, ABI-alias symlinks or validation bypass. These libraries
+apply only to browser-test processes; the native launch gate uses the system
+GTK/WebKit runtime and the actual Wayland session.
+
+Whole-tree `cargo fmt --check` remains a recorded baseline failure, not a PASS:
+planning base `6ec97e6f` and the Task 1.1 candidate each produced 634 diagnostic
+hunks across 103 files. Ordered hunk bodies matched byte-for-byte after
+normalizing only source-root paths and diagnostic header line numbers. The new
+Linux startup/session modules passed `rustfmt --edition 2021 --check`. Task-owned
+formatting differences were corrected without suppressing formatter rules or
+restyling unrelated baseline files.
+
 ## Rules — each traceable to a real incident
 
 1. **A harness may not decide a question above its layer.** The synthetic
