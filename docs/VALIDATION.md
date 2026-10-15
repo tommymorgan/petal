@@ -245,6 +245,56 @@ Linux startup/session modules passed `rustfmt --edition 2021 --check`. Task-owne
 formatting differences were corrected without suppressing formatter rules or
 restyling unrelated baseline files.
 
+### Native Linux receive-only capability boundary
+
+Use the same actual Wayland/session environment as the launch check, with
+GNOME awake and unlocked. On this WebKitGTK runtime, idle screen blanking
+stalled animation-frame/view-transition callbacks: the real native route's
+URL changed while the prior room-entry DOM remained mounted. Waking the
+already-unlocked session restored actual meeting controls; no routing or
+renderer workaround was needed. `ScreenSaver.GetActive` alone does not
+distinguish blanking from an authentication lock. Do not bypass authentication
+or change the user's lock policy to run a gate.
+
+Keep each owned native gate awake with the standard, process-lifetime idle
+inhibitor below. It does not permanently change desktop settings:
+
+```sh
+gnome-session-inhibit --inhibit=idle --app-id=com.petal.app \
+  --reason='Native capability verification' \
+  /usr/bin/python3 apps/desktop/scripts/check-linux-capabilities.py \
+  apps/desktop/src-tauri/target/debug/desktop
+gnome-session-inhibit --inhibit=idle --app-id=com.petal.app \
+  --reason='Native capability verification' \
+  /usr/bin/python3 apps/desktop/scripts/check-linux-capabilities.py \
+  apps/desktop/src-tauri/target/debug/desktop \
+  --feature apps/desktop/features/linux-meeting-capabilities.feature
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --locked \
+  linux_unsupported_commands_are_rejected_without_revoking_receive_or_audio
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --locked \
+  linux_replay_refuses_real_pointer_keyboard_and_text_packets
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --locked \
+  admission_table_covers_audio_camera_window_and_unknown_video
+```
+
+The native check uses real IPC, nonempty production-shaped window/control
+requests, the existing room-controls route, and actual device enumeration and
+preference commands. It requires explicit Linux errors from every covered
+unsupported entrypoint, disabled visible controls with limitation explanations,
+and unchanged disconnected-room/camera state. The exact six-row living table
+and each step are bound; an added, omitted or changed clause fails the driver.
+Network-only replay is independently checked against the actual Linux replay
+backend with decoded pointer, keyboard, wheel and text packets.
+
+Positive evidence here is **eligibility and local control availability**:
+room entry and microphone controls are not Linux-disabled, device preferences
+are accepted, and native subscription admission retains canonical share/audio
+tracks. The room-controls snapshot is explicitly taken in the existing
+failed-join state, not a successful meeting. This does not prove hosted joining,
+working microphone/speaker audio, rendered incoming shares, or acoustic AEC;
+those require the later ordered tasks and real native peers. Do not replace
+them with a browser bridge or a successful no-op.
+
 ## Rules — each traceable to a real incident
 
 1. **A harness may not decide a question above its layer.** The synthetic

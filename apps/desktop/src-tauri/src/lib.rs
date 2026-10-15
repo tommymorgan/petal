@@ -191,6 +191,8 @@ pub mod video_color;
 // `desktop_lib`, same as `window_source`/`transport` already are -- can call
 // it directly for verification, same pattern this crate already uses.
 #[cfg(target_os = "linux")]
+mod linux_capabilities;
+#[cfg(target_os = "linux")]
 mod linux_startup;
 pub mod rooms;
 #[cfg(target_os = "macos")]

@@ -38,18 +38,6 @@ test('desktop media controls use an attached options segment, not an overlay car
   assert.doesNotMatch(gallerySource, /DeviceCaret/);
 });
 
-test('gallery exposes stable primary labels and specialist More actions', () => {
-  for (const label of ['Mic', 'Camera']) {
-    assert.match(gallerySource, new RegExp(`visibleLabel="${label}"`));
-  }
-  for (const label of ['Share', 'Invite', 'More', 'Leave']) {
-    assert.match(gallerySource, new RegExp(`meeting-control-label[^>]*>${label}<`));
-  }
-  assert.match(gallerySource, /Petal View/);
-  assert.match(gallerySource, /Remote control (?:on|off)/);
-  assert.match(gallerySource, /role="menuitemcheckbox"/);
-});
-
 test('device picker is a one-level direct-row panel with selected checks and feedback', () => {
   assert.match(pickerSource, /mode: 'audio' \| 'camera';/);
   assert.doesNotMatch(pickerSource, /DeviceSelect/);

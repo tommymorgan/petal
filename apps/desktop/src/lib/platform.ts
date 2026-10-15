@@ -1,3 +1,5 @@
+import { hasTauriBridge } from './ipc.ts';
+
 /**
  * Platform detection for platform-gated UI (Windows vs macOS).
  *
@@ -23,4 +25,23 @@ export function isWindows(ua?: string): boolean {
 
 export function isMac(ua?: string): boolean {
   return platformKey(ua) === 'macos';
+}
+
+/** Presentation only: native Linux IPC independently refuses these effects. */
+export function linuxMeetingLimitation(
+  action: string,
+  ua: string = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+): string | undefined {
+  if (!hasTauriBridge() || !/Linux/i.test(ua) || /Android/i.test(ua)) return undefined;
+  switch (action) {
+    case 'camera':
+      return 'Camera publication is unsupported on Linux (receive-only milestone)';
+    case 'screenshare':
+    case 'region':
+      return 'Screen publication is unsupported on Linux (receive-only milestone)';
+    case 'remotecontrol':
+      return 'Remote control requests, grants, input sending and replay are unsupported on Linux (receive-only milestone)';
+    default:
+      return undefined;
+  }
 }

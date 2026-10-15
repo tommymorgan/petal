@@ -7,6 +7,9 @@ dist/
 build/
 .svelte-kit/
 
+# Python verification helpers
+apps/desktop/scripts/__pycache__/
+
 # Rust / Tauri
 target/
 src-tauri/target/

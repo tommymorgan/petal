@@ -157,14 +157,14 @@ test('meeting chat keeps composer and controls usable at every gallery size', { 
       await page.close();
     }
 
-    // 2. Narrowest gallery, chat closed with unread messages: Chat is in
-    // More, More carries the count, the More row opens chat, and growing the
-    // window brings Invite and Chat back.
+    // 2. Narrow gallery, chat closed with unread messages: More carries
+    // the count and dispatches Chat. Resizing keeps Chat and Invite reachable,
+    // whether they fit in the primary row or move into More.
     {
       const page = await openFixture(browser, buildDir, 480, 600, 'window.__chatOpen = false; window.__chatUnread = 3;');
       const layout = await measure(page);
-      // Collapse order is the web client's: plugin buttons first, then Invite, then Chat.
-      assert.deepEqual(layout.collapsed, ['invite', 'chat', '?'], '480 px: plugin buttons, then Invite, then Chat collapse into More');
+      assert.equal(layout.scrollsX, false, '480 px: no horizontal page overflow');
+      assert.ok(layout.clusterFits, '480 px: the controls fit inside the action bar');
       assert.equal(layout.panel, null);
       assert.equal(await page.locator('[data-testid="more-chat-badge"]').textContent(), '3', 'More carries the unread count');
       await page.click('.controlbar button[aria-label="More meeting controls"]');
@@ -174,11 +174,32 @@ test('meeting chat keeps composer and controls usable at every gallery size', { 
       assert.deepEqual(await page.evaluate(() => (window as unknown as { __controls: string[] }).__controls), ['chat']);
 
       await page.setViewportSize({ width: 900, height: 600 });
-      await page.waitForFunction(() => document.querySelectorAll('.control-cell.collapsed').length === 0, null, { timeout: 5_000 });
+      await page.locator('.controlbar [data-control="chat"] button').waitFor({ state: 'visible', timeout: 5_000 });
+      await page.locator('.controlbar [data-control="invite"] button').waitFor({ state: 'visible', timeout: 5_000 });
+      assert.equal(await page.locator('[data-testid="chat-badge"]:visible').textContent(), '3', 'the primary Chat control retains the unread count');
       assert.equal(await page.locator('[data-testid="more-chat-badge"]').count(), 0, 'no More badge once Chat is back');
       await page.setViewportSize({ width: 560, height: 600 });
-      await page.waitForFunction(() => document.querySelectorAll('.control-cell.collapsed').length === 1, null, { timeout: 5_000 });
-      assert.deepEqual((await measure(page)).collapsed, ['?'], '560 px: only the plugin button collapses (Invite and Chat stay)');
+      await page.waitForFunction(() => {
+        const bar = document.querySelector<HTMLElement>('.controlbar');
+        const cluster = document.querySelector<HTMLElement>('.controls-cluster');
+        if (!bar || !cluster) return false;
+        const style = getComputedStyle(bar);
+        const available = bar.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        return cluster.scrollWidth <= available + 0.5;
+      }, null, { timeout: 5_000 });
+      const more = page.locator('.controlbar button[aria-label="More meeting controls"]');
+      if (await more.isVisible()) await more.click();
+      const reachableChat = page.locator('.controlbar [data-control="chat"] button:visible, [data-testid="more-chat"]:visible');
+      const reachableInvite = page.locator('.controlbar [data-control="invite"] button:visible, [data-testid="more-invite"]:visible');
+      await reachableChat.waitFor({ state: 'visible' });
+      await reachableInvite.waitFor({ state: 'visible' });
+      assert.ok(await reachableChat.isEnabled(), '560 px: Chat remains actionable after shrinking');
+      assert.ok(await reachableInvite.isEnabled(), '560 px: Invite remains actionable after shrinking');
+      assert.equal(
+        await page.locator('[data-testid="chat-badge"]:visible, [data-testid="more-chat-badge"]:visible').textContent(),
+        '3',
+        '560 px: the reachable Chat affordance retains its unread count'
+      );
       await page.close();
     }
 

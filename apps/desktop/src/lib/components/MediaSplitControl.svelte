@@ -1,5 +1,6 @@
 <script lang="ts">
   import ControlButton, { type ControlSize } from './ControlButton.svelte';
+  import { linuxMeetingLimitation } from '$lib/platform';
 
   type SplitSize = 'gallery' | 'pill' | 'menubar';
 
@@ -36,6 +37,7 @@
   let optionsButton = $state<HTMLButtonElement>();
 
   const buttonSize = $derived<ControlSize>(size === 'gallery' ? 44 : size === 'pill' ? 'pill' : 'compact');
+  const limitation = $derived(linuxMeetingLimitation(icon));
 </script>
 
 <div
@@ -61,6 +63,7 @@
       bind:this={optionsButton}
       type="button"
       class="meeting-split-options"
+      disabled={!!limitation}
       aria-label={optionsLabel}
       aria-haspopup="dialog"
       aria-expanded={optionsOpen}

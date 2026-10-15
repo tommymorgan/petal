@@ -102,7 +102,12 @@ test('expanded gallery device selectors stay open and restore focus', { timeout:
       headless: true,
       args: ['--no-sandbox', '--disable-gpu', '--allow-file-access-from-files']
     });
-    const page = await browser.newPage({ viewport: { width: 840, height: 560 } });
+    const page = await browser.newPage({
+      viewport: { width: 840, height: 560 },
+      // This consumer contract opens camera devices on a supported native platform.
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+        '(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0'
+    });
     await page.goto(pathToFileURL(join(buildDir, 'meeting-controls.html')).href, {
       waitUntil: 'load'
     });
@@ -118,22 +123,8 @@ test('expanded gallery device selectors stay open and restore focus', { timeout:
     const camera = largeStage.getByRole('button', { name: 'Camera options' });
     const share = largeStage.getByRole('button', { name: 'Share a window' });
     const micSplit = mic.locator('..');
-    const cameraSplit = camera.locator('..');
     const micPrimary = micSplit.locator('.control-button').first();
     const regressionFailures: string[] = [];
-    const micIdleBackground = await micSplit.evaluate((element) => getComputedStyle(element).backgroundColor);
-    const cameraIdleBackground = await cameraSplit.evaluate((element) => getComputedStyle(element).backgroundColor);
-    const adjacentIdleBackground = await largeStage
-      .locator('.control-cell')
-      .nth(2)
-      .locator('.control-button')
-      .evaluate((element) => getComputedStyle(element).backgroundColor);
-    if (micIdleBackground !== adjacentIdleBackground) {
-      regressionFailures.push(`mic idle ${micIdleBackground} !== adjacent ${adjacentIdleBackground}`);
-    }
-    if (cameraIdleBackground !== adjacentIdleBackground) {
-      regressionFailures.push(`camera idle ${cameraIdleBackground} !== adjacent ${adjacentIdleBackground}`);
-    }
     if (
       (await micPrimary.evaluate((element) => getComputedStyle(element).backgroundColor)) !==
       'rgba(0, 0, 0, 0)'

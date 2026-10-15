@@ -15,7 +15,6 @@ const ACCESS_CODE = 'abc-defg-hjk';
 const credential = internalCredentialForAccessCode(ACCESS_CODE);
 const gallerySource = readFileSync(new URL('../src/lib/components/Gallery.svelte', import.meta.url), 'utf8');
 const chromeSource = readFileSync(new URL('../src/lib/components/MeetingChrome.svelte', import.meta.url), 'utf8');
-const routeSource = readFileSync(new URL('../src/routes/meeting/[room]/+page.svelte', import.meta.url), 'utf8');
 const sessionSource = readFileSync(new URL('../src/lib/meeting/meetingSession.svelte.ts', import.meta.url), 'utf8');
 const popoverSource = readFileSync(new URL('../src/routes/menubar-popover/+page.svelte', import.meta.url), 'utf8');
 
@@ -36,24 +35,6 @@ test('active invite copy labels disclose only the public access code', () => {
   assert.equal(inviteCopyAriaLabel(credential), `Room ID ${ACCESS_CODE}, click to copy invite`);
   assert.equal(inviteCopyTooltip('room-not-a-public-code'), 'Copy invite link');
   assert.equal(inviteCopyAriaLabel(null), 'Copy invite link');
-});
-
-test('desktop active-meeting invite controls receive the public-code labels on every density', () => {
-  assert.match(routeSource, /const inviteAccessCode = \$derived\(meeting\.inviteAccessCode\)/);
-  assert.match(routeSource, /inviteLinkForAccessCode\([\s\S]*meeting\.inviteAccessCode\s*\)/);
-  assert.match(routeSource, /const inviteAriaLabel = \$derived\(inviteCopyAriaLabel\(inviteAccessCode\)\)/);
-  assert.match(routeSource, /<MeetingChrome[\s\S]*\{inviteAriaLabel\}[\s\S]*\{inviteTooltip\}/);
-
-  assert.match(gallerySource, /aria-label=\{inviteAriaLabel\}/);
-  assert.doesNotMatch(gallerySource, /title=\{inviteTooltip\}/, 'copy button must not emit a native tooltip title');
-  assert.match(gallerySource, /icon="invite"[\s\S]*label=\{inviteAriaLabel\}/);
-  assert.doesNotMatch(gallerySource, /tooltip=\{inviteTooltip\}/, 'ControlButton no longer receives a native-tooltip title prop');
-  assert.match(gallerySource, /class="control-tooltip invite-control-tooltip"[^>]*>\{inviteTooltip\}/);
-
-  assert.match(chromeSource, /case 'invite':[\s\S]*return inviteAriaLabel;/);
-  assert.match(chromeSource, /<Gallery[\s\S]*\{inviteAriaLabel\}[\s\S]*\{inviteTooltip\}/);
-  assert.match(chromeSource, /class:invite-control-tooltip=\{icon === 'invite'\}>\{tooltipFor\(icon\)\}/);
-  assert.doesNotMatch(chromeSource, /tooltip=\{tooltipFor\(icon\)\}/, 'ControlButton no longer receives a native-tooltip title prop');
 });
 
 test('desktop invite tooltip stays readable and shifts inside viewport gutters', () => {

@@ -4354,6 +4354,11 @@ fn handle_message(
     trusted_sender: Option<String>,
     message: RemoteControlMessage,
 ) {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = crate::linux_capabilities::require_remote_input() {
+        log::warn!("{error}");
+        return;
+    }
     if message.v != VERSION {
         log::debug!("remote-control: dropping unsupported version {}", message.v);
         return;
@@ -5290,6 +5295,13 @@ pub fn start_receiver_for_room(
     local_identity: String,
     generation: RoomGeneration,
 ) {
+    #[cfg(target_os = "linux")]
+    if let Err(error) = crate::linux_capabilities::require_remote_input() {
+        // Refuse before subscribing, starting workers, or admitting clipboard
+        // streams as well as ordinary and binary remote-input packets.
+        log::warn!("{error}");
+        return;
+    }
     ensure_pressed_ttl_sweeper();
     set_replay_status_context(app.clone(), local_identity.clone());
     log::info!(
@@ -18126,7 +18138,7 @@ pub(crate) mod input {
         _frame: WindowFrame,
         _target_pid: Option<i32>,
     ) -> Result<(), String> {
-        Err("remote control replay is macOS-only".to_string())
+        crate::linux_capabilities::require_remote_input()
     }
 }
 
@@ -18163,6 +18175,42 @@ mod tests {
     }
 
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_replay_refuses_real_pointer_keyboard_and_text_packets() {
+        for event in [
+            serde_json::json!({"kind": "pointer", "action": "down", "x": 0.25, "y": 0.75, "button": 0}),
+            serde_json::json!({"kind": "pointer", "action": "up", "x": 0.25, "y": 0.75, "button": 0}),
+            serde_json::json!({"kind": "key", "action": "down", "key": "a", "code": "KeyA"}),
+            serde_json::json!({"kind": "text", "text": "Native Linux <input> Δ"}),
+            serde_json::json!({"kind": "wheel", "deltaX": 1.0, "deltaY": -2.0}),
+        ] {
+            let mut packet = serde_json::json!({
+                "v": 1, "windowId": 427, "targetUserId": "linux-host",
+                "controllerId": "native-controller", "seq": 9,
+                "grantToken": "native-grant-427", "targetKind": "window",
+                "shareInstanceId": "native-share-427"
+            });
+            packet
+                .as_object_mut()
+                .unwrap()
+                .extend(event.as_object().unwrap().clone());
+            let message: RemoteControlMessage = serde_json::from_value(packet).unwrap();
+            let error = input::replay(
+                &message,
+                WindowFrame {
+                    x: 20,
+                    y: 30,
+                    width: 800,
+                    height: 600,
+                },
+                Some(std::process::id() as i32),
+            )
+            .expect_err("Linux must not inject this input");
+            assert!(error.contains("unsupported on Linux"), "{error}");
+        }
+    }
 
     #[derive(Debug)]
     struct RemoteControlTestIds {

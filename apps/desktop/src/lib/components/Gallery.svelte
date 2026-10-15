@@ -22,6 +22,7 @@
   overflow affordance.
 -->
 <script lang="ts">
+  import { linuxMeetingLimitation } from '$lib/platform';
   import { onMount, tick, type Snippet } from 'svelte';
   import { fade } from 'svelte/transition';
   import ParticipantTile from './ParticipantTile.svelte';
@@ -1164,7 +1165,7 @@
           optionsLabel="Camera options"
           optionsOpen={deviceMenuKind === 'camera'}
           optionsEnabled={!!onOpenDeviceMenu}
-          visibleLabel="Camera"
+          visibleLabel={linuxMeetingLimitation('camera') ? 'Camera — unsupported on Linux' : 'Camera'}
           onToggle={() => onControl?.('camera')}
           onOptions={(el) => onOpenDeviceMenu?.('camera', el)}
         />
@@ -1179,7 +1180,7 @@
           liveColor={sharingLiveColor}
           onclick={() => onControl?.('screenshare')}
         />
-        <span class="meeting-control-label">Share</span>
+        <span class="meeting-control-label">{linuxMeetingLimitation('screenshare') ? 'Share — unsupported on Linux' : 'Share'}</span>
       </div>
       <div class="control-cell" class:collapsed={inviteCollapsed} data-control="invite" role="group" onmouseenter={keepInviteTooltipInViewport} onfocusin={keepInviteTooltipInViewport}>
         <ControlButton
@@ -1242,13 +1243,13 @@
       <div bind:this={galleryMoreMenuEl} class="gallery-more-menu meeting-menu" role="menu" aria-label="More meeting controls">
         <div class="meeting-menu-section-label">More controls</div>
         {#if shareCollapsed}
-          <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" data-testid="more-share" onclick={() => selectGalleryMore('screenshare')}>
+          <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" data-testid="more-share" disabled={!!linuxMeetingLimitation('screenshare')} title={linuxMeetingLimitation('screenshare')} onclick={() => selectGalleryMore('screenshare')}>
             <span class="more-item-leading">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <rect x="3" y="4" width="18" height="13" rx="2"></rect>
                 <path d="M8 21h8M12 17v4"></path>
               </svg>
-              <span class="meeting-menu-row-copy">{sharingActive ? 'Stop sharing' : 'Share a window'}</span>
+              <span class="meeting-menu-row-copy">{sharingActive ? 'Stop sharing' : 'Share a window'}{#if linuxMeetingLimitation('screenshare')} — {linuxMeetingLimitation('screenshare')}{/if}</span>
             </span>
           </button>
         {/if}
@@ -1286,15 +1287,22 @@
             {#if row.badge}<span class="more-item-state">{row.badge}</span>{/if}
           </button>
         {/each}
-        <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" onclick={() => selectGalleryMore('region')}>
+        <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" disabled={!!linuxMeetingLimitation('region')} title={linuxMeetingLimitation('region')} onclick={() => selectGalleryMore('region')}>
           <span class="more-item-leading">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"></path>
               <rect x="7" y="7" width="10" height="10" rx="1"></rect>
             </svg>
-            <span class="meeting-menu-row-copy">Petal View</span>
+            <span class="meeting-menu-row-copy">Petal View{#if linuxMeetingLimitation('region')} — {linuxMeetingLimitation('region')}{/if}</span>
           </span>
         </button>
+        {#if linuxMeetingLimitation('remotecontrol')}
+          {#each ['Request remote control', 'Grant remote control', 'Send remote input', 'Replay remote input'] as action}
+            <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" disabled title={linuxMeetingLimitation('remotecontrol')}>
+              <span class="meeting-menu-row-copy">{action} — unsupported on Linux</span>
+            </button>
+          {/each}
+        {:else}
         <button type="button" class="meeting-menu-row gallery-more-item" role="menuitemcheckbox" aria-checked={remoteControlAllowed} onclick={() => selectGalleryMore('remotecontrol')}>
           <span class="more-item-leading">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1304,6 +1312,7 @@
           </span>
           <span class="more-item-state">{remoteControlAllowed ? 'On' : 'Off'}</span>
         </button>
+        {/if}
         {#if onOpenSettings}
           <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" onclick={selectGalleryMoreSettings}>
             <span class="more-item-leading">

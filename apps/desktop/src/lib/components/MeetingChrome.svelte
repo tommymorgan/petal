@@ -50,6 +50,7 @@
   effect in the script block.
 -->
 <script lang="ts">
+  import { linuxMeetingLimitation } from '$lib/platform';
   import type { Snippet } from 'svelte';
   import { onDestroy } from 'svelte';
   import { attachVideoStream } from '$lib/videoAttachment';
@@ -963,6 +964,7 @@
             type="button"
             role="menuitem"
             class="more-item"
+            disabled={!!linuxMeetingLimitation(icon)}
             aria-label={ariaLabelFor(icon)}
             onclick={() => {
               moreOpen = false;
@@ -970,7 +972,7 @@
             }}
           >
             <span class="more-item-icon" aria-hidden="true">{@render menuGlyph(icon)}</span>
-            <span class:invite-control-tooltip={icon === 'invite'}>{tooltipFor(icon)}</span>
+            <span class:invite-control-tooltip={icon === 'invite'}>{linuxMeetingLimitation(icon) ?? tooltipFor(icon)}</span>
           </button>
         {/each}
       </div>

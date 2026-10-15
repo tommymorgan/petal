@@ -363,6 +363,8 @@ pub(crate) async fn start_camera_publish_with_device(
     preferred_device_id: Option<String>,
     preferred_mode: Option<PreferredCameraMode>,
 ) -> Result<CameraPublishOutcome, String> {
+    #[cfg(target_os = "linux")]
+    crate::linux_capabilities::require_camera_publication()?;
     let (room_connection, identity, generation) = {
         if !state.camera_intent() {
             return Err("camera start cancelled".to_string());
@@ -1203,6 +1205,8 @@ pub(crate) async fn start_camera_publish_intent(
     preferences: &CameraDevicePreferences,
     state: &crate::session::SessionState,
 ) -> Result<StartCameraPublishResult, String> {
+    #[cfg(target_os = "linux")]
+    crate::linux_capabilities::require_camera_publication()?;
     let _control = state.lock_camera_control().await;
     state.set_camera_intent(true);
     // Announce the intent BEFORE acquiring: the Settings window's preview

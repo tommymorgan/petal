@@ -31,6 +31,7 @@
 </script>
 
 <script lang="ts">
+  import { linuxMeetingLimitation } from '$lib/platform';
   interface Props {
     icon: ControlIcon;
     kind?: ControlKind;
@@ -103,6 +104,7 @@
   };
 
   const computedLabel = $derived(label ?? defaultLabels[icon]);
+  const limitation = $derived(linuxMeetingLimitation(icon));
   const isSubtleLeave = $derived(icon === 'leave' && kind === 'oneshot' && tone !== 'danger');
 
   // Screenshare start/stop green pulse (DESIGN.md §6: "the source window's
@@ -140,8 +142,9 @@
   style:height="{dimension}px"
   style:--control-live-bg={liveBackground}
   style:--control-live-fg={liveColor}
-  {disabled}
-  aria-label={computedLabel}
+  disabled={disabled || !!limitation}
+  aria-label={limitation ? `${computedLabel} — ${limitation}` : computedLabel}
+  title={limitation}
   aria-pressed={kind === 'toggle' ? isActive : undefined}
   aria-expanded={ariaExpanded}
   aria-haspopup={ariaHaspopup}

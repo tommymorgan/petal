@@ -47,11 +47,11 @@ Scenario: Launch the Linux app in the graphical session
 ### Task 1.2: Expose the receive-only capability boundary
 <!-- estimate: ~250 reviewable lines | feature-files: apps/desktop/features/linux-meeting-capabilities.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: apps/desktop/features/linux-meeting-capabilities.feature::Unsupported publishing and input actions are unavailable
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Unsupported publishing and input actions are unavailable
   Given the native Linux app is running

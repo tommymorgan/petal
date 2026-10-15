@@ -105,7 +105,7 @@ class NativeInput:
                 context.iteration(False)
             time.sleep(0.01)
 
-    def fill_name(self, pids, name):
+    def evaluate(self, pids, expression):
         self.wait_for(lambda: self.owns_listener(pids), "Owned native inspector did not listen")
         session = Soup.Session(timeout=2)
         session.set_proxy_resolver(None)
@@ -152,19 +152,7 @@ class NativeInput:
             connection = connected[0]
             self.wait_for(lambda: page_targets, "Native inspector did not identify its page target")
             assert len(page_targets) == 1, "Native inspector exposed ambiguous page targets"
-            # Exercise the production DOM input handler, not Svelte stores,
-            # onboarding flags, native command mocks, or validation overrides.
-            expression = """(() => {
-                if (location.protocol !== 'tauri:' || location.hostname !== 'localhost') return false;
-                const input = document.querySelector('input[aria-label="Your name"]');
-                if (!(input instanceof HTMLInputElement) || input.disabled || input.readOnly) return false;
-                input.focus();
-                input.value = %s;
-                input.dispatchEvent(new InputEvent('input', {
-                    bubbles: true, inputType: 'insertText', data: input.value
-                }));
-                return input.value === %s;
-            })()""" % (json.dumps(name), json.dumps(name))
+            # Evaluate only inside the page owned by this native launch.
             command = {"id": 1, "method": "Runtime.evaluate",
                        "params": {"expression": expression, "returnByValue": True}}
             assert self.owns_listener(pids), "Native inspector listener lost its owner"
@@ -175,12 +163,31 @@ class NativeInput:
             self.wait_for(lambda: 1 in replies or "transport_error" in replies,
                           "Native inspector did not acknowledge input")
             reply = replies.get(1, {})
-            assert "error" not in reply and reply.get("result", {}).get("result", {}).get("value") is True, \
-                "Native production name input handler did not accept the edit"
+            assert "error" not in reply, f"Native evaluation failed: {reply}"
+            evaluation = reply.get("result", {})
+            assert not evaluation.get("wasThrown") and not evaluation.get("exceptionDetails"), \
+                f"Native page threw during evaluation: {evaluation}"
+            return evaluation.get("result", {}).get("value")
         finally:
             if connection is not None:
                 connection.close(1000, "Native launch input complete")
             session.abort()
+
+    def fill_name(self, pids, name):
+        # Exercise the production DOM handler, never application stores.
+        expression = """(() => {
+            if (location.protocol !== 'tauri:' || location.hostname !== 'localhost') return false;
+            const input = document.querySelector('input[aria-label="Your name"]');
+            if (!(input instanceof HTMLInputElement) || input.disabled || input.readOnly) return false;
+            input.focus();
+            input.value = %s;
+            input.dispatchEvent(new InputEvent('input', {
+                bubbles: true, inputType: 'insertText', data: input.value
+            }));
+            return input.value === %s;
+        })()""" % (json.dumps(name), json.dumps(name))
+        assert self.evaluate(pids, expression) is True, \
+            "Native production name input handler did not accept the edit"
 
 
 class BrowserActivations:
