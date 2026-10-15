@@ -6,20 +6,20 @@
 
 ## 1. Outcome and accepted boundary
 
-A locally built native Petal executable runs on this x86_64 Arch-family Wayland desktop. Tommy can join normal hosted Petal rooms, converse through speakers and microphone with a macOS native peer or a Windows native peer, and receive one share in an independent desktop window. Both native peer platforms must be exercised separately. A browser client, synthetic publisher, or local-only SFU is not final acceptance evidence.
+A locally built native Petal executable runs on this x86_64 Arch-family Wayland desktop. Tommy can join normal hosted Petal rooms, converse through speakers and microphone with a Windows native peer, and receive one share in an independent desktop window. A browser client, synthetic publisher, or local-only SFU is not final acceptance evidence.
 
-Interview decisions: both native peer platforms; speakers and microphone rather than headset-only; normal hosted rooms; two-way audio plus receiving one share, with outgoing screen sharing, camera publication, and remote control excluded. See [ADR 0001](../adrs/0001-native-linux-receive-only.md).
+The 2026-10-14 interview selected both native peer platforms. On 2026-10-27 Tommy replaced macOS acceptance with the released Windows native peer. Speakers and microphone rather than headset-only, normal hosted rooms, two-way audio plus receiving one share, and the exclusions for outgoing screen sharing, camera publication, and remote control remain unchanged. See [ADR 0001](../adrs/0001-native-linux-receive-only.md).
 
 ## 2. Acceptance criteria
 
 Each numbered item is atomic for the coverage ledger. The concrete lifecycle/error requirements are derived acceptance details, not claims that Tommy specified their implementation.
 
 - **AC1:** Launching the locally built Linux executable on this Wayland desktop opens Petal's native room-entry window without opening a browser or requiring macOS or Windows setup steps.
-- **AC2:** Using an existing valid hosted room code, Linux joins the same normal hosted Petal room as a macOS native peer and, in a separate call, as a Windows native peer; both participants see each other in the room.
-- **AC3:** In each of those two calls, speech from the Linux microphone is audible at the peer and speech from the peer is audible through the Linux speakers while an incoming share is updating.
-- **AC4:** In each of those two calls using speakers and microphone, a five-minute conversation including overlapping speech completes without a persistent audible echo of the peer's own speech or an escalating feedback loop.
+- **AC2:** Using an existing valid hosted room code, Linux joins the same normal hosted Petal room as a Windows native peer; both participants see each other in the room.
+- **AC3:** In that call, speech from the Linux microphone is audible at the peer and speech from the peer is audible through the Linux speakers while an incoming share is updating.
+- **AC4:** In that call using speakers and microphone, a five-minute conversation including overlapping speech completes without a persistent audible echo of the peer's own speech or an escalating feedback loop.
 - **AC5:** Muting Linux stops its microphone speech reaching the peer without stopping incoming audio or share updates; unmuting restores outgoing speech, with the visible mute control matching the actual state.
-- **AC6:** A share published by each native peer platform (macOS and Windows) appears on Linux as one independent native desktop window showing the sharer's changing content; moving and resizing it does not move or resize the main meeting window.
+- **AC6:** A share published by the Windows native peer appears on Linux as one independent native desktop window showing the sharer's changing content; moving and resizing it does not move or resize the main meeting window.
 - **AC7:** Resizing the remote window preserves the received image's aspect ratio without cropping; changing the source window's dimensions updates the image without stretching, and a source text change remains readable at a one-to-one image scale.
 - **AC8:** When the peer stops sharing, its remote window closes while two-way room audio continues; a subsequent share from that peer displays current content in one remote window, not a duplicate or a stale image.
 - **AC9:** Leaving the room stops Linux microphone publication and remote speaker playback and closes its remote window; rejoining the same room restores a single call and the active share without duplicate playback or windows.
@@ -41,8 +41,8 @@ No outgoing Linux screen capture, local camera publication, or remote control. N
 
 ## 5. Acceptance environment and evidence
 
-Run the Linux executable in the actual graphical Wayland session, not merely in a headless test. Use existing hosted room/token infrastructure configured explicitly; do not change global source-build defaults or install server secrets. Use a real supported native macOS sharer for one call and native Windows sharer for the other. Keep room codes, identities, credentials, and personal audio/video out of committed evidence.
+Run the Linux executable in the actual graphical Wayland session, not merely in a headless test. Use existing hosted room/token infrastructure configured explicitly; do not change global source-build defaults or install server secrets. Use the released Windows native client as the peer. Keep room codes, identities, credentials, and personal audio/video out of committed evidence.
 
 For image validation share a non-sensitive editor/test-pattern window with a visible changing counter, corner markers, and known text. Observe receiver pixels, aspect, movement and resize directly. For audio, both ends listen to real speech including overlap with the Linux speakers active; a processing-option flag, synthetic tone, energy counter, or video recording with no audible track is insufficient evidence for AC4. The five-minute duration is a sustained-use observation, not a new latency/performance guarantee.
 
-Record exact app revisions, peer platform, device names privately, and pass/fail for each exercised behavior. Peer hardware and a listening partner are prerequisites for final acceptance; unavailable hardware means unvalidated, not passed. Intermediate local/synthetic checks may unblock implementation but cannot replace these two hosted native calls. See [VALIDATION.md](../VALIDATION.md) for the distinction between layers of evidence.
+Record exact app revisions, peer platform, device names privately, and pass/fail for each exercised behavior. Peer hardware and a listening partner are prerequisites for final acoustic acceptance; unavailable hardware means unvalidated, not passed. Intermediate local/synthetic checks may unblock implementation but cannot replace the hosted native call or real speaker/microphone observations. See [VALIDATION.md](../VALIDATION.md) for the distinction between layers of evidence.

@@ -295,6 +295,70 @@ working microphone/speaker audio, rendered incoming shares, or acoustic AEC;
 those require the later ordered tasks and real native peers. Do not replace
 them with a browser bridge or a successful no-op.
 
+### Native Linux hosted membership
+
+With the same awake, unlocked Wayland environment as the native checks above:
+
+```sh
+gnome-session-inhibit --inhibit=idle --app-id=com.petal.app \
+  --reason='Native hosted-entry diagnostic' \
+  /usr/bin/python3 apps/desktop/scripts/check-linux-hosted-entry.py \
+  apps/desktop/src-tauri/target/debug/desktop \
+  --room-code abc-defg-hjk --inspect-join-command
+```
+
+This diagnostic types the public valid-format fixture through the production
+room-entry input and requires an enabled Join action. It never submits Join.
+The optional command inspection omits the required room argument and reports
+the rejection category without requesting a token or asserting membership.
+Before Linux membership was implemented, command inspection reported
+`unregistered` for `join_room_command`. The actual native Join action then
+reproduced that missing-command failure against the Windows peer. A diagnostic
+PASS alone is not scenario RED or proof of hosted membership.
+
+For the real hosted check, start the released Windows native client in an
+authorized test room. Supply its code and displayed participant name explicitly:
+
+```sh
+gnome-session-inhibit --inhibit=idle --app-id=com.petal.app \
+  --reason='Native hosted membership verification' \
+  /usr/bin/python3 apps/desktop/scripts/check-linux-hosted-entry.py \
+  apps/desktop/src-tauri/target/debug/desktop \
+  --room-code "$PETAL_TEST_ROOM_CODE" --join \
+  --backend-url https://app.petal.live \
+  --expected-peer-name "$PETAL_TEST_PEER_NAME" --hold-seconds 180
+```
+
+This submits the production Join action in the actual Linux window, requires
+the joined room and local/Windows identities in native IPC and visible
+participant tiles, then submits Leave and requires an empty membership and
+the room-entry route. The hold allows separate observation of the Linux
+participant in the Windows client; that reciprocal check is not automated
+by the Linux driver. Keep both desktop sessions awake and unlocked.
+
+On 2026-10-27, the Linux native candidate joined the hosted Windows room and
+passed those Linux-side membership and Leave assertions. A subsequent fresh
+Linux launch joined the same room again, and the released Windows native
+client visibly showed both participants. These checks do not prove audio,
+incoming screen rendering, or acoustic AEC.
+
+No client-side LiveKit server API secret is supplied. Windows replaces macOS
+for this milestone under Tommy's 2026-10-27 scope correction. The public
+parser fixture is not an accessible hosted-room fixture; never substitute a
+browser, local SFU, mock peer, or diagnostic-only PASS for real membership.
+
+The focused and living checks both reject an isolated production mutation
+that removes Linux's `presence::start_for_room` bridge: the real hosted Join
+succeeds, but the native roster and rendered participant assertions fail.
+Restoring that bridge restores both checks.
+
+Linux IPC and rendered tiles are not independent proof of continued
+server-side membership. In an isolated forced-close probe, the vendored SDK's
+manual `Room::close()` returned success while its cached connection state and
+participant snapshot still looked connected. That probe did not earn a
+negative-control pass. Observe the other native client during Join and after
+Leave; do not infer reciprocal membership from Linux's cached state.
+
 ## Rules — each traceable to a real incident
 
 1. **A harness may not decide a question above its layer.** The synthetic

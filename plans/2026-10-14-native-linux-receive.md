@@ -1,7 +1,7 @@
 # Feature: Native Linux hosted audio and share receiving
 
 **Created**: 2026-10-14
-**Goal**: Use native Petal on this Wayland computer for a hosted two-person speaker/microphone call and one independent incoming-share window with either supported native peer platform.
+**Goal**: Use native Petal on this Wayland computer for a hosted two-person speaker/microphone call and one independent incoming-share window with the released Windows native peer.
 > Source PRD: [Interview-derived milestone requirements](../docs/requirements/native-linux-receive.md) — no pre-existing PRD; accepted boundary plus explicitly identified derived acceptance details.
 > PRD coverage: plans/native-linux-receive.prd-coverage.md
 > Context: [Glossary](../CONTEXT.md), [Integration map](../CONTEXT-MAP.md), [Scope ADR](../docs/adrs/0001-native-linux-receive-only.md), [Native media ADR](../docs/adrs/0002-linux-native-media-seams.md)
@@ -14,7 +14,7 @@ No new UI design is being invented: reuse existing room-entry/meeting controls; 
 
 Task estimates are derived from the source seams described in ADR 0002 and analogous native session/compositor implementations; exclude generated files, lockfiles and vendored upstream bulk. Confidence is low until the Linux compiler diagnostics are grouped and the first real native frame/audio path runs. Two atomic scenarios exceed the ~500-line soft cap and must remain intact: Task 1.1 (~700) and Task 2.1 (~1000). `/slice-split` handles actual oversized diffs after building; do not pre-author later-task living scenarios.
 
-A working build is not acceptance. Build and launch the executable in this computer's graphical Wayland session. Final evidence requires separate hosted calls with real macOS and Windows native peers and real speaker/microphone conversation; absent peers or hardware are reported as unvalidated, not replaced with a browser, local SFU, processing flag, or synthetic tone. Record only non-sensitive evidence using the requirements document's procedure. Plan-time fidelity audit verifies scenario wording only; it never marks behavior delivered.
+A working build is not acceptance. Build and launch the executable in this computer's graphical Wayland session. Final evidence requires a hosted call with the real Windows native peer and real speaker/microphone conversation; absent hardware is reported as unvalidated, not replaced with a browser, local SFU, processing flag, or synthetic tone. Tommy selected Windows instead of macOS on 2026-10-27. Record only non-sensitive evidence using the requirements document's procedure. Plan-time fidelity audit verifies scenario wording only; it never marks behavior delivered.
 
 ## Slice 1: Enter a hosted room from the native Linux app
 
@@ -72,24 +72,31 @@ Scenario: Unsupported publishing and input actions are unavailable
 
 ### Task 1.3: Join normal hosted rooms
 <!-- estimate: ~450 reviewable lines | feature-files: apps/desktop/features/linux-room-membership.feature | demoable: yes -->
+> Depends on: Task 1.2.
+> Shippable state: the native Linux client can join and leave the configured hosted service with the Windows peer; unsupported publication/control actions remain unavailable, and received media/audio are not claimed before their later tasks.
+> Boundary verification: run the exact task-head Linux executable without successor changes against the released Windows client; observe mutual participant presence, leave, and rejoin without duplicate membership.
 
-<!-- TODO -->
-# Living: apps/desktop/features/linux-room-membership.feature::Join a hosted room with each native peer platform
+**Soft-cap flag**: actual implementation and native-path verification exceed the estimate; kept as one cohesive membership boundary rather than splitting registration, connection ownership, or participant evidence into unusable prefixes.
+
+**Verified 2026-10-27**: actual Linux/Windows mutual presence, Leave and fresh-launch rejoin without duplicate participants; Windows returned to its sole local tile after Linux left. Focused and exact living checks pass, including publishing/control denials while joined. An isolated removed-presence-bridge mutation fails both checks; restoring it restores both. One bounded basic review found a participant-name substring false pass in the smoke, corrected to distinct identity-keyed tiles. Rust: 1,330 passed, 2 ignored; desktop: 982 + 96 passed, 1 Windows-only skip; supported Linux Clippy targets and changed-module formatting pass; Svelte check has 0 errors and 1 existing warning. All-target Clippy still includes incompatible historical macOS probes. Audio and incoming-screen rendering remain unverified.
+
+
+<!-- DONE -->
+# Living: apps/desktop/features/linux-room-membership.feature::Join a hosted room with the Windows native peer
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
-Scenario Outline: Join a hosted room with each native peer platform
-  Given a released native Petal <peer> client is in hosted room 246810
+Scenario Outline: Join a hosted room with the Windows native peer
+  Given a released native Petal <peer> client is in hosted room abc-defg-hjk
   And Linux is configured explicitly for that same hosted Petal service
   And no LiveKit server API secret is present or required on the Linux client
-  When I enter room code 246810 in the native Linux app and join
-  Then Linux joins hosted room 246810 without changing the peer client's server
+  When I enter room code abc-defg-hjk in the native Linux app and join
+  Then Linux joins hosted room abc-defg-hjk without changing the peer client's server
   And Linux and the <peer> client each show the other participant in the room
 
   Examples:
     | peer    |
-    | macOS   |
     | Windows |
 ```
 
@@ -104,17 +111,17 @@ Scenario Outline: Join a hosted room with each native peer platform
 ```gherkin
 Scenario Outline: Recover from an invalid or refused hosted join
   Given Linux is configured for the intended hosted Petal backend
-  And joining room 000000 produces <failure>
-  When I attempt to join room 000000
+  And joining room <attempted code> produces <failure>
+  When I attempt to join room <attempted code>
   Then I see an actionable join error
   And Linux remains outside the room without microphone publication or a remote window
-  When I correct the room code to accessible hosted room 246810 and join
-  Then Linux joins room 246810 normally
+  When I correct the room code to accessible hosted room abc-defg-hjk and join
+  Then Linux joins room abc-defg-hjk normally
 
   Examples:
-    | failure                 |
-    | an invalid code         |
-    | a refused access result |
+    | attempted code | failure                 |
+    | 000000         | an invalid code         |
+    | def-ghjk-mno   | a refused access result |
 ```
 
 <!-- TODO -->
@@ -131,7 +138,7 @@ Scenario: Missing hosted configuration never falls back silently
   And Linux does not attempt to join a local server or an alternative backend
   And the app does not ask me to install a LiveKit server API secret
   When I configure only the intended hosted backend URL and restart the app without a server API secret
-  And I join accessible hosted room 246810
+  And I join accessible hosted room abc-defg-hjk
   Then Linux joins successfully without any client dependency on a LiveKit server API secret
 ```
 
@@ -149,13 +156,13 @@ Scenario: Missing hosted configuration never falls back silently
 **Soft-cap flag**: low-confidence estimate; one scenario, preserved atomically.
 
 <!-- TODO -->
-# Living: apps/desktop/features/linux-remote-windows.feature::Receive a movable and resizable native share from each peer platform
+# Living: apps/desktop/features/linux-remote-windows.feature::Receive a movable and resizable native share from the Windows peer
 # Action: creates
 # Status: TODO
 # Living updated: NO
 ```gherkin
-Scenario Outline: Receive a movable and resizable native share from each peer platform
-  Given Linux and a native <peer> client are in hosted room 246810
+Scenario Outline: Receive a movable and resizable native share from the Windows peer
+  Given Linux and a native <peer> client are in hosted room abc-defg-hjk
   When the peer shares a non-sensitive editor window with a changing counter
   Then exactly one independent native remote window appears on Linux
   And its pixels show the editor and continuing counter changes
@@ -165,7 +172,6 @@ Scenario Outline: Receive a movable and resizable native share from each peer pl
 
   Examples:
     | peer    |
-    | macOS   |
     | Windows |
 ```
 
@@ -221,13 +227,13 @@ Scenario: Late teardown cannot retire a replacement share
 <!-- estimate: ~500 reviewable lines | feature-files: apps/desktop/features/linux-meeting-audio.feature | demoable: yes -->
 
 <!-- TODO -->
-# Living: apps/desktop/features/linux-meeting-audio.feature::Converse with each native peer while receiving a share
+# Living: apps/desktop/features/linux-meeting-audio.feature::Converse with the Windows native peer while receiving a share
 # Action: creates
 # Status: TODO
 # Living updated: NO
 ```gherkin
-Scenario Outline: Converse with each native peer while receiving a share
-  Given Linux and a native <peer> client are in hosted room 246810
+Scenario Outline: Converse with the Windows native peer while receiving a share
+  Given Linux and a native <peer> client are in hosted room abc-defg-hjk
   And Linux uses its real microphone and speakers rather than a headset
   And the <peer> client is publishing a share with visibly changing content
   When the Linux user says "Linux microphone check"
@@ -238,7 +244,6 @@ Scenario Outline: Converse with each native peer while receiving a share
 
   Examples:
     | peer    |
-    | macOS   |
     | Windows |
 ```
 
@@ -269,13 +274,13 @@ Scenario: Mute affects only outgoing microphone speech
 # Living updated: NO
 ```gherkin
 Scenario Outline: Recover an unavailable microphone or speaker without duplicating the call
-  Given Linux is joining hosted room 246810
+  Given Linux is joining hosted room abc-defg-hjk
   And its <direction> has no usable device
   When audio initialization attempts to use that direction
   Then Linux identifies the unavailable <direction> with an actionable error
   And Linux neither crashes nor claims that direction has working audio
   When I make that device available and retry the failed audio action
-  Then the intended <direction> works in room 246810
+  Then the intended <direction> works in room abc-defg-hjk
   And Linux retains one room connection without duplicate microphone publication or playback
 
   Examples:
@@ -288,12 +293,12 @@ Scenario Outline: Recover an unavailable microphone or speaker without duplicati
 <!-- estimate: ~200 reviewable lines | feature-files: apps/desktop/features/linux-meeting-audio.feature | demoable: yes -->
 
 <!-- TODO -->
-# Living: apps/desktop/features/linux-meeting-audio.feature::Sustain a speaker and microphone conversation with both peer platforms
+# Living: apps/desktop/features/linux-meeting-audio.feature::Sustain a speaker and microphone conversation with the Windows peer
 # Action: creates
 # Status: TODO
 # Living updated: NO
 ```gherkin
-Scenario Outline: Sustain a speaker and microphone conversation with both peer platforms
+Scenario Outline: Sustain a speaker and microphone conversation with the Windows peer
   Given Linux and a native <peer> client are in a hosted two-person call
   And Linux uses the actual microphone and speakers selected for this computer
   When the two people converse for five minutes including overlapping speech
@@ -304,7 +309,6 @@ Scenario Outline: Sustain a speaker and microphone conversation with both peer p
 
   Examples:
     | peer    |
-    | macOS   |
     | Windows |
 ```
 
@@ -360,13 +364,13 @@ Scenario: Retire a disconnected sharer presentation
 # Living updated: NO
 ```gherkin
 Scenario: Leave and rejoin without leaking audio or windows
-  Given Linux is in hosted room 246810 with audible two-way speech and one incoming share
+  Given Linux is in hosted room abc-defg-hjk with audible two-way speech and one incoming share
   When I leave that room
   Then the peer can no longer hear new speech from the Linux microphone
   And the peer's room publication list no longer contains Linux's microphone publication
   And Linux no longer plays that room's remote audio
   And its remote window closes
-  When I rejoin hosted room 246810 while the peer's share is still active
+  When I rejoin hosted room abc-defg-hjk while the peer's share is still active
   Then two-way audio and that active share return
   And there is one Linux call connection with no duplicate playback or remote window
 ```
@@ -381,11 +385,11 @@ Scenario: Leave and rejoin without leaking audio or windows
 # Living updated: NO
 ```gherkin
 Scenario: Reconnect without duplicate room media
-  Given Linux is in hosted room 246810 with two-way audio and an active incoming share
+  Given Linux is in hosted room abc-defg-hjk with two-way audio and an active incoming share
   When a temporary signaling interruption enters Petal's existing reconnect flow
   Then the native Linux app visibly reports reconnecting
   When connectivity returns
-  Then Linux is in hosted room 246810 again
+  Then Linux is in hosted room abc-defg-hjk again
   And current two-way audio and the active share resume
   And no duplicate playback or remote windows appear
 ```
@@ -400,10 +404,10 @@ Scenario: Reconnect without duplicate room media
 # Living updated: NO
 ```gherkin
 Scenario: Old room events cannot revive media in a new room
-  Given Linux has left room 246810 and joined a different room 135790
-  When late events from room 246810 arrive after that room switch
-  Then no room 246810 remote window opens
-  And no room 246810 audio restarts
-  And Linux remains in room 135790
+  Given Linux has left room abc-defg-hjk and joined a different room def-ghjk-mno
+  When late events from room abc-defg-hjk arrive after that room switch
+  Then no room abc-defg-hjk remote window opens
+  And no room abc-defg-hjk audio restarts
+  And Linux remains in room def-ghjk-mno
 ```
 

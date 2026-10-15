@@ -337,9 +337,10 @@ class NativeLaunch:
     ENTRY_CONTROLS = ("Meeting name, invite link, or meeting code", "Create/Join", "User profile")
     IDENTITY_FIXTURE = 'Linux <launch> "check" & Δ'
 
-    def __init__(self, executable, timeout):
+    def __init__(self, executable, timeout, *, backend_url=None):
         self.executable = Path(executable)
         self.timeout = timeout
+        self.backend_url = backend_url
         self.desktop = None
         self.process = None
         self.resources = ExitStack()
@@ -381,6 +382,9 @@ class NativeLaunch:
             "GTK_MODULES": "atk-bridge", "NO_AT_BRIDGE": "0",
             "WEBKIT_INSPECTOR_HTTP_SERVER": f"127.0.0.1:{self.native_input.port}",
         }
+        if self.backend_url is not None:
+            # Hosted checks select the backend explicitly, never server keys.
+            env["PETAL_BACKEND_URL"] = self.backend_url
         self.trace = home / "exec.trace"
         output = self.resources.enter_context((home / "process.log").open("w"))
         self.process = subprocess.Popen(
@@ -512,14 +516,19 @@ def living_steps(feature):
         if line.startswith("Feature:"):
             feature_seen = True
             continue
-        if line.startswith(("Background:", "Rule:", "Scenario Outline:", "Examples:")):
+        if line.startswith(("Background:", "Rule:")):
             raise AssertionError("Unsupported living syntax must not bypass native launch assertions")
-        if line.startswith("Scenario:"):
-            selected = line.removeprefix("Scenario:").strip() == SCENARIO
+        if line.startswith(("Scenario:", "Scenario Outline:")):
+            kind, _, name = line.partition(":")
+            selected = name.strip() == SCENARIO
+            assert not selected or kind == "Scenario", \
+                "Native launch assertions cannot silently become an outline"
             phase = None
             continue
         if not selected:
             continue
+        if line.startswith("Examples:"):
+            raise AssertionError("Native launch assertions do not bind Examples")
         keyword, separator, text = line.partition(" ")
         assert separator and keyword in ("Given", "When", "Then", "And"), \
             "Unbound living step cannot be treated as passed"

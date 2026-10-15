@@ -1,6 +1,6 @@
 # Native Linux receive-only milestone
 
-Tommy accepted this boundary in the 2026-10-14 planning interview: a native Linux two-person call on this computer, in normal hosted Petal rooms, with speakers and microphone and one incoming share in an independent desktop window. Both macOS and Windows native peers are acceptance targets. A browser substitute and headset-only proof do not satisfy the outcome.
+Tommy accepted this boundary in the 2026-10-14 planning interview: a native Linux two-person call on this computer, in normal hosted Petal rooms, with speakers and microphone and one incoming share in an independent desktop window. On 2026-10-27 he selected the released Windows native peer instead of macOS for acceptance. A browser substitute and headset-only proof do not satisfy the outcome.
 
 Outgoing screen sharing, local camera publication, and remote control are explicitly out of scope for this milestone. This is the complete plan for that bounded outcome, not an incomplete first phase of a larger PRD. General Linux distribution support, installers, automatic updates, hover-to-share, and additional simultaneous-share guarantees are not acceptance promises; retain unsupported behavior honestly rather than presenting successful no-ops.
 

@@ -8,7 +8,7 @@ All GTK objects and drawing stay on Tauri/GTK's main thread; decode and conversi
 
 Keep existing native publication admission and share-identity/track-SID rules. Acceptance exercises one incoming share; that does not authorize adding a new one-share admission cap or silently replacing arbitrary shares. Teardown owns cancellation: a retired track, participant, or room generation must not resurrect a window or audio. Reuse the existing reconnect flow; do not add a new retry subsystem.
 
-Audio uses the vendored WebRTC ADM's Linux PulseAudio/ALSA support through the existing `PlatformAudio` interface and software APM; echo cancellation, noise suppression, and automatic gain control are not replaced by raw `cpal` capture. The source establishes support and configuration, not a working acoustic result on this machine. Real hosted calls using speakers/microphone with both native peer platforms remain mandatory acceptance evidence.
+Audio uses the vendored WebRTC ADM's Linux PulseAudio/ALSA support through the existing `PlatformAudio` interface and software APM; echo cancellation, noise suppression, and automatic gain control are not replaced by raw `cpal` capture. The source establishes support and configuration, not a working acoustic result on this machine. A real hosted call using speakers/microphone with the Windows native peer remains mandatory acceptance evidence.
 
 ## Evidence and consequences
 

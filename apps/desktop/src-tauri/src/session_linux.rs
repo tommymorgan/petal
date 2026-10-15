@@ -1,18 +1,27 @@
-//! Linux startup's disconnected session boundary.
+//! Linux room membership on the shared native token/LiveKit connection.
 //!
-//! Native room connection, audio and incoming-share ownership are delivered by
-//! their ordered tasks. This boundary cannot join, publish, or inject input;
-//! shared read-only consumers observe the actual empty session at launch.
+//! This adapter owns membership and presence; the ordered media tasks attach
+//! microphone, playout and incoming-share resources to this same connection.
+//! Screen/camera publication and remote input remain unavailable on Linux.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::camera_session::ActiveCamera;
 use crate::platform::cg::WindowFrame;
 use crate::remote_control_core::RemoteControlPolicy;
 pub(crate) use crate::room_generation::RoomGeneration;
+use crate::sync_ext::MutexExt;
 use crate::transport::publisher::RoomConnection;
 
+use tauri::Manager;
+
+struct JoinedRoom {
+    record: crate::rooms::RoomRecord,
+    connection: Arc<RoomConnection>,
+    identity: String,
+    presence: Arc<crate::presence::PresenceState>,
+}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SharedWindowScreenStatus {
     NotShared,
@@ -23,6 +32,8 @@ pub(crate) enum SharedWindowScreenStatus {
 
 #[derive(Default)]
 pub struct SessionState {
+    joined: Mutex<Option<JoinedRoom>>,
+    transition_lock: tokio::sync::Mutex<()>,
     mic_control: tokio::sync::Mutex<()>,
     camera_control: tokio::sync::Mutex<()>,
     generation: Arc<AtomicU64>,
@@ -48,15 +59,21 @@ impl SessionState {
     }
 
     pub(crate) fn is_in_room(&self) -> bool {
-        false
+        self.joined.lock_unpoisoned().is_some()
     }
 
     pub(crate) fn control_channel_snapshot(&self) -> Option<(Arc<RoomConnection>, String)> {
-        None
+        self.joined
+            .lock_unpoisoned()
+            .as_ref()
+            .map(|joined| (joined.connection.clone(), joined.identity.clone()))
     }
 
     pub(crate) fn current_room_record(&self) -> Option<crate::rooms::RoomRecord> {
-        None
+        self.joined
+            .lock_unpoisoned()
+            .as_ref()
+            .map(|joined| joined.record.clone())
     }
 
     pub(crate) fn is_share_active(&self, _window_id: u32) -> bool {
@@ -171,19 +188,192 @@ impl SessionState {
 }
 
 #[tauri::command]
-pub fn current_room() -> Option<String> {
-    None
+pub(crate) async fn join_room_command(
+    app: tauri::AppHandle,
+    rooms: tauri::State<'_, crate::rooms::RoomsState>,
+    state: tauri::State<'_, SessionState>,
+    room_name: String,
+    identity: String,
+    display_name: String,
+    remote_control_allowed: bool,
+    remote_control_policy: Option<RemoteControlPolicy>,
+    identity_palette_index: Option<u8>,
+) -> Result<crate::rooms::RoomRecord, crate::meeting_core::RoomJoinError> {
+    // Accept the shared wire payload, never its unsupported control intent.
+    let _ = (remote_control_allowed, remote_control_policy);
+    let _transition = state.transition_lock.lock().await;
+    let record = crate::meeting_core::persist_joined_room_record(&rooms, &room_name)?;
+    {
+        let joined = state.joined.lock_unpoisoned();
+        if let Some(joined) = joined.as_ref() {
+            if joined.record.id == record.id
+                && joined.connection.room().connection_state()
+                    != livekit::ConnectionState::Disconnected
+            {
+                return Ok(joined.record.clone());
+            }
+        }
+    }
+    leave_room_inner(&app, &state, true).await;
+    let generation = state.begin_room_generation();
+    let connected =
+        match crate::meeting_core::connect_room(&rooms, record, &identity, &display_name).await {
+            Ok(connected) => connected,
+            Err(error) => {
+                state.invalidate_room_generation();
+                crate::ai_chat::room_auth::forget();
+                return Err(error);
+            }
+        };
+    let record = connected.room_record;
+    let connection = connected.room_connection;
+    let presence = Arc::new(crate::presence::PresenceState::default());
+    // Consume the original connect-time queue, including an early disconnect.
+    // There is no compositor or resilience owner on Linux at this task boundary.
+    let events = connection.take_compositor_events();
+    connection.discard_resilience_events();
+    {
+        *state.joined.lock_unpoisoned() = Some(JoinedRoom {
+            record: record.clone(),
+            connection: connection.clone(),
+            identity: identity.clone(),
+            presence: presence.clone(),
+        });
+    }
+    crate::presence::start_for_room(
+        &app,
+        connection.room(),
+        presence,
+        record.name.clone(),
+        identity.clone(),
+        display_name,
+        generation.clone(),
+    );
+    if let Some(mut events) = events {
+        let app = app.clone();
+        let connection = connection.clone();
+        let generation = generation.clone();
+        tauri::async_runtime::spawn(async move {
+            while let Some(event) = events.recv().await {
+                if !generation.is_current() {
+                    break;
+                }
+                if matches!(event, livekit::RoomEvent::Disconnected { .. }) {
+                    if let Some(state) = app.try_state::<SessionState>() {
+                        let _transition = state.transition_lock.lock().await;
+                        let owns_room = state
+                            .joined
+                            .lock_unpoisoned()
+                            .as_ref()
+                            .map(|joined| Arc::ptr_eq(&joined.connection, &connection))
+                            .unwrap_or(false);
+                        if generation.is_current() && owns_room {
+                            leave_room_inner(&app, &state, false).await;
+                        }
+                    }
+                    break;
+                }
+            }
+        });
+    }
+    match connection
+        .publish_identity_palette_index(identity_palette_index)
+        .await
+    {
+        Ok(palette_index) if generation.is_current() => {
+            connection.commit_identity_palette_index(palette_index);
+        }
+        Ok(_) => {}
+        Err(error) => log::warn!("linux session: identity color metadata failed: {error}"),
+    }
+    if connection.room().connection_state() == livekit::ConnectionState::Disconnected {
+        leave_room_inner(&app, &state, false).await;
+        return Err(crate::meeting_core::RoomJoinError::RoomConnect(
+            "room disconnected during join".to_string(),
+        ));
+    }
+    crate::analytics::meeting_joined();
+    Ok(record)
 }
 
 #[tauri::command]
-pub fn room_presence() -> Vec<crate::presence::PresentParticipant> {
-    Vec::new()
+pub fn current_room(state: tauri::State<'_, SessionState>) -> Option<String> {
+    state.current_room_record().map(|record| record.name)
 }
 
-pub async fn leave_room(_app: &tauri::AppHandle, state: &SessionState) {
-    // Invalidates any pending shared camera operation before process teardown.
+#[tauri::command]
+pub fn room_presence(
+    state: tauri::State<'_, SessionState>,
+) -> Vec<crate::presence::PresentParticipant> {
+    state
+        .joined
+        .lock_unpoisoned()
+        .as_ref()
+        .map(|joined| joined.presence.snapshot())
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn leave_room_command(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SessionState>,
+) -> Result<(), ()> {
+    leave_room(&app, &state).await;
+    Ok(())
+}
+
+pub async fn leave_room(app: &tauri::AppHandle, state: &SessionState) {
+    let _transition = state.transition_lock.lock().await;
+    leave_room_inner(app, state, true).await;
+}
+
+async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: bool) {
     state.invalidate_room_generation();
     state.set_camera_intent(false);
+    crate::ai_chat::room_auth::forget();
+    let joined = state.joined.lock_unpoisoned().take();
+    if let Some(joined) = joined {
+        if close {
+            if let Err(error) = joined.connection.room().close().await {
+                log::warn!("linux session: room close failed: {error}");
+            }
+        }
+        let _ = tauri::Emitter::emit(
+            app,
+            "room-left",
+            serde_json::json!({ "roomName": joined.record.name }),
+        );
+        crate::menubar::update_meeting_state(app, false, 0);
+        crate::analytics::meeting_left();
+    }
+}
+
+#[tauri::command]
+pub async fn set_display_name(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SessionState>,
+    name: String,
+) -> Result<(), String> {
+    let snapshot = state.joined.lock_unpoisoned().as_ref().map(|joined| {
+        (
+            joined.connection.clone(),
+            joined.presence.clone(),
+            joined.record.name.clone(),
+        )
+    });
+    let Some((connection, presence, room_name)) = snapshot else {
+        return Ok(());
+    };
+    let name = name.trim();
+    let display = if name.is_empty() { "Guest" } else { name };
+    connection
+        .room()
+        .local_participant()
+        .set_name(display.to_string())
+        .await
+        .map_err(|error| format!("set_name failed: {error}"))?;
+    crate::presence::set_local_name(&app, &presence, &room_name, display);
+    Ok(())
 }
 
 pub(crate) fn share_audio_state_for_state(
