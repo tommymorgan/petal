@@ -199,10 +199,14 @@ saying the build has no token backend). This is deliberate — a default would
 mean every third-party build silently minting tokens against the maintainers'
 LiveKit and Vercel accounts.
 
-In a **debug** build, leaving it unset (or setting it explicitly empty) instead
-activates the local dev token mint, which reads `LIVEKIT_URL`,
-`LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET` and talks to a local
-`livekit-server --dev`. That path is compiled out of release builds.
+In a **debug** build, the normal Linux join path does not automatically mint
+local tokens when no runtime or baked backend is configured: it reports the
+missing `PETAL_BACKEND_URL` instead. Only an explicitly empty runtime
+`PETAL_BACKEND_URL` opts that Linux path into the local dev token mint.
+Other platforms retain the debug fallback when the backend is missing.
+The dev mint reads `LIVEKIT_URL`, `LIVEKIT_API_KEY`, and `LIVEKIT_API_SECRET`
+for a local `livekit-server --dev`; it is compiled out of release builds
+and is not the native Linux milestone's media acceptance environment.
 
 Changing the environment variable causes Cargo to rebuild the relevant crate,
 so do not rely on a previously built app bundle.

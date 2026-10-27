@@ -30,3 +30,26 @@ test('meeting action errors include invite and route-specific recovery copy', ()
     'Meeting was created, but Petal could not open it. Try selecting it from Your Rooms.'
   );
 });
+
+test('native missing hosted configuration names only the setting and recovery action', () => {
+  const message = meetingActionErrorMessage({
+    kind: 'config',
+    message: 'no token backend is configured (PETAL_BACKEND_URL was not set at build time)'
+  }, 'join');
+  assert.match(message, /PETAL_BACKEND_URL/);
+  assert.match(message, /configur|set/i);
+  assert.match(message, /restart/i);
+  assert.doesNotMatch(message, /LIVEKIT_API|mint tokens|docs\/SELF_HOSTING/);
+});
+
+test('native hosted access refusals direct users to check the code or ask the host', () => {
+  for (const status of ['401 Unauthorized', '403 Forbidden']) {
+    const message = meetingActionErrorMessage({
+      kind: 'config',
+      message: `backend token endpoint returned HTTP ${status}`
+    }, 'join');
+    assert.match(message, /code|invite/i);
+    assert.match(message, /host|access/i);
+    assert.doesNotMatch(message, /HTTP|backend token/);
+  }
+});

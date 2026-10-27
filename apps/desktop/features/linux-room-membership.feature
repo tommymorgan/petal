@@ -19,3 +19,28 @@ Feature: Native Linux room membership
     Examples:
       | peer    |
       | Windows |
+
+  Scenario Outline: Recover from an invalid or refused hosted join
+    Given Linux is configured for the intended hosted Petal backend
+    And joining <attempted input> produces <failure>
+    When I attempt to join using <attempted input>
+    Then I see an actionable join error
+    And Linux remains outside the room without microphone publication or a remote window
+    When I correct the room code to accessible hosted room abc-defg-hjk and join
+    Then Linux joins room abc-defg-hjk normally
+
+    Examples:
+      | attempted input     | failure                 |
+      | petal://join/000000 | an invalid code         |
+      | def-ghjk-mno        | a refused access result |
+
+  Scenario: Missing hosted configuration never falls back silently
+    Given I launch a Linux build with no baked hosted backend and no runtime backend override
+    And no LiveKit server API secret is present on the client
+    When I attempt a hosted room join
+    Then I see a configuration error naming the missing hosted backend setting
+    And Linux does not attempt to join a local server or an alternative backend
+    And the app does not ask me to install a LiveKit server API secret
+    When I configure only the intended hosted backend URL and restart the app without a server API secret
+    And I join accessible hosted room abc-defg-hjk
+    Then Linux joins successfully without any client dependency on a LiveKit server API secret

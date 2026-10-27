@@ -30,6 +30,7 @@ import {
 import { meetingDisplayLabelFromCredential } from '$lib/data/meetingCode';
 import { findRoomRecord, meetingInviteAccessCode } from '$lib/data/inviteLinks';
 import { consumePendingRoomDisplayName } from '$lib/data/pendingRoomLabels';
+import { meetingActionErrorMessage } from '$lib/data/meetingActionError';
 import {
   cameraTrackNameForIdentity,
   cameraWindowId,
@@ -400,7 +401,8 @@ export function createMeetingSession(options: MeetingSessionOptions): MeetingSes
       meetingPhase = 'connected';
     } catch (e) {
       console.error(`Failed to join room '${roomName}'`, e);
-      beginTerminalReturn('Could not join this room - returning you to the room list.');
+      beginTerminalReturn(meetingActionErrorMessage(e, 'join'));
+      return false;
     }
 
     // Without this the continuation of an awaited join connects a SECOND

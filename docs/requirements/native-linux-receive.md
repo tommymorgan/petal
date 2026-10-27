@@ -1,21 +1,21 @@
 # Native Linux receive-only meeting milestone
 
-> Source: Tommy's planning interview, 2026-10-14.
+> Source: Tommy's planning interview, 2026-10-14, and accepted peer/hosting changes, 2026-10-27.
 > Status: accepted product boundary; detailed behaviors below operationalize that boundary for planning. No pre-existing PRD was supplied or found.
-> Implementation status: not built. Planning fidelity is not runtime verification.
+> Implementation status: five scenarios built locally, twelve TODO. Trusted TLS, mutual native membership and join/configuration recovery now pass on the selected owned stack. Earlier upstream-hosted observations remain historical. Audio, incoming-share acceptance and a fresh independent fidelity audit remain pending.
 
 ## 1. Outcome and accepted boundary
 
-A locally built native Petal executable runs on this x86_64 Arch-family Wayland desktop. Tommy can join normal hosted Petal rooms, converse through speakers and microphone with a Windows native peer, and receive one share in an independent desktop window. A browser client, synthetic publisher, or local-only SFU is not final acceptance evidence.
+A locally built native Petal executable runs on this x86_64 Arch-family Wayland desktop. Tommy can join a real Petal room through a Tommy-owned self-hosted stateless backend and LiveKit service, converse through speakers and microphone with a Windows native peer, and receive one share in an independent desktop window. Both native clients explicitly use the same owned service. A browser client, synthetic publisher, mock backend, or `livekit-server --dev` is not final acceptance evidence.
 
-The 2026-10-14 interview selected both native peer platforms. On 2026-10-27 Tommy replaced macOS acceptance with the released Windows native peer. Speakers and microphone rather than headset-only, normal hosted rooms, two-way audio plus receiving one share, and the exclusions for outgoing screen sharing, camera publication, and remote control remain unchanged. See [ADR 0001](../adrs/0001-native-linux-receive-only.md).
+The 2026-10-14 interview selected native peers and normal upstream-hosted rooms. On 2026-10-27 Tommy replaced macOS acceptance with the released Windows native peer, then selected “let's self-host for acceptance,” replacing the upstream-hosted-room requirement. This removes the upstream operator-access dependency, not the need to deploy a real reachable backend and LiveKit service. Speakers and microphone rather than headset-only, two-way audio plus receiving one share, and the exclusions for outgoing screen sharing, camera publication, and remote control remain unchanged. Earlier upstream evidence retains its original environment and is not proof of owned-stack acceptance. See [ADR 0001](../adrs/0001-native-linux-receive-only.md).
 
 ## 2. Acceptance criteria
 
 Each numbered item is atomic for the coverage ledger. The concrete lifecycle/error requirements are derived acceptance details, not claims that Tommy specified their implementation.
 
 - **AC1:** Launching the locally built Linux executable on this Wayland desktop opens Petal's native room-entry window without opening a browser or requiring macOS or Windows setup steps.
-- **AC2:** Using an existing valid hosted room code, Linux joins the same normal hosted Petal room as a Windows native peer; both participants see each other in the room.
+- **AC2:** Using an existing valid room code, Linux and a released Windows native peer explicitly configured for the same Tommy-owned self-hosted stateless Petal backend and LiveKit service join the same room without server API secrets on either client; both participants see each other in the room.
 - **AC3:** In that call, speech from the Linux microphone is audible at the peer and speech from the peer is audible through the Linux speakers while an incoming share is updating.
 - **AC4:** In that call using speakers and microphone, a five-minute conversation including overlapping speech completes without a persistent audible echo of the peer's own speech or an escalating feedback loop.
 - **AC5:** Muting Linux stops its microphone speech reaching the peer without stopping incoming audio or share updates; unmuting restores outgoing speech, with the visible mute control matching the actual state.
@@ -37,12 +37,12 @@ Each numbered item is atomic for the coverage ledger. The concrete lifecycle/err
 
 ## 4. Non-goals
 
-No outgoing Linux screen capture, local camera publication, or remote control. No new renderer design for the browser, new hosted deployment, new codec protocol, general distribution matrix, installer/updater delivery, or guarantee for multiple simultaneous incoming shares. These exclusions are deliberate scope, not deferred rows belonging to this milestone. Existing macOS/Windows native behavior must be preserved.
+No outgoing Linux screen capture, local camera publication, or remote control. No new renderer design for the browser, upstream-hosted deployment changes, new codec protocol, general distribution matrix, installer/updater delivery, or guarantee for multiple simultaneous incoming shares. Provisioning the owned acceptance backend and LiveKit service is in scope; this does not authorize paid signup or arbitrary public firewall exposure. These exclusions are deliberate scope, not deferred rows belonging to this milestone. Existing macOS/Windows native behavior must be preserved.
 
 ## 5. Acceptance environment and evidence
 
-Run the Linux executable in the actual graphical Wayland session, not merely in a headless test. Use existing hosted room/token infrastructure configured explicitly; do not change global source-build defaults or install server secrets. Use the released Windows native client as the peer. Keep room codes, identities, credentials, and personal audio/video out of committed evidence.
+Run the Linux executable in the actual graphical Wayland session, not merely in a headless test. Deploy a real Tommy-owned stateless Petal backend and LiveKit service and establish reachability from Linux and the released Windows native client before acceptance. Configure both clients explicitly for that same service; do not change global source-build defaults or install server API secrets on either client. The backend holds the LiveKit server credentials and issues scoped client tokens. Self-hosting selection is not evidence of deployment, reachability, or acceptance. Keep room codes, identities, credentials, and personal audio/video out of committed evidence.
 
 For image validation share a non-sensitive editor/test-pattern window with a visible changing counter, corner markers, and known text. Observe receiver pixels, aspect, movement and resize directly. For audio, both ends listen to real speech including overlap with the Linux speakers active; a processing-option flag, synthetic tone, energy counter, or video recording with no audible track is insufficient evidence for AC4. The five-minute duration is a sustained-use observation, not a new latency/performance guarantee.
 
-Record exact app revisions, peer platform, device names privately, and pass/fail for each exercised behavior. Peer hardware and a listening partner are prerequisites for final acoustic acceptance; unavailable hardware means unvalidated, not passed. Intermediate local/synthetic checks may unblock implementation but cannot replace the hosted native call or real speaker/microphone observations. See [VALIDATION.md](../VALIDATION.md) for the distinction between layers of evidence.
+Record exact app revisions, service environment, peer platform, device names privately, and pass/fail for each exercised behavior. Peer hardware and a listening partner are prerequisites for final acoustic acceptance; unavailable hardware means unvalidated, not passed. An accessible room and an isolated identity actually denied by the owned service are prerequisites for join/recovery evidence; an unknown valid-format room code is not a refusal fixture. Intermediate local/synthetic checks may unblock implementation but cannot replace the owned-stack native call or real speaker/microphone observations. Mocks, dev-server token minting, and processing-option flags do not establish media acceptance. Preserve successful upstream-hosted observations as historical evidence under that environment; do not relabel them as owned-stack proof or reopen completed scenarios solely for this scope change. See [VALIDATION.md](../VALIDATION.md) for the distinction between layers of evidence.

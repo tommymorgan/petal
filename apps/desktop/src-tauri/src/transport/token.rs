@@ -111,7 +111,11 @@ pub async fn fetch_access_token(
     let base = match backend_base_url() {
         Ok(base) => base,
         #[cfg(any(test, debug_assertions))]
-        Err(TokenError::MissingEnv("PETAL_BACKEND_URL")) => {
+        Err(TokenError::MissingEnv("PETAL_BACKEND_URL"))
+            if !cfg!(target_os = "linux")
+                || std::env::var("PETAL_BACKEND_URL")
+                    .is_ok_and(|value| value.trim().is_empty()) =>
+        {
             return mint_dev_access_token_response(request);
         }
         Err(e) => return Err(e),

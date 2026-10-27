@@ -336,11 +336,15 @@ the room-entry route. The hold allows separate observation of the Linux
 participant in the Windows client; that reciprocal check is not automated
 by the Linux driver. Keep both desktop sessions awake and unlocked.
 
-On 2026-10-27, the Linux native candidate joined the hosted Windows room and
-passed those Linux-side membership and Leave assertions. A subsequent fresh
-Linux launch joined the same room again, and the released Windows native
-client visibly showed both participants. These checks do not prove audio,
-incoming screen rendering, or acoustic AEC.
+On 2026-10-27, the earlier upstream-hosted runs passed Linux membership and
+Leave, and the released Windows client visibly showed both participants.
+Separate owned-stack checks later that day established trusted TLS from
+both operating systems, room creation through released Windows Petal 0.9.33,
+and its presence through the real LiveKit SDK. Linux then joined that owned
+room, rendered both participants, and appeared in the Windows native gallery.
+The owned stack uses unmodified backend handlers and official non-development
+LiveKit 1.13.11, not a replacement token service. These checks do not prove
+audio, incoming screen rendering, or acoustic AEC.
 
 No client-side LiveKit server API secret is supplied. Windows replaces macOS
 for this milestone under Tommy's 2026-10-27 scope correction. The public
@@ -358,6 +362,85 @@ manual `Room::close()` returned success while its cached connection state and
 participant snapshot still looked connected. That probe did not earn a
 negative-control pass. Observe the other native client during Join and after
 Leave; do not infer reciprocal membership from Linux's cached state.
+
+### Native Linux hosted join recovery
+
+Build the frontend and native binary with `PETAL_BACKEND_URL` absent when
+checking an unconfigured build. An empty runtime value is a separate, explicit
+local-development opt-out; it is not the missing-configuration fixture.
+
+With the actual Wayland/session environment above and a released Windows peer
+already in an authorized hosted test room:
+
+```sh
+gnome-session-inhibit --inhibit=idle --app-id=com.petal.app \
+  --reason='Native hosted join recovery' \
+  /usr/bin/python3 apps/desktop/scripts/check-linux-join-recovery.py \
+  apps/desktop/src-tauri/target/debug/desktop \
+  --failure-kind missing --backend-url "$PETAL_TEST_BACKEND_URL" \
+  --room-code "$PETAL_TEST_ROOM_CODE" \
+  --expected-peer-name "$PETAL_TEST_PEER_NAME" \
+  --feature apps/desktop/features/linux-room-membership.feature
+```
+
+The driver attempts Join without a backend override or server API secret.
+It requires a visible configuration action naming `PETAL_BACKEND_URL`, no
+native room ownership or remote window, and no owned IPv4/IPv6 `connect` or
+`sendto` destination during the attempt. It restarts the same binary with
+only the backend URL added, preserving the same isolated profile and actual
+onboarding identity, then requires the hosted Windows participant and Leave.
+This checks configuration recovery, not working audio or incoming rendering.
+
+On 2026-10-27, an isolated copy with only the missing-setting message branch
+removed failed both its focused unit assertion and the actual native living
+check. Restoring the branch restored the five helper tests; the unchanged
+candidate then passed strict living execution in 13.49 seconds. The
+same-profile restart and real Windows membership checks remained enabled.
+Removing the separate HTTP 401/403 recovery branch also failed its consumer
+test. Those historical mutations alone did not establish native refusal.
+
+The owned-stack check subsequently exposed the actual Rust status text,
+`backend token endpoint returned HTTP 403 Forbidden`. The helper's original
+exact-status matcher fell through to connection advice. The regression now
+uses real `401 Unauthorized` and `403 Forbidden` shapes: it failed before the
+fix and passes afterward. A native run against the actual denied identity
+also failed before the fix and passes with actionable access advice after it.
+
+The same driver strictly binds the complete invalid/refused living outline
+with `--feature apps/desktop/features/linux-room-membership.feature`:
+
+- Invalid row: `--failure-kind invalid --attempted-code petal://join/000000`.
+  Bare `000000` is a valid meeting name, not a code-join attempt.
+- Refused row: `--failure-kind refused --attempted-code "$PETAL_REFUSED_ROOM_CODE"
+  --refusal-fixture-dir "$PETAL_REFUSAL_FIXTURE_DIR"`. The fixture must be an
+  existing, isolated room on the owned service, not an unknown code.
+
+The parent owns the private `0700` fixture directory. After actual onboarding,
+the driver publishes `0600` `ready.json` containing the real participant ID.
+The parent records only that identity's removal through the real admin handler,
+confirms `/api/token` returns `403`, and atomically publishes `0600` `resume.json`
+with the matching ID. The driver waits at most 120 seconds before Join; stale
+files, symlinks, mismatched identities and incorrect ownership/modes fail closed.
+Admin credentials never enter either client or the driver.
+
+On 2026-10-27 both strict recovery rows passed against the owned service:
+actionable error, no native membership or remote window, same-profile
+corrected-code admission with the released Windows peer, and clean Leave.
+A Windows native screenshot independently showed both participants during
+the corrected join. The strict missing-configuration scenario also passed:
+zero owned IPv4/IPv6 join destinations before a URL-only restart preserving
+the same profile and identity, followed by Windows-room membership and Leave.
+Both clients used explicit backend configuration without server API secrets.
+The real stack's trusted TLS and native membership are now exercised; audio
+and incoming-share acceptance remain unverified. Earlier upstream investigation
+made no mutation and is not being relabeled as owned-stack proof.
+
+The final Task 1.4 desktop integration gate passed 984 tests plus 96 harness
+tests, with one Windows-only integration skip. Panel-close validation passed.
+Svelte checked 613 files with zero errors and the existing `RoomRow.svelte`
+accessibility warning. The frontend and native executable rebuilt successfully.
+Rust library and Clippy results above are retained earlier checks; they were
+not rerun for the later one-line status-phrase classification fix.
 
 ## Rules — each traceable to a real incident
 

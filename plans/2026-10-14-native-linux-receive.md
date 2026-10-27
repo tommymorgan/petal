@@ -1,7 +1,7 @@
-# Feature: Native Linux hosted audio and share receiving
+# Feature: Native Linux self-hosted audio and share receiving
 
 **Created**: 2026-10-14
-**Goal**: Use native Petal on this Wayland computer for a hosted two-person speaker/microphone call and one independent incoming-share window with the released Windows native peer.
+**Goal**: Use native Petal on this Wayland computer for a two-person speaker/microphone call and one independent incoming-share window with the released Windows native peer, both explicitly configured for the same Tommy-owned self-hosted stateless backend and LiveKit service.
 > Source PRD: [Interview-derived milestone requirements](../docs/requirements/native-linux-receive.md) — no pre-existing PRD; accepted boundary plus explicitly identified derived acceptance details.
 > PRD coverage: plans/native-linux-receive.prd-coverage.md
 > Context: [Glossary](../CONTEXT.md), [Integration map](../CONTEXT-MAP.md), [Scope ADR](../docs/adrs/0001-native-linux-receive-only.md), [Native media ADR](../docs/adrs/0002-linux-native-media-seams.md)
@@ -14,7 +14,11 @@ No new UI design is being invented: reuse existing room-entry/meeting controls; 
 
 Task estimates are derived from the source seams described in ADR 0002 and analogous native session/compositor implementations; exclude generated files, lockfiles and vendored upstream bulk. Confidence is low until the Linux compiler diagnostics are grouped and the first real native frame/audio path runs. Two atomic scenarios exceed the ~500-line soft cap and must remain intact: Task 1.1 (~700) and Task 2.1 (~1000). `/slice-split` handles actual oversized diffs after building; do not pre-author later-task living scenarios.
 
-A working build is not acceptance. Build and launch the executable in this computer's graphical Wayland session. Final evidence requires a hosted call with the real Windows native peer and real speaker/microphone conversation; absent hardware is reported as unvalidated, not replaced with a browser, local SFU, processing flag, or synthetic tone. Tommy selected Windows instead of macOS on 2026-10-27. Record only non-sensitive evidence using the requirements document's procedure. Plan-time fidelity audit verifies scenario wording only; it never marks behavior delivered.
+A working build is not acceptance. Build and launch the executable in this computer's graphical Wayland session. Final evidence requires a real owned-stack call with the released Windows native peer and real speaker/microphone conversation; absent hardware is reported as unvalidated, not replaced with a browser, mock, dev-server token mint, processing flag, or synthetic tone. Tommy selected Windows instead of macOS on 2026-10-27, then selected “let's self-host for acceptance,” replacing the upstream-hosted-room requirement. Record only non-sensitive evidence using the requirements document's procedure. Plan-time fidelity audit verifies scenario wording only; it never marks behavior delivered.
+
+**Global acceptance environment**: a real Tommy-owned stateless Petal backend and official non-development LiveKit service run on this workstation and are reachable from both native clients over trusted TLS. Linux and the released Windows client are explicitly configured for that same service; server API secrets stay on the backend/LiveKit service, never either client. The bounded placement is recorded in ADR 0001. No paid signup, public firewall/router/DNS change, or cloud deployment was used. “Hosted” in the preserved scenarios denotes this explicitly configured real service, not an upstream-only dependency. Task 1.3's preserved scenario describes membership after both peers are configured; it does not prohibit the accepted one-time Windows service configuration.
+
+**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Five scenarios are built locally and twelve remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof on the same date independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, and same-profile URL-only configuration recovery. Native media acceptance remains pending.
 
 ## Slice 1: Enter a hosted room from the native Linux app
 
@@ -22,7 +26,7 @@ A working build is not acceptance. Build and launch the executable in this compu
 
 **Touches**: Linux startup/module gates, session selection, meeting_core connection, hosted configuration, platform capabilities, existing room UI.
 
-**Off-limits**: No media renderer or capture implementation, no browser fallback, no hosted deployment changes.
+**Off-limits**: No media renderer or capture implementation, no browser fallback, no upstream-hosted deployment changes. Provisioning the owned acceptance environment is separate from this client's membership implementation.
 
 ### Task 1.1: Launch the Linux desktop app
 <!-- estimate: ~700 reviewable lines | feature-files: apps/desktop/features/linux-room-membership.feature | demoable: yes -->
@@ -102,33 +106,44 @@ Scenario Outline: Join a hosted room with the Windows native peer
 
 ### Task 1.4: Report hosted join and configuration failures
 <!-- estimate: ~350 reviewable lines | feature-files: apps/desktop/features/linux-room-membership.feature | demoable: yes -->
+> Depends on: Task 1.3.
+> Shippable state: failed Linux hosted joins remain outside the room with actionable recovery; a missing backend never falls through to local token minting. Existing hosted membership and native peer behavior remain intact without media successors.
+> Boundary verification: exercise malformed invites, an actual server-refused identity and an unconfigured Linux build through native entry; correct the input or backend and join the released Windows peer without server secrets.
 
-<!-- TODO -->
+The invalid fixture uses an explicit invite URI: bare `000000` is a valid new meeting display name in the existing smart field, not an attempted room-code join. The owned-stack acceptance fixtures must include an accessible room and an isolated participant identity with actual server-side denial state. `abc-defg-hjk` and `def-ghjk-mno` remain public example codes, not proof of accessibility or refusal; an unknown valid-format code is not a denied-identity fixture.
+
+**Historical verification 2026-10-27**: missing configuration reproduced a generic error after an unintended debug-mint fallback. The corrected native path names `PETAL_BACKEND_URL`, stays outside the room with no remote window or owned IPv4/IPv6 join destination, and recovers after a URL-only restart using the same profile and participant identity. Removing the setting-specific message made both the unit and native living assertions fail; restoring it restored green. Those earlier runs used the upstream-hosted Windows room and are not relabeled as owned-stack evidence.
+
+**Owned-stack verification 2026-10-27**: the real backend handlers and official non-development LiveKit 1.13.11 run behind a trusted certificate. Windows reaches the backend without bypassing verification, creates its room through the released native client, and is independently observed in the owned LiveKit room. The parent creates a separate refusal room, reads the actual fresh Linux onboarding identity through the private `0700`/`0600` handshake, records its removal through the real admin handler, confirms token `403`, and only then resumes native Join. The real refusal exposed Rust's `HTTP 403 Forbidden` status phrase, which the original exact-status UI matcher misclassified as a connection failure. The corrected consumer regression fails before the fix and passes afterward. Both strict invalid/refused living rows now pass against the owned service: actionable error, no native membership or remote window, corrected-code membership with the Windows peer, and clean Leave. A Windows screenshot independently shows both native participants. The strict missing-configuration scenario also passes against the owned room, retaining the same profile and identity and proving zero owned IPv4/IPv6 join destinations before the URL-only restart. Client environments contain no LiveKit server API secrets. No upstream mutation, public network change, media acceptance or independent fidelity audit is claimed.
+
+**Integration**: Rust library tests previously passed 1,330 tests with 2 ignored; supported Linux Clippy targets passed with existing warnings. The changed guard is formatted; the token module's existing formatting hunk bodies match Task 1.3's base exactly, so whole-module formatting remains a recorded baseline failure rather than a claimed PASS. The final desktop suite and Svelte gate are recorded in `docs/VALIDATION.md`. One fresh-launch setup encountered a stale AT-SPI node before onboarding; a separate owned launch completed the behavioral check. Native diagnostics also encountered a blanked desktop and were repeated with the actual unlocked desktop awake and a process-scoped idle inhibitor. No retry policy or rendering workaround was added to production code.
+
+<!-- DONE -->
 # Living: apps/desktop/features/linux-room-membership.feature::Recover from an invalid or refused hosted join
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario Outline: Recover from an invalid or refused hosted join
   Given Linux is configured for the intended hosted Petal backend
-  And joining room <attempted code> produces <failure>
-  When I attempt to join room <attempted code>
+  And joining <attempted input> produces <failure>
+  When I attempt to join using <attempted input>
   Then I see an actionable join error
   And Linux remains outside the room without microphone publication or a remote window
   When I correct the room code to accessible hosted room abc-defg-hjk and join
   Then Linux joins room abc-defg-hjk normally
 
   Examples:
-    | attempted code | failure                 |
-    | 000000         | an invalid code         |
-    | def-ghjk-mno   | a refused access result |
+    | attempted input     | failure                 |
+    | petal://join/000000 | an invalid code         |
+    | def-ghjk-mno        | a refused access result |
 ```
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: apps/desktop/features/linux-room-membership.feature::Missing hosted configuration never falls back silently
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Missing hosted configuration never falls back silently
   Given I launch a Linux build with no baked hosted backend and no runtime backend override

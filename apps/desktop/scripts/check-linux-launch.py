@@ -337,10 +337,12 @@ class NativeLaunch:
     ENTRY_CONTROLS = ("Meeting name, invite link, or meeting code", "Create/Join", "User profile")
     IDENTITY_FIXTURE = 'Linux <launch> "check" & Δ'
 
-    def __init__(self, executable, timeout, *, backend_url=None):
+    def __init__(self, executable, timeout, *, backend_url=None, trace_network=False, profile_root=None):
         self.executable = Path(executable)
         self.timeout = timeout
         self.backend_url = backend_url
+        self.trace_network = trace_network
+        self.profile_root = profile_root
         self.desktop = None
         self.process = None
         self.resources = ExitStack()
@@ -366,7 +368,7 @@ class NativeLaunch:
     def launch(self):
         assert self.desktop is not None, "Check the actual desktop before launching"
         runtime, wayland, bus = self.desktop
-        scratch = self.resources.enter_context(launch_scratch())
+        scratch = self.profile_root if self.profile_root is not None else self.resources.enter_context(launch_scratch())
         home = Path(scratch)
         self.activations = self.resources.enter_context(BrowserActivations(bus))
         self.native_input = NativeInput()
@@ -388,7 +390,8 @@ class NativeLaunch:
         self.trace = home / "exec.trace"
         output = self.resources.enter_context((home / "process.log").open("w"))
         self.process = subprocess.Popen(
-            ["/usr/bin/strace", "--kill-on-exit", "-f", "-e", "trace=execve",
+            ["/usr/bin/strace", "--kill-on-exit", "-f", "-e",
+             "trace=execve,connect,sendto" if self.trace_network else "trace=execve",
              "-o", str(self.trace), str(self.executable)],
             env=env, stdout=output, stderr=output, start_new_session=True,
         )
@@ -402,7 +405,7 @@ class NativeLaunch:
         self.activations.check(self.owned_pids)
         return current
 
-    def assert_room_entry(self):
+    def assert_room_entry(self, *, fresh_identity=True):
         deadline = time.monotonic() + self.timeout
         completed = False
         identity_entered = False
@@ -421,8 +424,9 @@ class NativeLaunch:
                 print(f"Owned control transition: {observed}", flush=True)
                 last_controls = observed
             if window and all(label in visible for label in self.ENTRY_CONTROLS):
-                assert identity_entered and done_clicked, \
-                    "Fresh native launch bypassed the real blank/escaped identity fixtures"
+                if fresh_identity:
+                    assert identity_entered and done_clicked, \
+                        "Fresh native launch bypassed the real blank/escaped identity fixtures"
                 completed = True
                 break
             if "Your name" in visible and "Done" in visible and not identity_entered:

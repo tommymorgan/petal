@@ -11,7 +11,15 @@ export function meetingActionErrorMessage(error: unknown, action: MeetingAction)
   const fallback = FALLBACK_BY_ACTION[action];
   const detail = errorMessage(error);
 
+  if (action === 'join' && detail.includes('PETAL_BACKEND_URL')) {
+    return 'Could not join the meeting. Configure PETAL_BACKEND_URL with the intended hosted backend URL and restart Petal.';
+  }
+
   if (!detail) return `${fallback} Check your connection and try again.`;
+
+  if (action === 'join' && /^backend token endpoint returned HTTP (401|403)(?:\s|$)/.test(detail)) {
+    return `${fallback} Check the room code or ask the host for access.`;
+  }
 
   if (/failed to fetch|network|dns|timeout|timed out|backend|token|server|unreachable/i.test(detail)) {
     return `${fallback} Petal could not reach the meeting server. Check your connection and try again.`;
@@ -35,5 +43,12 @@ export function meetingActionErrorMessage(error: unknown, action: MeetingAction)
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message.trim();
   if (typeof error === 'string') return error.trim();
+  if (
+    error !== null && typeof error === 'object' &&
+    'kind' in error && (error.kind === 'config' || error.kind === 'roomConnect') &&
+    'message' in error && typeof error.message === 'string'
+  ) {
+    return error.message.trim();
+  }
   return '';
 }
