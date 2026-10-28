@@ -237,3 +237,26 @@ The one-keyword change fixes the declaration mismatch without changing layout,
 ownership or runtime behavior. Verified by linking the Windows MSVC example
 and the Linux desktop binary, then running actual Windows WGC A/B publications
 through the self-hosted backend and LiveKit to the native Linux receiver.
+
+## Linux PulseAudio: address devices whose ADM GUID is empty
+
+The Linux PulseAudio ADM returned an empty GUID for every recording and playout
+device on the acceptance workstation. Passing those identifiers through the
+native settings UI collapsed all choices into system default. On Linux only,
+`audio_device_controller.cpp` now uses the ADM's native device name when that
+GUID is empty, and uses the same key to resolve the current native index.
+Selection fails closed for missing or ambiguous keys rather than silently
+switching to index zero. Windows, macOS and mobile identifier behavior remains
+unchanged. Native names are not hardware serial numbers: identical descriptions
+cannot safely identify a particular device, and renamed devices require
+reselection.
+
+Actual Wayland validation rejects stale saved selections, displays actionable
+errors, then retries through the normal device picker without creating another
+room or microphone publication. The selected physical input is verified from
+the owned PulseAudio client and the actual PipeWire upstream graph. An existing
+EasyEffects chain may override a stream's effective source while retaining its
+requested physical target; the check records that distinction and does not
+disable the user's processing. This is device/transport evidence, not audible
+conversation or acoustic echo-cancellation acceptance.
+

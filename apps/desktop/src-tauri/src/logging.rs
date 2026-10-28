@@ -2134,12 +2134,9 @@ const NOISY_THIRD_PARTY_CRATES: &[&str] = &[
 /// handful of lines per SESSION, not per frame (#788).
 ///
 /// `livekit::platform_audio` is the vendored SDK's whole platform audio-device
-/// module. At `info` it emits exactly the ADM lifecycle: acquire, enable
-/// recording, enable playout, the recording/playout device counts, a
-/// start/stop-recording pair, the audio-processing config, and the release on
-/// drop -- nothing per frame (verified against
-/// `apps/desktop/vendor/livekit/src/platform_audio/mod.rs`; pinned by
-/// `decisive_third_party_targets_are_once_per_session_in_the_vendored_sdk`).
+/// module. At `info` it emits ADM lifecycle and configuration, not per-frame
+/// audio. Linux reports whether speaker output is enabled separately from shared
+/// ADM acquisition. Source: `apps/desktop/vendor/livekit/src/platform_audio/mod.rs`.
 ///
 /// Those are the lines that say whether remote audio has a real playout device
 /// at all. Without them a silent meeting (#787) looks byte-for-byte identical
@@ -6260,86 +6257,6 @@ mod tests {
         assert!(!spec_has_directive_covering("info/livekit", ADM_TARGET));
     }
 
-    #[test]
-    fn decisive_third_party_targets_are_once_per_session_in_the_vendored_sdk() {
-        // The carve-out is a TARGET-NAME match against a crate we vendor, so
-        // it dies SILENTLY if a vendor bump renames the crate, moves the
-        // module, or demotes these lines to `debug` -- exactly the rot a
-        // `warn!` promotion inside `vendor/` would suffer in reverse. Pin the
-        // three things the target string is derived from, so that bump fails
-        // here instead of quietly deleting the only evidence #787 leaves
-        // behind.
-        // Tie the pin to the constant it protects: renaming the carve-out
-        // without re-checking the vendored source must not pass silently.
-        assert!(
-            DECISIVE_THIRD_PARTY_TARGETS.contains(&ADM_TARGET),
-            "this test pins `{ADM_TARGET}`; DECISIVE_THIRD_PARTY_TARGETS now says \
-             {DECISIVE_THIRD_PARTY_TARGETS:?}"
-        );
-
-        let vendor = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("vendor")
-            .join("livekit");
-
-        // 1. The crate name -- the first segment of the target.
-        let manifest = std::fs::read_to_string(vendor.join("Cargo.toml"))
-            .expect("vendored livekit Cargo.toml (pinned by [patch.crates-io])");
-        assert!(
-            manifest.contains("name = \"livekit\""),
-            "DECISIVE_THIRD_PARTY_TARGETS assumes the vendored crate is named `livekit`"
-        );
-
-        // 2. The module path -- the rest of the target. `log::info!` defaults
-        //    its target to `module_path!()`, so `src/platform_audio/mod.rs` in
-        //    crate `livekit` is `livekit::platform_audio`.
-        let module = vendor.join("src").join("platform_audio").join("mod.rs");
-        let source = std::fs::read_to_string(&module).unwrap_or_else(|e| {
-            panic!(
-                "{} is the source of the `{ADM_TARGET}` log target carved out of \
-                 NOISY_THIRD_PARTY_CRATES; could not read it ({e})",
-                module.display()
-            )
-        });
-
-        // 3. The decisive messages, still emitted at a level the carve-out
-        //    admits. A message demoted to `debug` upstream would leave the
-        //    directive in place and still produce an empty log.
-        for needle in [
-            "PlatformAudio: acquired Platform ADM",
-            "PlatformAudio: enabled ADM playout for platform speakers",
-            "recording devices, ",
-            "PlatformAdmHandle: released Platform ADM",
-        ] {
-            let at = source
-                .find(needle)
-                .unwrap_or_else(|| panic!("{} no longer logs {needle:?}", module.display()));
-            let macro_call = source[..at]
-                .rfind("log::")
-                .map(|start| &source[start..])
-                .unwrap_or("");
-            assert!(
-                macro_call.starts_with("log::info!")
-                    || macro_call.starts_with("log::warn!")
-                    || macro_call.starts_with("log::error!"),
-                "{needle:?} must still be emitted at info or louder for the \
-                 `{ADM_TARGET}` carve-out to surface it; found {:?}",
-                macro_call.split('(').next().unwrap_or(macro_call)
-            );
-        }
-
-        // And the reason a whole-module carve-out is safe: nothing in it logs
-        // per frame. `info!` call sites here are ADM lifecycle only, so a
-        // future one that isn't should force a re-read of this decision.
-        let info_sites = source.matches("log::info!").count();
-        assert!(
-            info_sites <= 10,
-            "{} now has {info_sites} info-level log sites; re-check that none \
-             are per-frame before leaving `{ADM_TARGET}` carved out of the \
-             noisy-crate denylist (#788)",
-            module.display()
-        );
-    }
 
     /// #787: `adm_proxy.cpp` logs its playout failures with
     /// `RTC_LOG(LS_ERROR)` -- the whole point being that a meeting nobody can

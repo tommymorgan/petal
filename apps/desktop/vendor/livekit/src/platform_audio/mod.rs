@@ -429,6 +429,9 @@ impl PlatformAudio {
     /// let audio = PlatformAudio::new()?;
     /// println!("Found {} microphones", audio.recording_devices());
     /// ```
+    /// On Linux, acquiring the shared ADM does not enable speaker output.
+    /// Validate the requested output first, then call `reassert_playout`.
+    /// This keeps a microphone-only handle from bypassing a rejected output.
     pub fn new() -> AudioResult<Self> {
         let mut handle_ref = PLATFORM_ADM_HANDLE.lock();
 
@@ -447,6 +450,10 @@ impl PlatformAudio {
         // Create new handle and acquire Platform ADM
         log::debug!("PlatformAudio: creating new handle");
         let runtime = LkRuntime::instance();
+        // A zero-to-one acquisition immediately switches native modes. Clear
+        // permission first: the runtime can retain a previously enabled flag.
+        #[cfg(target_os = "linux")]
+        runtime.set_adm_playout_enabled(false);
 
         // Acquire Platform ADM - this creates the platform-specific audio device module
         // on first call and increments the reference count on subsequent calls.
@@ -465,9 +472,14 @@ impl PlatformAudio {
         runtime.set_adm_recording_enabled(true);
         log::info!("PlatformAudio: enabled ADM recording for microphone capture");
 
-        // Enable ADM playout for platform speakers with AEC
+        // Linux's shared lifetime is separate from speaker permission: a
+        // microphone or enumeration handle must not enable an unselected output.
+        #[cfg(not(target_os = "linux"))]
         runtime.set_adm_playout_enabled(true);
-        log::info!("PlatformAudio: enabled ADM playout for platform speakers");
+        log::info!(
+            "PlatformAudio: ADM playout enabled: {}",
+            !cfg!(target_os = "linux")
+        );
 
         // Verify Platform ADM is working by checking device count
         let recording_count = runtime.recording_devices();
@@ -948,6 +960,12 @@ impl PlatformAudio {
         self.handle.runtime.set_adm_playout_enabled(false);
         self.handle.runtime.set_adm_playout_enabled(true);
         log::info!("PlatformAudio: re-asserted ADM playout mode (#787)");
+    }
+
+    /// Disable speaker output without releasing a shared microphone ADM handle.
+    /// A validated speaker selection can resume it via `reassert_playout`.
+    pub fn disable_playout(&self) {
+        self.handle.runtime.set_adm_playout_enabled(false);
     }
 
     pub fn is_recording_initialized(&self) -> bool {

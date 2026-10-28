@@ -17,6 +17,7 @@
 #include "livekit/audio_device_controller.h"
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace livekit_ffi {
@@ -51,6 +52,11 @@ rust::String AudioDeviceController::playout_device_guid(uint16_t index) const {
   char name[webrtc::kAdmMaxDeviceNameSize] = {0};
   char guid[webrtc::kAdmMaxGuidSize] = {0};
   adm_proxy_->PlayoutDeviceName(index, name, guid);
+#if defined(__linux__) && !defined(__ANDROID__)
+  // PulseAudio's ADM leaves the GUID empty. Preserve its native device name
+  // as the selection key; selection below rejects ambiguous names.
+  if (guid[0] == '\0') return rust::String(name);
+#endif
   return rust::String(guid);
 }
 
@@ -58,6 +64,9 @@ rust::String AudioDeviceController::recording_device_guid(uint16_t index) const 
   char name[webrtc::kAdmMaxDeviceNameSize] = {0};
   char guid[webrtc::kAdmMaxGuidSize] = {0};
   adm_proxy_->RecordingDeviceName(index, name, guid);
+#if defined(__linux__) && !defined(__ANDROID__)
+  if (guid[0] == '\0') return rust::String(name);
+#endif
   return rust::String(guid);
 }
 
@@ -71,18 +80,33 @@ bool AudioDeviceController::set_recording_device(uint16_t index) const {
 
 bool AudioDeviceController::set_playout_device_by_guid(rust::String guid) const {
   int16_t count = adm_proxy_->PlayoutDevices();
+  const std::string_view requested(guid.data(), guid.size());
+#if defined(__linux__) && !defined(__ANDROID__)
+  if (requested.empty()) return false;
+  int16_t matched = -1;
+#endif
 
   // Try to find a device matching the GUID
   for (int16_t i = 0; i < count; i++) {
     char name[webrtc::kAdmMaxDeviceNameSize] = {0};
     char device_guid[webrtc::kAdmMaxGuidSize] = {0};
     if (adm_proxy_->PlayoutDeviceName(i, name, device_guid) == 0) {
-      if (std::string(guid.c_str()) == std::string(device_guid)) {
+#if defined(__linux__) && !defined(__ANDROID__)
+      if (requested == (device_guid[0] == '\0' ? name : device_guid)) {
+        if (matched != -1) return false;
+        matched = i;
+      }
+#else
+      if (requested == device_guid) {
         return adm_proxy_->SetPlayoutDevice(i) == 0;
       }
+#endif
     }
   }
 
+#if defined(__linux__) && !defined(__ANDROID__)
+  return matched != -1 && adm_proxy_->SetPlayoutDevice(matched) == 0;
+#else
   // No match found - fall back to default device (index 0).
   // This handles mobile platforms (iOS/Android) where:
   // - GUIDs may be empty or not meaningful
@@ -91,22 +115,38 @@ bool AudioDeviceController::set_playout_device_by_guid(rust::String guid) const 
     return adm_proxy_->SetPlayoutDevice(0) == 0;
   }
   return false;
+#endif
 }
 
 bool AudioDeviceController::set_recording_device_by_guid(rust::String guid) const {
   int16_t count = adm_proxy_->RecordingDevices();
+  const std::string_view requested(guid.data(), guid.size());
+#if defined(__linux__) && !defined(__ANDROID__)
+  if (requested.empty()) return false;
+  int16_t matched = -1;
+#endif
 
   // Try to find a device matching the GUID
   for (int16_t i = 0; i < count; i++) {
     char name[webrtc::kAdmMaxDeviceNameSize] = {0};
     char device_guid[webrtc::kAdmMaxGuidSize] = {0};
     if (adm_proxy_->RecordingDeviceName(i, name, device_guid) == 0) {
-      if (std::string(guid.c_str()) == std::string(device_guid)) {
+#if defined(__linux__) && !defined(__ANDROID__)
+      if (requested == (device_guid[0] == '\0' ? name : device_guid)) {
+        if (matched != -1) return false;
+        matched = i;
+      }
+#else
+      if (requested == device_guid) {
         return adm_proxy_->SetRecordingDevice(i) == 0;
       }
+#endif
     }
   }
 
+#if defined(__linux__) && !defined(__ANDROID__)
+  return matched != -1 && adm_proxy_->SetRecordingDevice(matched) == 0;
+#else
   // No match found - fall back to default device (index 0).
   // This handles mobile platforms (iOS/Android) where:
   // - GUIDs may be empty or not meaningful
@@ -115,6 +155,7 @@ bool AudioDeviceController::set_recording_device_by_guid(rust::String guid) cons
     return adm_proxy_->SetRecordingDevice(0) == 0;
   }
   return false;
+#endif
 }
 
 bool AudioDeviceController::stop_recording() const {

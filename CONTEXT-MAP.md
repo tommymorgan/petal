@@ -25,3 +25,12 @@ Tommy selected self-hosted acceptance on 2026-10-27, replacing the upstream-host
 - [Build plan](plans/2026-10-14-native-linux-receive.md)
 
 Current implemented architecture and validation limits remain documented in [ARCHITECTURE.md](docs/ARCHITECTURE.md) and [VALIDATION.md](docs/VALIDATION.md). These planning documents do not claim Linux support has shipped.
+
+## Planned native publishing expansion
+
+The separately scoped expansion adds Linux outgoing picture shares, camera publication and bidirectional remote assistance. Linux application-window shares remain view-only for input; a separate explicit desktop-wide grant is required for Linux desktop control. These are planned relationships, not claims about the current implementation.
+
+- [Expansion requirements](docs/requirements/native-linux-publishing-control.md)
+- [Portal ownership and desktop-control decision](docs/adrs/0003-linux-native-publishing-and-desktop-control.md)
+- [Technical Spec](docs/technical-specs/native-linux-publishing-control.md)
+- [Complete expansion plan](plans/2026-10-28-native-linux-publishing-control.md)

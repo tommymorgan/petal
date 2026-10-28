@@ -12,7 +12,11 @@ use crate::platform::cg::WindowFrame;
 use crate::remote_control_core::RemoteControlPolicy;
 pub(crate) use crate::room_generation::RoomGeneration;
 use crate::sync_ext::MutexExt;
+use crate::transport::audio::{MicTrack, SpeakerPlayout};
 use crate::transport::publisher::RoomConnection;
+
+const AUDIO_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const AUDIO_CLEANUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 use tauri::Manager;
 
@@ -22,6 +26,8 @@ struct JoinedRoom {
     identity: String,
     presence: Arc<crate::presence::PresenceState>,
     receiver: crate::linux_compositor::LinuxReceiveFeed,
+    microphone: Option<Arc<MicTrack>>,
+    playout: Option<Arc<SpeakerPlayout>>,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SharedWindowScreenStatus {
@@ -31,15 +37,32 @@ pub(crate) enum SharedWindowScreenStatus {
     Closed,
 }
 
-#[derive(Default)]
 pub struct SessionState {
     joined: Mutex<Option<JoinedRoom>>,
     transition_lock: tokio::sync::Mutex<()>,
     mic_control: tokio::sync::Mutex<()>,
+    audio_control: Arc<tokio::sync::Mutex<()>>,
     camera_control: tokio::sync::Mutex<()>,
     generation: Arc<AtomicU64>,
+    desired_mic_muted: AtomicBool,
     camera_intent: AtomicBool,
     camera_healing: AtomicBool,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self {
+            joined: Mutex::new(None),
+            transition_lock: tokio::sync::Mutex::new(()),
+            mic_control: tokio::sync::Mutex::new(()),
+            audio_control: Arc::new(tokio::sync::Mutex::new(())),
+            camera_control: tokio::sync::Mutex::new(()),
+            generation: Arc::new(AtomicU64::new(0)),
+            desired_mic_muted: AtomicBool::new(true),
+            camera_intent: AtomicBool::new(false),
+            camera_healing: AtomicBool::new(false),
+        }
+    }
 }
 
 impl SessionState {
@@ -77,8 +100,12 @@ impl SessionState {
             .map(|joined| joined.record.clone())
     }
 
-    pub(crate) fn remote_window_summaries(&self) -> Vec<crate::linux_compositor::RemoteWindowSummary> {
-        self.joined.lock_unpoisoned().as_ref()
+    pub(crate) fn remote_window_summaries(
+        &self,
+    ) -> Vec<crate::linux_compositor::RemoteWindowSummary> {
+        self.joined
+            .lock_unpoisoned()
+            .as_ref()
             .map(|joined| joined.receiver.summaries())
             .unwrap_or_default()
     }
@@ -124,11 +151,22 @@ impl SessionState {
     }
 
     pub(crate) fn mic_muted(&self) -> bool {
-        true
+        self.desired_mic_muted.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn set_mic_muted(&self, _muted: bool) -> Result<bool, String> {
-        Err("Linux microphone session is not available".to_string())
+    pub(crate) fn set_mic_muted(&self, muted: bool) -> Result<bool, String> {
+        let joined = self.joined.lock_unpoisoned();
+        let microphone = joined
+            .as_ref()
+            .and_then(|joined| joined.microphone.as_ref())
+            .ok_or_else(|| "microphone unavailable".to_string())?;
+        microphone.set_muted(muted);
+        let reached = microphone.is_muted();
+        if reached != muted {
+            return Err("microphone did not reach requested mute state".to_string());
+        }
+        self.desired_mic_muted.store(reached, Ordering::SeqCst);
+        Ok(reached)
     }
 
     pub(crate) fn set_ai_chat_ducking(&self, _duck: bool) {
@@ -141,14 +179,33 @@ impl SessionState {
         playout_id: Option<String>,
         preferences: &crate::transport::audio::AudioDevicePreferences,
     ) -> crate::transport::audio::AppliedAudioDevices {
-        // Persist device intent before any room exists, as on the native peers.
+        let audio_control = Arc::new(self.audio_control.clone().lock_owned().await);
+        let recording_requested = recording_id.is_some();
+        let playout_requested = playout_id.is_some();
         if let Some(id) = recording_id {
             preferences.set_recording_device(id);
         }
         if let Some(id) = playout_id {
             preferences.set_playout_device(id);
         }
-        crate::transport::audio::AppliedAudioDevices::default()
+        let connection = self
+            .joined
+            .lock_unpoisoned()
+            .as_ref()
+            .map(|joined| joined.connection.clone());
+        let Some(connection) = connection else {
+            return crate::transport::audio::AppliedAudioDevices::default();
+        };
+        apply_room_audio(
+            self,
+            connection,
+            self.current_room_generation(),
+            (preferences.recording_device(), preferences.playout_device()),
+            recording_requested,
+            playout_requested,
+            audio_control,
+        )
+        .await
     }
 
     pub(crate) async fn lock_camera_control(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -235,17 +292,23 @@ pub(crate) async fn join_room_command(
     let record = connected.room_record;
     let connection = connected.room_connection;
     let presence = Arc::new(crate::presence::PresenceState::default());
-    // The same original connect-time queue serves native media and disconnect.
+    // Both consumers use the original connect-time fanout.
     let events = connection.take_compositor_events();
-    connection.discard_resilience_events();
+    let resilience_events = connection
+        .take_resilience_events()
+        .expect("RoomConnection resilience event receiver already taken");
     let receiver = match crate::linux_compositor::LinuxReceiveFeed::new(
-        &app, generation.clone(), identity.clone(),
+        &app,
+        generation.clone(),
+        identity.clone(),
     ) {
         Ok(receiver) => receiver,
         Err(error) => {
             state.invalidate_room_generation();
             connection.room().close().await.ok();
-            return Err(crate::meeting_core::RoomJoinError::RoomConnect(error.to_string()));
+            return Err(crate::meeting_core::RoomJoinError::RoomConnect(
+                error.to_string(),
+            ));
         }
     };
     {
@@ -255,8 +318,11 @@ pub(crate) async fn join_room_command(
             identity: identity.clone(),
             presence: presence.clone(),
             receiver: receiver.clone(),
+            microphone: None,
+            playout: None,
         });
     }
+    crate::resilience::start_for_room(&app, resilience_events, generation.clone());
     crate::presence::start_for_room(
         &app,
         connection.room(),
@@ -267,8 +333,6 @@ pub(crate) async fn join_room_command(
         generation.clone(),
     );
     if let Some(mut events) = events {
-        let app = app.clone();
-        let connection = connection.clone();
         let generation = generation.clone();
         tauri::async_runtime::spawn(async move {
             loop {
@@ -282,23 +346,54 @@ pub(crate) async fn join_room_command(
                     break;
                 }
                 if matches!(event, livekit::RoomEvent::Disconnected { .. }) {
-                    if let Some(state) = app.try_state::<SessionState>() {
-                        let _transition = state.transition_lock.lock().await;
-                        let owns_room = state
-                            .joined
-                            .lock_unpoisoned()
-                            .as_ref()
-                            .map(|joined| Arc::ptr_eq(&joined.connection, &connection))
-                            .unwrap_or(false);
-                        if generation.is_current() && owns_room {
-                            leave_room_inner(&app, &state, false).await;
-                        }
-                    }
+                    // The shared resilience watcher owns terminal room cleanup.
+                    // This branch only stops the native presentation consumer.
                     break;
                 }
                 receiver.handle_event(event);
             }
             receiver.stop();
+        });
+    }
+    {
+        let app = app.clone();
+        let connection = connection.clone();
+        let generation = generation.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<SessionState>();
+            let audio_control = Arc::new(state.audio_control.clone().lock_owned().await);
+            let preferences = app.state::<crate::transport::audio::AudioDevicePreferences>();
+            let recording_device = preferences.recording_device();
+            let playout_device = preferences.playout_device();
+            let result = apply_room_audio(
+                &state,
+                connection,
+                generation.clone(),
+                (recording_device, playout_device),
+                true,
+                true,
+                audio_control,
+            )
+            .await;
+            if generation.is_current() {
+                let event = match (result.mic_error, result.speaker_error) {
+                    (Some(mic), Some(speaker)) => {
+                        Some(crate::resilience_event::ResilienceEvent::MicDeviceFailed {
+                            message: format!("{mic} {speaker}"),
+                        })
+                    }
+                    (Some(message), None) => {
+                        Some(crate::resilience_event::ResilienceEvent::MicDeviceFailed { message })
+                    }
+                    (None, Some(message)) => Some(
+                        crate::resilience_event::ResilienceEvent::SpeakerDeviceFailed { message },
+                    ),
+                    (None, None) => None,
+                };
+                if let Some(event) = event {
+                    let _ = tauri::Emitter::emit(&app, "resilience-event", event);
+                }
+            }
         });
     }
     match connection
@@ -347,9 +442,215 @@ pub async fn leave_room_command(
     Ok(())
 }
 
+/// Initialize missing directions or switch their retained ADM handles in place.
+/// The caller serializes startup/retry; Leave invalidates ownership immediately.
+async fn apply_room_audio(
+    state: &SessionState,
+    connection: Arc<RoomConnection>,
+    generation: RoomGeneration,
+    devices: (Option<String>, Option<String>),
+    recording_requested: bool,
+    playout_requested: bool,
+    audio_control: Arc<tokio::sync::OwnedMutexGuard<()>>,
+) -> crate::transport::audio::AppliedAudioDevices {
+    let (recording_device, playout_device) = devices;
+    let mut result = crate::transport::audio::AppliedAudioDevices {
+        in_room: true,
+        ..Default::default()
+    };
+    if crate::transport::audio::audio_disabled_by_env() {
+        result.mic_error =
+            recording_requested.then(|| "Microphone disabled by PETAL_DISABLE_AUDIO".into());
+        result.speaker_error =
+            playout_requested.then(|| "Speakers disabled by PETAL_DISABLE_AUDIO".into());
+        return result;
+    }
+    let (microphone, playout) = {
+        let joined = state.joined.lock_unpoisoned();
+        let Some(joined) = joined.as_ref().filter(|joined| {
+            generation.is_current() && Arc::ptr_eq(&joined.connection, &connection)
+        }) else {
+            return crate::transport::audio::AppliedAudioDevices::default();
+        };
+        (joined.microphone.clone(), joined.playout.clone())
+    };
+    if playout_requested {
+        let native_control = audio_control.clone();
+        let native_generation = generation.clone();
+        let work = tokio::task::spawn_blocking(move || -> Result<Arc<SpeakerPlayout>, String> {
+            // A timeout cannot cancel native work: keep the permit until the
+            // actual operation exits, including after the async caller leaves.
+            let _control = native_control;
+            if !native_generation.is_current() {
+                return Err("room changed before speaker preparation".into());
+            }
+            if let Some(playout) = playout {
+                match playout_device {
+                    Some(id) => playout.set_playout_device(&id)?,
+                    None => playout.use_default_playout_device()?,
+                };
+                Ok(playout)
+            } else {
+                crate::transport::audio::enable_managed_playout(playout_device)
+                    .map(Arc::new)
+                    .map_err(|error| error.to_string())
+            }
+        });
+        let prepared = match tokio::time::timeout(AUDIO_START_TIMEOUT, work).await {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_) => {
+                result.speaker_error = Some(
+                    "Speaker initialization is still finishing. Retry after it completes.".into(),
+                );
+                result.mic_error = recording_requested.then(|| {
+                    "Audio device initialization is still finishing. Retry after it completes."
+                        .into()
+                });
+                return result;
+            }
+        };
+        match prepared {
+            Ok(playout) => {
+                let mut joined = state.joined.lock_unpoisoned();
+                if let Some(joined) = joined.as_mut().filter(|joined| {
+                    generation.is_current() && Arc::ptr_eq(&joined.connection, &connection)
+                }) {
+                    joined.playout = Some(playout);
+                    result.speaker_applied = true;
+                }
+            }
+            Err(error) => {
+                result.speaker_error = Some(format!(
+                    "Speaker unavailable: {error}. Connect or select an output device and retry."
+                ))
+            }
+        }
+    }
+    if !generation.is_current() {
+        return crate::transport::audio::AppliedAudioDevices::default();
+    }
+    if recording_requested {
+        if let Some(microphone) = microphone {
+            let native_control = audio_control.clone();
+            let native_generation = generation.clone();
+            let work = tokio::task::spawn_blocking(move || {
+                let _control = native_control;
+                if !native_generation.is_current() {
+                    return Err("room changed before microphone switch".into());
+                }
+                match recording_device {
+                    Some(id) => microphone.set_recording_device(&id),
+                    None => microphone.use_default_recording_device(),
+                }
+            });
+            match tokio::time::timeout(AUDIO_START_TIMEOUT, work).await {
+                Ok(Ok(Ok(_))) => result.mic_applied = generation.is_current(),
+                Ok(Ok(Err(error))) => result.mic_error = Some(error),
+                Ok(Err(error)) => result.mic_error = Some(error.to_string()),
+                Err(_) => result.mic_error = Some("microphone switch timed out".into()),
+            }
+        } else {
+            let native_control = audio_control.clone();
+            let native_generation = generation.clone();
+            let work = tokio::task::spawn_blocking(move || {
+                let _control = native_control;
+                if !native_generation.is_current() {
+                    return Err(crate::transport::audio::AudioError::PlatformAudio(
+                        livekit::AudioError::OperationFailed(
+                            "room changed before microphone preparation".into(),
+                        ),
+                    ));
+                }
+                crate::transport::audio::prepare_microphone(recording_device, true)
+            });
+            let prepared = match tokio::time::timeout(AUDIO_START_TIMEOUT, work).await {
+                Ok(Ok(Ok(prepared))) => Some(prepared),
+                Ok(Ok(Err(error))) => {
+                    result.mic_error = Some(error.to_string());
+                    None
+                }
+                Ok(Err(error)) => {
+                    result.mic_error = Some(error.to_string());
+                    None
+                }
+                Err(_) => {
+                    result.mic_error = Some("microphone preparation timed out".into());
+                    None
+                }
+            };
+            if let Some(prepared) = prepared {
+                if !generation.is_current() {
+                    return crate::transport::audio::AppliedAudioDevices::default();
+                }
+                let room = connection.room();
+                let published = tokio::time::timeout(
+                    AUDIO_START_TIMEOUT,
+                    crate::transport::audio::publish_prepared_microphone(&room, &prepared),
+                )
+                .await;
+                let mut prepared = Some(prepared);
+                match published {
+                    Ok(Ok(())) => {
+                        let mut joined = state.joined.lock_unpoisoned();
+                        if let Some(joined) = joined.as_mut().filter(|joined| {
+                            generation.is_current() && Arc::ptr_eq(&joined.connection, &connection)
+                        }) {
+                            let microphone = Arc::new(
+                                prepared
+                                    .take()
+                                    .expect("retained microphone")
+                                    .into_mic_track(),
+                            );
+                            microphone.set_muted(state.mic_muted());
+                            joined.microphone = Some(microphone);
+                            result.mic_applied = true;
+                            log::info!(
+                                "linux session: native microphone attached to original room"
+                            );
+                        }
+                    }
+                    Ok(Err(error)) => result.mic_error = Some(error.to_string()),
+                    Err(_) => result.mic_error = Some("microphone publish timed out".into()),
+                }
+                if let Some(prepared) = prepared {
+                    prepared.mute_for_cleanup();
+                    let _ = tokio::time::timeout(
+                        AUDIO_CLEANUP_TIMEOUT,
+                        crate::transport::audio::unpublish_prepared_microphone(&room, &prepared),
+                    )
+                    .await;
+                }
+            }
+        }
+        if let Some(error) = result.mic_error.as_mut() {
+            *error = format!(
+                "Microphone unavailable: {error}. Connect or select an input device and retry."
+            );
+        }
+    }
+    if generation.is_current() {
+        result
+    } else {
+        crate::transport::audio::AppliedAudioDevices::default()
+    }
+}
+
 pub async fn leave_room(app: &tauri::AppHandle, state: &SessionState) {
     let _transition = state.transition_lock.lock().await;
     leave_room_inner(app, state, true).await;
+}
+
+pub(crate) async fn cleanup_for_forced_disconnect(
+    app: &tauri::AppHandle,
+    state: &SessionState,
+    generation: &crate::room_generation::RoomGeneration,
+) {
+    let _transition = state.transition_lock.lock().await;
+    // A newer join may have won the transition lock while this event waited.
+    if generation.is_current() {
+        leave_room_inner(app, state, false).await;
+    }
 }
 
 async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: bool) {
@@ -359,6 +660,9 @@ async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: b
     let joined = state.joined.lock_unpoisoned().take();
     if let Some(joined) = joined {
         joined.receiver.stop();
+        if let Some(microphone) = joined.microphone.as_ref() {
+            microphone.set_muted(true);
+        }
         if close {
             if let Err(error) = joined.connection.room().close().await {
                 log::warn!("linux session: room close failed: {error}");

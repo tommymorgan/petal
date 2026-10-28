@@ -247,17 +247,34 @@ restyling unrelated baseline files.
 
 ### Native Linux receive-only capability boundary
 
-Use the same actual Wayland/session environment as the launch check, with
-GNOME awake and unlocked. On this WebKitGTK runtime, idle screen blanking
-stalled animation-frame/view-transition callbacks: the real native route's
-URL changed while the prior room-entry DOM remained mounted. Waking the
-already-unlocked session restored actual meeting controls; no routing or
-renderer workaround was needed. `ScreenSaver.GetActive` alone does not
-distinguish blanking from an authentication lock. Do not bypass authentication
-or change the user's lock policy to run a gate.
+Use the same actual Wayland/session environment as the launch check. WebKitGTK
+can stop animation-frame/view-transition callbacks while the desktop is blanked;
+the native route's URL previously changed while the old room-entry DOM remained.
+The layout now allows snapshot preparation at most 250 ms before skipping the
+visual transition and releasing navigation. Normal transitions remain enabled,
+and the application does not reload the document or change desktop power policy.
 
-Keep each owned native gate awake with the standard, process-lifetime idle
-inhibitor below. It does not permanently change desktop settings:
+`/usr/bin/python3 apps/desktop/scripts/check-linux-route-transition.py
+apps/desktop/src-tauri/target/debug/desktop` holds a genuine WebKit transition's
+update callback and invokes the existing native `open_main_route` command. The
+original executable failed with the meeting URL and no mounted meeting controls;
+the repaired executable mounted the actual controls before releasing the held
+callback. Normal Leave then returned to room entry in the same document. This
+is native navigation evidence, not hosted membership or audio acceptance.
+
+Final repair checks on 2026-10-28 passed the native transition regression,
+the complete native capability outline, frontend/native build, and Svelte
+checking (613 files, zero errors, one existing RoomRow accessibility warning).
+The frontend integration suite passed 980 application tests plus 96 harness
+tests, with one Windows-media skip; panel-close passed. The capability driver
+no longer waits for obsolete failed-join wording before inspecting real controls.
+One bounded independent source review and its scoped driver recheck found no
+demonstrated defects. These checks do not change the speech/AEC scenario markers.
+
+Keep visual capability gates awake and unlocked with the process-lifetime idle
+inhibitor below. A paused renderer still cannot display new frames until rendering
+resumes. `ScreenSaver.GetActive` alone does not distinguish blanking from an
+authentication lock; never bypass authentication or change the user's lock policy.
 
 ```sh
 gnome-session-inhibit --inhibit=idle --app-id=com.petal.app \
@@ -608,6 +625,317 @@ The production SID guard already satisfied this contract; the acceptance
 fixture and witness establish it rather than claiming a newly repaired race.
 This does not establish acoustic AEC, audio, reconnect or later lifecycle
 acceptance.
+
+### Native room audio preparation — Task 3.1 remains unaccepted
+
+On 2026-10-28, the Linux session began retaining the existing `MicTrack` and
+`SpeakerPlayout` resources on its original `RoomConnection`. Preparation runs
+on the blocking pool with the existing native-peer timeout convention.
+Microphone preparation is muted; generation and connection ownership are
+checked before attachment. Leave mutes the retained track before closing the
+room and releasing its media. The Linux startup handler now registers the
+existing microphone commands rather than rejecting those available controls.
+
+A bounded actual-Wayland run against the real owned backend and non-development
+LiveKit initialized the native ADM, enumerated the physical Volt input and
+Leviathan output, and published the microphone pre-muted on the joined room.
+The read-only native mute state stayed true, the existing explicit mute command
+reached the retained track, and normal visible Leave returned to room entry
+with no retained membership. No synthetic media, second participant, new
+receiver API or speech recording was used. The initial mute-command invocation
+had rejected because Linux did not register that existing command; the same
+runtime path passed after registration.
+
+The first device-selection attempt did **not** select those named devices:
+every Linux ADM device identifier was empty, so the existing preference
+normalization treated the selection as system default. The passing
+initialization smoke therefore proves neither explicit speaker selection nor
+audibility. The returned default input name was `Volt 276 Analog Stereo`.
+Keep the empty-identifier defect visible for the next ordered audio-state
+task; do not relabel this narrower smoke as its recovery evidence.
+
+The Linux desktop build passed; serial Rust library tests passed 1,332 with
+two ignored; Clippy completed with existing warnings and changed-file rustfmt
+completed. Task 3.1 remains TODO, with no completed living feature: a real
+two-person speech check while the released Windows client's share updates is
+still required. The existing Windows video-test VM has audio input and output
+disabled; this work did not change that configuration. Speaker audibility,
+microphone speech reception, acoustic AEC and later lifecycle scenarios remain
+unverified.
+
+### Native device identity and retry — bounded Task 3.2 evidence
+
+The 2026-10-28 native diagnostic `scripts/check-linux-audio-devices.py` exercises
+the existing room form, device menu and microphone controls against the owned
+TLS backend and non-development LiveKit. It first saves unavailable device keys
+through the normal device command. Joining preserves the room but shows
+actionable microphone and speaker errors; it must not publish a substitute
+microphone from another device. Selecting the available physical devices in the
+visible picker then initializes the missing directions without reconnecting or
+duplicating microphone publication.
+
+The passing run keeps the microphone muted throughout, reads bounded OS
+stream/graph metadata, and uses visible normal Leave. It does not enable speech
+or read, record or save audio samples. The actual owned
+PulseAudio stream requested the physical Volt input while the user's existing
+EasyEffects configuration routed it through `easyeffects_source`; the actual
+PipeWire upstream graph independently confirmed that physical input in the
+processing chain. The diagnostic records requested target, effective source and
+verified upstream path separately. It neither disables processing nor changes
+global device defaults. Speaker initialization is not a claim of audible output.
+
+This runtime check exposed and corrected the audio menu's unconditional camera
+enumeration: Linux correctly rejects camera publication, but that rejection
+previously prevented the unrelated audio lists from rendering. Camera and audio
+menus now enumerate only their own direction. Returned live device errors also
+remain visible in the compact device picker.
+
+Linux keeps shared-ADM lifetime separate from speaker enablement: acquiring a
+microphone or enumeration handle cannot enable an output rejected by the speaker
+selection. Native device work retains its serialization permit until the actual
+blocking operation exits, even after the async deadline; queued stale-generation
+work is rejected before entering native switching. Android is excluded from the
+desktop-Linux native-name identifier branches.
+
+The bounded stale-selection recovery check passed with one room, one microphone
+publication, continuous mute and normal Leave. It does not establish total physical
+device absence or any planned speech/audibility assertion. Task 3.2's two complete
+living scenarios therefore remain TODO. Task 3.1 and the five-minute acoustic
+conversation remain TODO as well; Tommy explicitly authorized continuing
+independent machine-verifiable work without a listening partner.
+
+A later 2026-10-28 isolated-room microphone smoke reached the visible native
+mute/unmute controls and independently queried the actual owned SFU. The room
+had only the Linux participant and one audio publication: initially muted,
+then unmuted, then muted again. Native capture count was one after unmute and
+zero across six post-remute samples. An initial diagnostic incorrectly required
+exactly one capture after remute; recording the actual lifecycle distinguished
+normal capture release from a duplicate. Normal Leave cleared both real SFU
+membership and all owned native audio streams.
+
+Before console handoff, the exact Windows VM process's host capture/playback
+clients were correlated to the existing EasyEffects source/sink, not identified
+solely by a generic VirtualBox stream name. System defaults were unchanged.
+Windows was initially at sign-in. Tommy subsequently signed in, and the console
+was returned from his desktop by save/resume without a Windows reboot. Optional
+post-sign-in setup was deferred without enrolling services. During the resumed
+check, the guest stopped responding: VirtualBox reported a flatlined Guest
+Additions heartbeat, the display and input stopped advancing, and a subsequent
+non-destructive save-state request timed out after 90 seconds. The VM still
+reported `running`. Its log opened the default ALSA output shortly before the
+heartbeat failure, but this ordering does not establish the cause.
+
+Tommy then authorized a forced restart. The frozen VM required a forced process
+stop; another ALSA-backed boot reached a black screen and did not respond to
+guest-managed reboot or poweroff requests. Changing only this test VM's host
+audio backend to PulseAudio produced a responsive Windows sign-in surface with
+both audio directions enabled. System audio defaults and 3D settings were not
+changed. This establishes a working recovery configuration, not a proven root
+cause for the ALSA failure.
+
+Tommy confirmed that the existing file-backed credential worked manually. The
+earlier entry code removed its trailing line ending and bypassed the shell.
+Known non-secret letter/digit probes visibly preserved both exclamation marks.
+A submission with freshly established focus, released modifiers, paced input
+and a settling delay subsequently reached Windows Welcome and the desktop
+using that same file. No real credential was revealed or recorded; the exact
+cause of the earlier input failure remains unproven.
+
+The resumed check joined the actual native Linux application and released Windows
+client to the same owned room. Each normal unmute/remute control changed its real
+SFU publication while the other client stayed muted. Linux also observed the
+Windows microphone-state event and an uncorked owned playout stream on the selected
+physical speaker. Windows' existing production watcher reported 1,000 stream
+frames, zero audible frames and peak 21 below its floor of 64; that logged window
+was marked muted. It does not prove audible delivery during the unmuted interval.
+
+Normal Linux Leave released membership and every owned capture/playback stream.
+The attempted Windows Leave click did not remove its membership; cleanup instead
+deleted only the owned SFU room after confirming that no unknown peers were in it.
+The room was verified absent. The Windows VM and persistent console stayed running.
+No diagnostic recording or synthetic media was used. Audible speech, peer-observed
+silence and acoustic echo cancellation remain unverified; no scenario was promoted
+on this bounded evidence.
+
+### Disconnected sharer retirement — Task 4.1
+
+The complete `Retire a disconnected sharer presentation` scenario passed on
+2026-10-28 with the released Windows native client sharing a real Notepad counter.
+The native Linux witness observed three increasing counter values, then the
+original room's actual participant-disconnected event after normal Windows Leave.
+The peer's tile, share summary and independent GTK window stayed absent for three
+seconds while Linux retained its original membership and main window. Normal
+Linux Leave returned to room entry. The microphone stayed muted throughout;
+this scenario makes no speech or audibility claim.
+
+From the repository root, with the actual Wayland/session environment and the
+released Windows peer already sharing its non-sensitive changing editor:
+
+```sh
+python3 apps/desktop/scripts/check-linux-sharer-disconnect.py \
+  apps/desktop/src-tauri/target/debug/desktop \
+  --backend-url "$PETAL_BACKEND_URL" \
+  --room-code "$ROOM_CODE" \
+  --expected-peer-name 'Petal Windows Test' \
+  --evidence-dir "$PRIVATE_EVIDENCE_DIR" \
+  --feature apps/desktop/features/linux-room-lifecycle.feature
+```
+
+The private evidence directory must not already exist. At
+`WINDOWS_SHARER_LEAVE_REQUIRED`, use the Windows client's normal Leave control.
+The witness requires the real departure event, not merely a stopped counter,
+and closes its window-only pixel stream before destruction. It records the
+retirement and normal Leave result without retaining room or participant IDs.
+Task 4.1's separate stop/restart-with-two-way-audio scenario remains TODO.
+
+The same complete witness rejects an isolated native build that ignores share
+unpublication and participant-disconnect retirement: it observes the actual
+departure but cannot establish remote-window removal. Normal Linux Leave still
+cleans up that mutant. The candidate's complete positive run and a bounded basic
+review both pass.
+
+### Share stop/restart — bounded Task 4.1 evidence
+
+The real released Windows peer stopped and restarted the same owned Notepad
+share on 2026-10-28. Linux observed the old publication's unpublication and three
+seconds without its summary or GTK window. The original room, participant
+identities and main window remained. Restart produced a distinct publication
+SID and one remote window showing `New share content` with increasing real
+editor counters. There was one room connection and one continuously muted
+microphone publication; normal Leave returned to room entry.
+
+```sh
+python3 apps/desktop/scripts/check-linux-share-restart.py \
+  apps/desktop/src-tauri/target/debug/desktop \
+  --backend-url "$PETAL_BACKEND_URL" \
+  --room-code "$ROOM_CODE" \
+  --expected-peer-name 'Petal Windows Test' \
+  --evidence-dir "$PRIVATE_EVIDENCE_DIR"
+```
+
+Run the real editor helper with `-RestartPhaseFile` pointing to a fresh guest
+file; absent means `initial`. At `WINDOWS_SHARE_STOP_REQUIRED`, stop the actual
+owned source through the Windows picker's source card, then send
+`WINDOWS_SHARE_STOPPED` and newline to the witness. The meeting's share button
+controls picker visibility; opening it is not proof that capture stopped.
+At `WINDOWS_SHARE_RESTART_REQUIRED`, write `restarted` to the editor phase file,
+normally share that same editor again, then send `WINDOWS_SHARE_RESTARTED` and
+newline. The witness requires actual old unpublication, a distinct new SID and
+advancing new-content pixels. `share-restart.json` records the bounded result.
+
+This diagnostic has no living-feature binding and does not establish continuing
+audible two-way speech. The complete stop/restart scenario remains TODO.
+
+
+### Normal leave/rejoin — bounded Task 4.2 evidence
+
+A private runtime diagnostic passed two normal join/Leave cycles in the same
+native Linux process on 2026-10-28. The released Windows peer kept sharing its
+changing Notepad window throughout. Linux displayed three increasing counter
+values on each join and retained the same main window and participant identity.
+Host-only SFU administration confirmed exactly one muted microphone publication
+per join and no Linux membership or publication after each Leave. OS metadata
+showed one owned capture and playback stream while joined, then neither after
+Leave; remote GTK windows also disappeared. No server credentials entered the
+native client, and no audio samples were recorded.
+
+This checks resource retirement and reuse, not audible speech. Task 4.2 and its
+full living scenario remain TODO until two-way speech is verified. The diagnostic
+does not bind a partial substitute scenario or claim physical audio acceptance.
+Keep the unlocked desktop visible during native navigation: GNOME idle blanking
+stalled the webview's route transition during preparation. A bounded
+`gnome-session-inhibit --inhibit=idle` guard prevented that environmental failure.
+
+### SDK reconnect — bounded Task 4.3 evidence
+
+On 2026-10-28 Linux's original connect-time resilience receiver was attached to
+the existing room-event watcher. Linux shares the SDK-event/toast bridge, not
+macOS's OS monitors or sender publication repair. Terminal cleanup checks the
+captured generation after acquiring the Linux room-transition lock.
+
+A private real-stack diagnostic interrupted only Linux's actual signaling
+socket: it briefly paused the owned TLS listener, closed the uniquely matched
+owned connection child, then resumed the listener in a `finally` block. No host
+network policy or LiveKit server configuration changed. The normal Linux UI
+showed Reconnecting, then Reconnected. Released-Windows editor counters advanced
+from 3270–3272 before the interruption to 3275–3277 afterward. Linux retained
+the original membership and main window, one remote window, one muted SFU
+microphone publication, and one owned capture/playback stream pair. Normal Leave
+removed membership, publication, native audio streams and the remote window.
+
+The full Task 4.3 scenario remains TODO: muted publication and OS ownership do
+not establish resumed audible speech. No partial living scenario was created.
+An independent source review found no demonstrated defects in the bounded
+integration; this is not full milestone acceptance or merge authorization.
+
+### Different-room retirement — bounded Task 4.4 evidence
+
+A second private real-stack diagnostic used actual host-side SFU participant
+removal. Linux's shared forced-disconnect cleanup retired membership, both owned
+audio streams and the remote window, then rendered normal room-entry controls.
+Linux normally joined a different owned room. After the released Windows peer
+left the old room through its normal Leave control, host-side SFU inspection
+confirmed that old room was empty. Twelve samples retained the new membership,
+no old-room remote windows, and unchanged native audio ownership. Normal Leave
+released the new room's audio resources. The microphone stayed muted throughout.
+An empty room need not have an active playback stream; the diagnostic records
+its actual capture/playback counts rather than requiring incoming audio there.
+
+A disposable native build now also exercises the actual in-flight video-event
+race. Its original SDK consumer holds one genuine Windows `TrackSubscribed`
+event after the outer generation check, without cloning or constructing it.
+Normal Linux Leave releases both old audio streams; normal Join enters a
+different empty owned room. Only then is that same event delivered to the
+original feed. The production handler rejects it with cancellation and stale
+generation both true. Raw receive-slot state remains `0 -> 0`; twelve samples
+retain the new room, no old windows, one native capture and no playback.
+Normal final Leave releases the new room's audio resources.
+
+The same-room control delivers its held real event while current: raw slots
+change `0 -> 1` and real Windows counter pixels advance. In a separate disposable
+guard-removal counterexample, the stale event actually inserts a slot (`0 -> 1`).
+That is measured under the backing-map mutex, not inferred from a missing log or
+from summaries that hide cancelled slots. Deeper guards still prevent a visible
+mutant window, so this is not a full living-scenario mutation result.
+
+A separate disposable run holds a genuine audio `TrackSubscribed` event in
+Linux's original connect-time compositor-event consumer, immediately before
+its existing generation check. This is the Linux path, not the independent
+audio-track logger used on other desktop platforms. Normal Leave releases
+the old capture/playback pair; normal Join enters the other room. Releasing
+the same audio event then reaches the original stale-generation check and
+is rejected. Twelve samples retain the new membership, no old windows,
+one capture and zero playback streams. Final Leave releases all owned audio.
+No additional SDK receiver or audio observer was started for this check.
+
+The remaining user-visible mutation gate uses genuine decoded Windows pixels
+held before the original decoder's latest-frame lock, never on the GTK thread.
+The first frame has not opened a window when normal Leave and Join B finish.
+Releasing it then reaches the original cancellation/generation check and is
+rejected; twelve samples retain B with no old window or playback. A same-room
+control releases its frame while current and renders advancing Windows counters.
+
+For the disposable mutant, disable old-slot retirement and the redundant
+generation/cancellation barriers at the frame handoff and GTK pump. Releasing
+the held real pixels now opens an actual old-room GTK window while B remains
+joined. The same `stale` verifier exits `1` with `Late old-room frame opened a
+native remote window`; this is not merely a backing-map or missing-log oracle.
+Restore all original barriers and rerun that identical verifier: exit `0`.
+
+Task 4.4's living scenario is now locally verified for delayed application
+events and frame work after the normal room switch. This does not claim new
+SDK/network callbacks emitted after Leave, audible speech or AEC. No synthetic
+event/media, additional SDK observer, canonical instrumentation or public
+receiver test API was added. The separate obsolete-disconnect regression remains
+narrower unit evidence, not live acceptance.
+
+Rust verification for the canonical reconnect integration: `cargo test --locked --lib` passed 1,353 tests with two
+ignored; `cargo clippy --locked --lib --bin desktop` and
+`cargo build --locked --bin desktop` passed. Clippy reported 67 warnings.
+The formatter check also exposed an existing macOS display-test assertion
+layout outside this change; introduced formatting differences were corrected,
+without restyling that unrelated assertion.
+
 
 ## Rules — each traceable to a real incident
 

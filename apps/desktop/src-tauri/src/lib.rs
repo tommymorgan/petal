@@ -179,7 +179,7 @@ mod windows_share_overlay;
 
 mod resilience_event;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod resilience;
 mod shutdown;
 pub mod video_color;

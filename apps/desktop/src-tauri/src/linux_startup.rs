@@ -78,6 +78,8 @@ pub(crate) fn run() {
                 crate::linux_compositor::compositor_list_windows,
                 crate::session::set_display_name,
                 crate::menubar::get_menubar_state,
+                crate::menubar::set_mic_muted,
+                crate::menubar::toggle_menubar_mic,
                 crate::transport::audio::list_audio_devices,
                 crate::transport::audio::set_audio_devices,
                 crate::camera_session::list_camera_devices,

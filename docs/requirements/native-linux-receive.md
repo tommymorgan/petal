@@ -2,7 +2,8 @@
 
 > Source: Tommy's planning interview, 2026-10-14, and accepted peer/hosting changes, 2026-10-27.
 > Status: accepted product boundary; detailed behaviors below operationalize that boundary for planning. No pre-existing PRD was supplied or found.
-> Implementation status: eight scenarios built locally, nine TODO. Trusted TLS, mutual native membership, join/configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, Task 2.2's aspect, source-size and one-to-one text fidelity, and Task 2.3's authorized actual-WGC replacement/late-retirement race pass on the selected owned stack. Earlier upstream-hosted observations remain historical. Audio, later lifecycle acceptance and a fresh independent fidelity audit remain pending.
+> Implementation status: nine scenarios built locally, eight TODO. Trusted TLS, mutual native membership, join/configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, Task 2.2's aspect, source-size and one-to-one text fidelity, Task 2.3's authorized actual-WGC replacement/late-retirement race, and Task 4.1's released-peer disconnected-sharer retirement pass on the selected owned stack. Earlier upstream-hosted observations remain historical. Audio, the remaining lifecycle scenarios and a fresh independent fidelity audit remain pending.
+> Machine-only lifecycle evidence now covers repeated Leave/rejoin, actual SDK signaling reconnect, forced-disconnect cleanup and different-room resource isolation. Audible speech and actual late old-room event delivery remain unverified; these checks do not complete their full scenarios. See [validation evidence](../VALIDATION.md).
 
 ## 1. Outcome and accepted boundary
 

@@ -366,3 +366,19 @@ Revert with `git checkout -- src/room/options.rs
 src/room/track/local_video_track.rs`, or stop setting
 `TrackPublishOptions::min_bitrate`, which alone restores prior behaviour. Drop
 once upstream exposes an allocation floor on the publish path.
+
+## Linux: shared ADM acquisition does not grant speaker output
+
+`PlatformAudio::new()` clears Linux speaker permission before a zero-to-one ADM
+acquisition can switch native modes. The runtime may retain the previous flag
+after the last platform handle drops. The microphone and enumeration paths share
+that ADM but must not bypass
+a rejected saved speaker choice. `disable_playout()` also lets a newly prepared
+speaker direction close an already-retained ADM before checking the selection.
+Petal enables the direction with the existing `reassert_playout()` only after a
+valid output is selected. Other platforms retain automatic playout on acquisition.
+
+The native device-recovery diagnostic verifies stale-selection errors and
+successful visible retry while keeping its real microphone muted throughout.
+It reads only bounded OS routing metadata, never audio samples. Speaker
+audibility, two-way speech and acoustic AEC remain unverified acceptance gates.

@@ -55,10 +55,14 @@
     }
 
     try {
-      const [audio, camera] = await Promise.all([listAudioDevices(), listCameraDevices()]);
-      mics = (audio?.recording ?? []).map((device) => ({ id: device.id, label: device.name }));
-      speakers = (audio?.playout ?? []).map((device) => ({ id: device.id, label: device.name }));
-      cameras = (camera ?? []).map((device) => ({ id: device.id, label: device.name }));
+      if (mode === 'audio') {
+        const audio = await listAudioDevices();
+        mics = (audio?.recording ?? []).map((device) => ({ id: device.id, label: device.name }));
+        speakers = (audio?.playout ?? []).map((device) => ({ id: device.id, label: device.name }));
+      } else {
+        const camera = await listCameraDevices();
+        cameras = (camera ?? []).map((device) => ({ id: device.id, label: device.name }));
+      }
     } catch (error) {
       console.error('device picker: enumeration failed', error);
       deviceError = 'Could not list devices.';
@@ -81,7 +85,7 @@
     pendingKind = 'microphone';
     try {
       const applied = await setAudioDevices({ recordingId: id });
-      micNote = noteFor(
+      micNote = applied?.micError ?? noteFor(
         applied ? { applied: applied.micApplied, inRoom: applied.inRoom } : null,
         'microphone'
       );
@@ -100,7 +104,7 @@
     pendingKind = 'speaker';
     try {
       const applied = await setAudioDevices({ playoutId: id });
-      speakerNote = noteFor(
+      speakerNote = applied?.speakerError ?? noteFor(
         applied ? { applied: applied.speakerApplied, inRoom: applied.inRoom } : null,
         'speaker'
       );

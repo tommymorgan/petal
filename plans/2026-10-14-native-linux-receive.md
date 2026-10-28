@@ -8,7 +8,7 @@
 
 ## Execution and evidence
 
-This is the entire receive-only milestone, not a later-phase placeholder for the wider Linux port. Execute slice/task order below; the receiver slice deliberately precedes integrated audio acceptance because the audio tracer includes an updating incoming share. No living `.feature` files are authored during planning.
+This is the entire receive-only milestone, not a later-phase placeholder for the wider Linux port. Process tasks in order when their prerequisites are available. On 2026-10-28 Tommy instructed that human-listening scenarios stay TODO when no listening partner is available, while implementation and machine-verifiable scenarios continue without that global dependency stop. This changes execution order, not acceptance criteria: programmatic transport/device checks do not stand in for audible conversation or acoustic AEC. Preserve safe local review-unit boundaries and distinguish partially implemented tasks from completed scenarios. No living `.feature` files are authored during planning.
 
 No new UI design is being invented: reuse existing room-entry/meeting controls; the remote-window interaction is specified in ADR 0002 using standard GTK desktop decoration. No Figma/fig2json artifact exists, so there are no fabricated Design references.
 
@@ -18,7 +18,7 @@ A working build is not acceptance. Build and launch the executable in this compu
 
 **Global acceptance environment**: a real Tommy-owned stateless Petal backend and official non-development LiveKit service run on this workstation and are reachable from both native clients over trusted TLS. Linux and the released Windows client are explicitly configured for that same service; server API secrets stay on the backend/LiveKit service, never either client. The bounded placement is recorded in ADR 0001. No paid signup, public firewall/router/DNS change, or cloud deployment was used. “Hosted” in the preserved scenarios denotes this explicitly configured real service, not an upstream-only dependency. Task 1.3's preserved scenario describes membership after both peers are configured; it does not prohibit the accepted one-time Windows service configuration.
 
-**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Eight scenarios are built locally and nine remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, same-profile URL-only configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's source aspect, letterboxing and native-pixel text after source-size changes. Task 2.3 additionally passes the actual WGC B-before-late-A race under the narrow authorized Windows publisher exception. Audio and later lifecycle acceptance remain pending.
+**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Ten scenarios are built locally and seven remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, same-profile URL-only configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's source aspect, letterboxing and native-pixel text after source-size changes. Task 2.3 additionally passes the actual WGC B-before-late-A race under the narrow authorized Windows publisher exception. Task 4.1's disconnected-sharer scenario passes with the released Windows client and rejects an isolated frozen-window retirement mutant. Task 4.4 passes real delayed video/audio events and decoded-frame delivery after a normal room switch, including a failing native-window assertion under cancellation mutation and a passing restored run. Audible-audio lifecycle scenarios stay TODO.
 
 ## Slice 1: Enter a hosted room from the native Linux app
 
@@ -281,6 +281,11 @@ Scenario Outline: Converse with the Windows native peer while receiving a share
     | Windows |
 ```
 
+> Preparation only (2026-10-28), not scenario acceptance: the Linux session now retains the existing platform ADM/APM speaker and microphone resources on its original room connection, publishes initially muted, registers the existing microphone commands, and retires its audio resources on Leave. A bounded actual-Wayland smoke joined the real owned service, initialized the native ADM, published the real microphone muted, reached the existing mute command, and left normally. Linux build, serial Rust library tests (1,332 passed, two ignored), Clippy and changed-file rustfmt passed with existing warnings.
+>
+> This scenario remains TODO and its living feature is not created: no human two-way speech or simultaneous released-Windows share/audio observation has passed. At the initial preparation check, the Windows video-test VM had microphone input and speaker output disabled, and an independent listening peer was not established. On 2026-10-28 Tommy explicitly authorized enabling both VM audio directions. Live VirtualBox controls enabled them without restarting the guest; saved VM settings now retain both, and the host exposes actual VBoxHeadless capture and playback streams through PipeWire ALSA. Petal's call and mute controls were not changed. This establishes audio attachment, not audible conversation or AEC. The initial Linux ADM device-identifier failure and its later recovery work are described under Task 3.2. Resume acceptance with actual speech and listening; do not treat initialization, stream ownership, mute metadata or processing-option flags as acoustic evidence.
+
+
 ### Task 3.2: Keep audio state truthful and recoverable
 <!-- estimate: ~500 reviewable lines | feature-files: apps/desktop/features/linux-meeting-audio.feature | demoable: yes -->
 
@@ -322,6 +327,15 @@ Scenario Outline: Recover an unavailable microphone or speaker without duplicati
     | microphone input  |
     | speaker output    |
 ```
+
+> Machine-verifiable preparation (2026-10-28): Linux device keys now preserve native PulseAudio names when ADM GUIDs are empty, fail closed on missing/ambiguous choices, and keep system default available. The existing audio picker no longer lets unsupported camera enumeration break audio enumeration. Device startup failures use the existing resilience error UI; selecting an available device retries only that direction on the same room, without another microphone publication. An actual hosted/Wayland check rejected stale saved selections, showed actionable errors, retried through visible device controls, verified the physical input upstream of the existing EasyEffects chain while keeping the microphone muted throughout, and left normally. No system processing configuration or audio samples were changed or recorded. Speaker permission is separate from shared-ADM lifetime; native switching retains its serialization permit through actual completion, not merely its async deadline.
+>
+> Both planned scenarios remain TODO: this bounded check proves a stale-selected-device failure and real native recovery, not that every device is unavailable or that speech is audible at the peer. The speech-only assertions still await a listening partner. Tommy's execution-order override permits continuing independent lifecycle scenarios rather than waiting here.
+>
+> Additional bounded smoke (2026-10-28): with the Windows guest unavailable at sign-in, Linux joined an independently verified empty owned room. Its visible microphone controls changed the single real SFU microphone from muted to unmuted and back to muted. Native capture was one stream after unmute and zero in six subsequent remuted samples; zero is not duplicate capture. Normal Leave removed SFU membership and owned audio. The exact VM process's host input/output streams were separately correlated to the existing EasyEffects source/sink without changing system defaults. No diagnostic audio samples were inspected or recorded. This does not establish Windows receipt, either direction's audible speech, mute's effect at a listening peer or AEC; complete scenario statuses remain TODO.
+>
+> Windows peer follow-up: Tommy authorized a forced restart after the resumed guest froze and safe save timed out. Changing only this test VM's host audio backend from ALSA to PulseAudio restored a responsive sign-in surface with both audio directions enabled; the same authorized file-backed credential then reached the desktop through freshly focused, paced input. System audio defaults were unchanged. The earlier input failure and ALSA root cause remain unproven. The owned room remains empty and two-client audio has not yet been exercised after recovery; see `docs/VALIDATION.md`. No scenario status changes.
+
 
 ### Task 3.3: Validate speaker echo cancellation
 <!-- estimate: ~200 reviewable lines | feature-files: apps/desktop/features/linux-meeting-audio.feature | demoable: yes -->
@@ -373,11 +387,11 @@ Scenario: Stop and restart a share without interrupting audio
   And no duplicate window or previous frozen image is presented as current
 ```
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: apps/desktop/features/linux-room-lifecycle.feature::Retire a disconnected sharer presentation
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Retire a disconnected sharer presentation
   Given Linux is in a room displaying a participant's active share in a remote window
@@ -387,6 +401,16 @@ Scenario: Retire a disconnected sharer presentation
   When I leave the room
   Then Linux returns to its room-entry state normally
 ```
+
+**Task 4.1 partial completion (2026-10-28)**: the complete disconnected-sharer scenario passes with the actual released Windows client sharing a real changing Notepad window. The original Linux room observes the actual participant departure; the peer tile, summary and GTK window stay absent for three seconds while Linux remains joined, followed by normal Leave to room entry. `check-linux-sharer-disconnect.py --feature apps/desktop/features/linux-room-lifecycle.feature` binds every exact clause and keeps the microphone muted. An isolated native mutant that ignores both unpublication and participant-disconnect retirement is rejected after the real departure event; its cleanup still uses normal Linux Leave. One bounded basic review found no issues. The separate stop/restart-with-two-way-audio scenario remains TODO; this is not whole-task or speech acceptance.
+
+The machine-only stop/restart diagnostic also passes: actual old unpublication
+and stable window absence, then a distinct restarted publication showing
+advancing `New share content` pixels in one window. Room identity, peer, main
+window and a single muted microphone publication remain; normal Leave cleans
+up. `check-linux-share-restart.py` deliberately has no partial living-feature
+binding. Continuing audible two-way speech remains unverified.
+
 
 ### Task 4.2: Leave and rejoin without resource leaks
 <!-- estimate: ~280 reviewable lines | feature-files: apps/desktop/features/linux-room-lifecycle.feature | demoable: yes -->
@@ -428,14 +452,23 @@ Scenario: Reconnect without duplicate room media
   And no duplicate playback or remote windows appear
 ```
 
+Machine-only preparation passes on the owned stack: real Linux signaling-socket
+interruption visibly reports Reconnecting/Reconnected, resumes increasing
+released-Windows pixels in one window, and retains one muted microphone
+publication and one native capture/playback pair. Normal Leave releases them.
+The shared existing SDK-event watcher is integrated; no new retry architecture
+was added. The full scenario stays TODO for audible two-way speech. See
+`docs/VALIDATION.md` for the bounded evidence and verification limits.
+
+
 ### Task 4.4: Reject stale events after changing rooms
 <!-- estimate: ~250 reviewable lines | feature-files: apps/desktop/features/linux-room-lifecycle.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: apps/desktop/features/linux-room-lifecycle.feature::Old room events cannot revive media in a new room
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Old room events cannot revive media in a new room
   Given Linux has left room abc-defg-hjk and joined a different room def-ghjk-mno
@@ -444,4 +477,29 @@ Scenario: Old room events cannot revive media in a new room
   And no room abc-defg-hjk audio restarts
   And Linux remains in room def-ghjk-mno
 ```
+
+Reachable machine checks pass: actual SFU-forced disconnect releases old native
+resources, normal Join enters a different owned room, and actual Windows
+departure from the old room leaves the new membership and native resources
+unchanged. A disposable real-event barrier now also delivers an already-received
+Windows video subscription to its original feed after normal Leave/Join B.
+The unchanged handler rejects it without allocating an old receive slot; new
+membership and native audio/window ownership remain stable. Same-room real
+pixels and a guard-removal counterexample establish actual slot-state coverage.
+A separate genuine audio subscription is also held at Linux's original event
+consumer and rejected by its existing generation check after normal Leave/Join
+B; new membership and native audio/window ownership remain stable.
+
+The decoded-frame handoff additionally holds genuine Windows pixels before
+the original latest-frame lock. After normal Leave/Join B, the unchanged
+cancellation/generation checks reject that late work. A same-room control
+renders advancing real counters. Negating the retirement and generation
+barriers in a disposable mutant opens an actual old-room GTK window only
+after releasing the held pixels: the identical living verifier exits 1 at
+its native-window assertion. Restoring the original behavior makes it exit 0.
+This completes the scenario for delayed application events/frame work; it
+does not claim new SDK/network callbacks emitted after Leave, speech or AEC.
+No synthetic media, additional observer, canonical instrumentation or public
+receiver test API was added. See `docs/VALIDATION.md`.
+
 

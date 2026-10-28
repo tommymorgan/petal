@@ -152,20 +152,23 @@
     };
   });
 
-  // Route transitions (View Transitions API). The main window is transparent
-  // (tauri.conf.json), so an instant page swap leaves a frame where nothing
-  // is painted and the desktop shows through. startViewTransition keeps the
-  // outgoing frame composited through the swap and cross-fades to the
-  // incoming one. Engines without the API (WKWebView < 18, macOS 13/14)
-  // silently keep the plain instant swap. Reduced-motion users still get the
-  // swap covered (snapshot, zero animation) via the CSS below.
+  // Transparent desktop windows use snapshots to cover route swaps. Engines
+  // without the API keep the instant swap; reduced motion uses the CSS below.
+  // Navigation must not depend indefinitely on the rendering clock: WebKitGTK
+  // can stop transition callbacks while the desktop is blanked. Give snapshot
+  // preparation 250 ms, then skip the visual effect and unblock the route.
   if (browser && typeof document.startViewTransition === 'function') {
     onNavigate((navigation) => {
       return new Promise((resolve) => {
-        document.startViewTransition(async () => {
+        const transition = document.startViewTransition(async () => {
+          clearTimeout(deadline);
           resolve();
           await navigation.complete;
         });
+        const deadline = setTimeout(() => {
+          transition.skipTransition();
+          resolve();
+        }, 250);
       });
     });
   }

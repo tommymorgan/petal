@@ -131,7 +131,6 @@ def inspect_room_controls(app):
                     if (transitions.length === 16) transitions.shift();
                     transitions.push(snapshot);
                 }
-                if (!document.body.innerText.includes('Could not join this room')) return;
                 const visible = b => b.getClientRects().length > 0 && getComputedStyle(b).visibility !== 'hidden';
                 const label = b => b.getAttribute('aria-label') || b.textContent.trim();
                 const more = buttons.find(b => visible(b) && label(b) === 'More meeting controls');

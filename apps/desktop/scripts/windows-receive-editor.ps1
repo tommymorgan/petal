@@ -21,6 +21,9 @@ not the outer window request or an assumption about invisible borders.
 Optional -ReplacementPhaseFile selects the Task2.3 source label: an absent file
 means a; its trimmed value must be a or b. Both phases keep the real editor's
 counter changing. This mode cannot be combined with -GeometryPhaseFile.
+Optional -RestartPhaseFile selects initial or restarted (absent file means initial).
+Only restarted adds the fixed "New share content" line to the same real editor.
+Select at most one geometry, replacement or restart phase file.
 #>
 param(
   [ValidateRange(30, 3600)] [int]$DurationSeconds = 600,
@@ -28,12 +31,13 @@ param(
   [int]$ProcessId = 0,
   [long]$WindowHandle = 0,
   [string]$GeometryPhaseFile = '',
-  [string]$ReplacementPhaseFile = ''
+  [string]$ReplacementPhaseFile = '',
+  [string]$RestartPhaseFile = ''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-if ($GeometryPhaseFile -and $ReplacementPhaseFile) {
-  throw 'Select either GeometryPhaseFile or ReplacementPhaseFile, not both'
+if (@(@($GeometryPhaseFile, $ReplacementPhaseFile, $RestartPhaseFile) | Where-Object { $_ }).Count -gt 1) {
+  throw 'Select only one of GeometryPhaseFile, ReplacementPhaseFile or RestartPhaseFile'
 }
 
 Add-Type -TypeDefinition @'
@@ -414,6 +418,18 @@ while ([DateTime]::UtcNow -lt $until) {
       }
       $label = if ($phase -ceq 'b') { 'Replacement B' } else { 'Publication A' }
       $text = $text.Replace('PETAL SAFE EDITOR', "PETAL SAFE EDITOR`r`n$label")
+    }
+    if ($RestartPhaseFile) {
+      $phase = 'initial'
+      if (Test-Path -LiteralPath $RestartPhaseFile -PathType Leaf) {
+        $phase = [IO.File]::ReadAllText($RestartPhaseFile).Trim()
+      }
+      if ($phase -cne 'initial' -and $phase -cne 'restarted') {
+        throw 'RestartPhaseFile must contain exactly initial or restarted'
+      }
+      if ($phase -ceq 'restarted') {
+        $text = $text.Replace('PETAL SAFE EDITOR', "PETAL SAFE EDITOR`r`nNew share content")
+      }
     }
     [PetalReceiveEditor]::Update($edit, [uint32]$editor.Id, $text)
     Start-Sleep -Milliseconds $IntervalMilliseconds

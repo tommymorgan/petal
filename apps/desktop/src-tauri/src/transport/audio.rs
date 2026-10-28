@@ -399,9 +399,7 @@ impl ScreenAudioTrack {
             Ok(Err(error)) => Some(format!(
                 "failed to publish screen audio '{track_name}': {error}"
             )),
-            Err(_) => Some(format!(
-                "timed out publishing screen audio '{track_name}'"
-            )),
+            Err(_) => Some(format!("timed out publishing screen audio '{track_name}'")),
         };
         if let Some(error) = publish_error {
             capture.close_queue();
@@ -591,9 +589,15 @@ impl MicTrack {
     /// Reuses the SAME `LocalAudioTrack`/`AudioSource` this `MicTrack` was
     /// built with, so capture itself never stopped -- only the SFU-side
     /// publication was lost.
-    pub(crate) async fn republish_after_reconnect(&self, room: &Arc<Room>) -> Result<(), AudioError> {
+    pub(crate) async fn republish_after_reconnect(
+        &self,
+        room: &Arc<Room>,
+    ) -> Result<(), AudioError> {
         room.local_participant()
-            .publish_track(LocalTrack::Audio(self.track.clone()), audio_publish_options())
+            .publish_track(
+                LocalTrack::Audio(self.track.clone()),
+                audio_publish_options(),
+            )
             .await?;
         log::info!("audio: mic track republished after reconnect publication repair");
         Ok(())
@@ -826,11 +830,13 @@ pub struct SpeakerPlayout {
 impl SpeakerPlayout {
     fn new(preferred_playout_device: Option<String>) -> Result<Self, AudioError> {
         let audio = PlatformAudio::new()?;
+        #[cfg(target_os = "linux")]
+        audio.disable_playout();
         let devices: Vec<_> = audio.playout_devices().collect();
-        log::info!(
-            "audio: playout enabled ({} playout device(s) available)",
-            devices.len()
-        );
+        #[cfg(target_os = "linux")]
+        if devices.is_empty() {
+            return Err(livekit::AudioError::DeviceNotFound.into());
+        }
 
         let mut current_device =
             default_playout_device(&devices).map(|device| PlayoutDeviceSnapshot {
@@ -838,7 +844,10 @@ impl SpeakerPlayout {
             });
         let mut user_pinned = false;
         if let Some(wanted_id) = preferred_playout_device {
-            match devices.iter().find(|device| device.id.as_str() == wanted_id) {
+            match devices
+                .iter()
+                .find(|device| device.id.as_str() == wanted_id)
+            {
                 Some(device) => match audio.switch_playout_device(&device.id) {
                     Ok(()) => {
                         current_device = Some(PlayoutDeviceSnapshot {
@@ -847,16 +856,33 @@ impl SpeakerPlayout {
                         user_pinned = true;
                         log::info!("audio: applied preferred playout device '{}'", device.name);
                     }
-                    Err(error) => log::warn!(
-                        "audio: failed to apply preferred playout device '{}': {error} -- using default",
-                        device.name
-                    ),
+                    Err(error) => {
+                        #[cfg(target_os = "linux")]
+                        return Err(error.into());
+                        #[cfg(not(target_os = "linux"))]
+                        log::warn!(
+                            "audio: failed to apply preferred playout device '{}': {error} -- using default",
+                            device.name
+                        );
+                    }
                 },
-                None => log::warn!(
-                    "audio: preferred playout device {wanted_id} not present -- using default"
-                ),
+                None => {
+                    #[cfg(target_os = "linux")]
+                    return Err(livekit::AudioError::DeviceNotFound.into());
+                    #[cfg(not(target_os = "linux"))]
+                    log::warn!(
+                        "audio: preferred playout device {wanted_id} not present -- using default"
+                    );
+                }
             }
         }
+
+        #[cfg(target_os = "linux")]
+        audio.reassert_playout();
+        log::info!(
+            "audio: playout enabled ({} playout device(s) available)",
+            devices.len()
+        );
 
         Ok(Self {
             audio,
@@ -1015,8 +1041,8 @@ impl SpeakerPlayout {
 ///
 /// No manual "attach remote track to speaker" step exists or is needed:
 /// once the platform ADM's playout side is enabled
-/// (`PlatformAudio::new()`'s own `set_adm_playout_enabled(true)` call,
-/// confirmed directly in `platform_audio/mod.rs`), WebRTC's native audio
+/// (on Linux only after `SpeakerPlayout` validates the requested device;
+/// other platforms enable it in `PlatformAudio::new()`), WebRTC's native audio
 /// pipeline automatically mixes and renders every subscribed remote audio
 /// track through the selected playout device -- confirmed against the
 /// crate's own `tests/platform_audio_test.rs` two-participant test, which
@@ -1158,12 +1184,10 @@ fn synthetic_tone_source() -> RtcAudioSource {
         let mut phase: f32 = 0.0;
         let mut frames: u64 = 0;
         let phase_step = 2.0 * std::f32::consts::PI * SYNTH_TONE_HZ / SYNTH_SAMPLE_RATE as f32;
-        let mut ticker =
-            tokio::time::interval(Duration::from_millis(u64::from(SYNTH_FRAME_MS)));
+        let mut ticker = tokio::time::interval(Duration::from_millis(u64::from(SYNTH_FRAME_MS)));
         loop {
             ticker.tick().await;
-            let mut frame =
-                AudioFrame::new(SYNTH_SAMPLE_RATE, SYNTH_CHANNELS, samples_per_frame);
+            let mut frame = AudioFrame::new(SYNTH_SAMPLE_RATE, SYNTH_CHANNELS, samples_per_frame);
             {
                 let data = frame.data.to_mut();
                 for sample in data.iter_mut() {
@@ -1200,6 +1224,10 @@ pub fn prepare_microphone(
     let audio = PlatformAudio::new()?;
 
     let recording_devices: Vec<_> = audio.recording_devices().collect();
+    #[cfg(target_os = "linux")]
+    if recording_devices.is_empty() {
+        return Err(livekit::AudioError::DeviceNotFound.into());
+    }
     log::info!(
         "audio: {} recording device(s), {} playout device(s) available",
         recording_devices.len(),
@@ -1236,14 +1264,24 @@ pub fn prepare_microphone(
                         device.name
                     );
                 }
-                Err(e) => log::warn!(
-                    "audio: failed to apply preferred recording device '{}': {e} -- using default",
-                    device.name
-                ),
+                Err(e) => {
+                    #[cfg(target_os = "linux")]
+                    return Err(e.into());
+                    #[cfg(not(target_os = "linux"))]
+                    log::warn!(
+                        "audio: failed to apply preferred recording device '{}': {e} -- using default",
+                        device.name
+                    );
+                }
             },
-            None => log::warn!(
-                "audio: preferred recording device {wanted_id} not present -- using default"
-            ),
+            None => {
+                #[cfg(target_os = "linux")]
+                return Err(livekit::AudioError::DeviceNotFound.into());
+                #[cfg(not(target_os = "linux"))]
+                log::warn!(
+                    "audio: preferred recording device {wanted_id} not present -- using default"
+                );
+            }
         }
     }
 
@@ -1428,9 +1466,28 @@ pub struct AppliedAudioDevices {
     pub speaker_error: Option<String>,
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn with_system_default(mut devices: Vec<AudioDeviceInfo>) -> Vec<AudioDeviceInfo> {
-    if !devices.is_empty() {
+    let has_devices = !devices.is_empty();
+    #[cfg(target_os = "linux")]
+    {
+        // Native-name keys cannot distinguish identical devices. Keep system
+        // default available, but never offer an ambiguous explicit selection.
+        let mut index = 0;
+        while index < devices.len() {
+            if devices[index].id.is_empty()
+                || devices[index + 1..]
+                    .iter()
+                    .any(|other| other.id == devices[index].id)
+            {
+                let ambiguous = devices.remove(index).id;
+                devices.retain(|device| device.id != ambiguous);
+            } else {
+                index += 1;
+            }
+        }
+    }
+    if has_devices {
         devices.insert(
             0,
             AudioDeviceInfo {
@@ -1442,7 +1499,7 @@ fn with_system_default(mut devices: Vec<AudioDeviceInfo>) -> Vec<AudioDeviceInfo
     devices
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn with_system_default(devices: Vec<AudioDeviceInfo>) -> Vec<AudioDeviceInfo> {
     devices
 }
@@ -2218,7 +2275,11 @@ mod tests {
 
         let mut silent = ScreenAudioHealth::default();
         for _ in 0..50 {
-            silent.record_frame(&vec![0i16; SCREEN_AUDIO_SAMPLES_PER_CHANNEL * SCREEN_AUDIO_CHANNELS]);
+            silent.record_frame(&vec![
+                0i16;
+                SCREEN_AUDIO_SAMPLES_PER_CHANNEL
+                    * SCREEN_AUDIO_CHANNELS
+            ]);
         }
         assert_eq!(silent.verdict(), ScreenAudioVerdict::Silence);
         assert_eq!(silent.frames, 50);
@@ -2226,7 +2287,11 @@ mod tests {
 
         let mut audible = ScreenAudioHealth::default();
         for _ in 0..50 {
-            audible.record_frame(&vec![1_000i16; SCREEN_AUDIO_SAMPLES_PER_CHANNEL * SCREEN_AUDIO_CHANNELS]);
+            audible.record_frame(&vec![
+                1_000i16;
+                SCREEN_AUDIO_SAMPLES_PER_CHANNEL
+                    * SCREEN_AUDIO_CHANNELS
+            ]);
         }
         audible.record_delivery_failure();
         assert_eq!(audible.verdict(), ScreenAudioVerdict::Audio);
@@ -2383,6 +2448,27 @@ mod tests {
         assert_eq!(devices[0].name, "System default");
         assert_eq!(devices[1].id, "guid-1");
         assert!(with_system_default(Vec::new()).is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_ambiguous_device_keys_cannot_offer_a_wrong_device() {
+        let devices = with_system_default(vec![
+            AudioDeviceInfo {
+                id: "Twin USB".into(),
+                name: "First twin".into(),
+            },
+            AudioDeviceInfo {
+                id: "unique-input".into(),
+                name: "Unique input".into(),
+            },
+            AudioDeviceInfo {
+                id: "Twin USB".into(),
+                name: "Second twin".into(),
+            },
+        ]);
+        let ids: Vec<_> = devices.iter().map(|device| device.id.as_str()).collect();
+        assert_eq!(ids, ["", "unique-input"]);
     }
 
     #[test]

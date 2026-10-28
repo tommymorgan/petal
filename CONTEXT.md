@@ -35,3 +35,15 @@ _Avoid_: gallery tile, browser tab.
 **Receive-only milestone**:
 Linux receives a share but does not publish its own screen or camera or grant remote control; microphone publication remains enabled.
 _Avoid_: listen-only, muted, read-only room.
+
+**Camera publication**:
+A participant's outgoing camera video, separate from screen/window shares and their count.
+_Avoid_: camera share when a remotely controllable screen/window share is meant.
+
+**Desktop-control preparation**:
+A sharer's explicit setup of a desktop input session and its monitor picture, with no participant yet authorized to send input.
+_Avoid_: granted control before a named controller is approved.
+
+**Desktop-control grant**:
+Explicit permission for a named controller to send desktop-wide input for a current share instance. The displayed monitor identifies the picture and pointer mapping; it does not confine keyboard focus to that monitor.
+_Avoid_: window control or monitor-confined control for the Linux desktop-wide grant.

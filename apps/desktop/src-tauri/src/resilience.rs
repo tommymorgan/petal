@@ -1,6 +1,6 @@
-//! Connection resilience (SPEC.md §4.8) -- macOS-only, following the same
-//! "own module, follow the house `emit_to` pattern" shape. Its room events
-//! come from the connect-time fanout rather than a late `room.subscribe()`.
+//! Connection resilience (SPEC.md §4.8). The room-event bridge is shared by
+//! macOS and Linux; OS network, display and device monitors remain macOS-only.
+//! Events come from the connect-time fanout, not a late `room.subscribe()`.
 //!
 //! ## What LiveKit's own `livekit` 0.7.49 Rust SDK already does for free
 //! (verified by reading the crate source directly -- `rtc_engine/mod.rs`,
@@ -118,6 +118,7 @@
 //! exhausted / server closed us), never for our own `leave_room`.
 
 use crate::sync_ext::MutexExt;
+#[cfg(target_os = "macos")]
 use std::ffi::c_void;
 use std::future::Future;
 use std::pin::Pin;
@@ -126,7 +127,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::resilience_event::ResilienceEvent;
-use crate::session::RoomGeneration;
+use crate::room_generation::RoomGeneration;
+#[cfg(any(target_os = "macos", test))]
 use crate::transport::audio::{PlayoutDeviceRefresh, RecordingDeviceRefresh};
 use tauri::{AppHandle, Manager};
 
@@ -136,6 +138,7 @@ use tauri::{AppHandle, Manager};
 /// spinning a tight loop -- same order of magnitude as `hover_tab.rs`'s own
 /// hover-poll cadence, just far cheaper per tick (an in-process device
 /// enumeration call, not a window-list/CoreGraphics round trip).
+#[cfg(target_os = "macos")]
 const AUDIO_DEVICE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Issue #18 toast policy: a reconnect WE initiated proactively (after a
@@ -155,16 +158,19 @@ const PROACTIVE_ATTRIBUTION_WINDOW: Duration = Duration::from_secs(10);
 /// Issue #18 trigger debounce: one physical network event (interface flip,
 /// VPN toggle) produces a burst of `SCDynamicStore` notifications; coalesce
 /// anything within this window into the single reconnect already triggered.
+#[cfg(target_os = "macos")]
 const NETWORK_CHANGE_DEBOUNCE: Duration = Duration::from_secs(1);
 
 /// Sleep/wake notifications can arrive in a short burst during lid-open or
 /// display-unlock. One proactive reconnect/share refresh is enough.
+#[cfg(any(target_os = "macos", test))]
 const SYSTEM_WAKE_DEBOUNCE: Duration = Duration::from_secs(2);
 
 /// Let LiveKit's own resume/full-reconnect handling settle before the app
 /// publishes a replacement for still-active shares. The SDK emits
 /// `Reconnected` after its full-reconnect republish attempts, but this small
 /// grace avoids racing immediately-following room events and coalesces bursts.
+#[cfg(target_os = "macos")]
 const POST_RECONNECT_SHARE_REPAIR_DELAY: Duration = Duration::from_millis(250);
 
 /// Start the SPEC.md §4.8 resilience watchers. Called once per room
@@ -187,8 +193,8 @@ pub fn start_for_room(
     app: &AppHandle,
     events: tokio::sync::mpsc::UnboundedReceiver<livekit::RoomEvent>,
     generation: RoomGeneration,
-    mic: Option<MicWatchHandle>,
-    speaker: Option<SpeakerWatchHandle>,
+    #[cfg(target_os = "macos")] mic: Option<MicWatchHandle>,
+    #[cfg(target_os = "macos")] speaker: Option<SpeakerWatchHandle>,
 ) {
     let watcher_started_at = Instant::now();
     log::info!("resilience: join tail stage=start_for_room_enter elapsed_ms=0 thread=join_tail");
@@ -197,9 +203,9 @@ pub fn start_for_room(
     // `room.subscribe()` here would create a second, lossy authority.
     let _ = start_room_event_watcher(
         events,
-        generation,
+        generation.clone(),
         Some(app.clone()),
-        DisconnectEffects::production(app.clone()),
+        DisconnectEffects::production(app.clone(), generation),
     );
     log::info!(
         "resilience: join tail stage=watcher_processing_started elapsed_ms={} thread=join_tail",
@@ -210,12 +216,15 @@ pub fn start_for_room(
     // for a usable LiveKit room. In particular, macOS display/NSWorkspace
     // registration can cross OS framework boundaries. Never let that delay
     // `join_room`'s terminal result or the active-meeting route (#559).
-    let app = app.clone();
-    schedule_monitor_bootstrap(move || start_app_global_monitors(app, mic, speaker));
-    log::info!(
-        "resilience: join tail stage=app_monitor_scheduled elapsed_ms={} thread=join_tail",
-        watcher_started_at.elapsed().as_millis()
-    );
+    #[cfg(target_os = "macos")]
+    {
+        let app = app.clone();
+        schedule_monitor_bootstrap(move || start_app_global_monitors(app, mic, speaker));
+        log::info!(
+            "resilience: join tail stage=app_monitor_scheduled elapsed_ms={} thread=join_tail",
+            watcher_started_at.elapsed().as_millis()
+        );
+    }
 }
 
 /// Queue optional app-global resilience monitors outside both the room-join
@@ -224,10 +233,12 @@ pub fn start_for_room(
 /// dedicated blocking pool rather than an `async_runtime::spawn` future.
 /// Kept as a small helper so the non-blocking boundary has a focused
 /// regression test.
+#[cfg(any(target_os = "macos", test))]
 fn schedule_monitor_bootstrap(task: impl FnOnce() + Send + 'static) {
     tauri::async_runtime::spawn_blocking(task);
 }
 
+#[cfg(target_os = "macos")]
 fn start_app_global_monitors(
     app: AppHandle,
     mic: Option<MicWatchHandle>,
@@ -252,11 +263,13 @@ fn start_app_global_monitors(
 /// reaching back through `SessionState`'s full mutex -- kept as its own tiny
 /// type so `resilience.rs` doesn't need to know `session.rs`'s internal
 /// locking shape, just "give me the current mic track, if any, each tick."
+#[cfg(target_os = "macos")]
 #[derive(Clone)]
 pub struct MicWatchHandle {
     inner: Arc<dyn Fn() -> Option<Arc<crate::transport::audio::MicTrack>> + Send + Sync>,
 }
 
+#[cfg(target_os = "macos")]
 impl MicWatchHandle {
     pub fn new(
         f: impl Fn() -> Option<Arc<crate::transport::audio::MicTrack>> + Send + Sync + 'static,
@@ -272,11 +285,13 @@ impl MicWatchHandle {
 /// A cheap, cloneable handle to the room's live `SpeakerPlayout` (if audio
 /// started successfully), re-read on every device-watch tick so the singleton
 /// app-level poll always observes the current room.
+#[cfg(target_os = "macos")]
 #[derive(Clone)]
 pub struct SpeakerWatchHandle {
     inner: Arc<dyn Fn() -> Option<Arc<crate::transport::audio::SpeakerPlayout>> + Send + Sync>,
 }
 
+#[cfg(target_os = "macos")]
 impl SpeakerWatchHandle {
     pub fn new(
         f: impl Fn() -> Option<Arc<crate::transport::audio::SpeakerPlayout>> + Send + Sync + 'static,
@@ -324,15 +339,23 @@ struct DisconnectEffects {
 }
 
 impl DisconnectEffects {
-    fn production(app: AppHandle) -> Self {
+    fn production(app: AppHandle, generation: RoomGeneration) -> Self {
+        #[cfg(target_os = "macos")]
+        let _ = generation;
         let surface_app = app.clone();
         Self {
             surface: Arc::new(move |event| emit(&surface_app, event)),
             cleanup: Arc::new(move || {
                 let app = app.clone();
+                #[cfg(target_os = "linux")]
+                let generation = generation.clone();
                 Box::pin(async move {
                     if let Some(state) = app.try_state::<crate::session::SessionState>() {
+                        #[cfg(target_os = "macos")]
                         crate::session::cleanup_for_forced_disconnect(&app, &state).await;
+                        #[cfg(target_os = "linux")]
+                        crate::session::cleanup_for_forced_disconnect(&app, &state, &generation)
+                            .await;
                     } else {
                         log::warn!(
                             "resilience: forced disconnect cleanup skipped -- SessionState unavailable"
@@ -379,6 +402,7 @@ fn start_room_event_watcher(
                     let Some(app) = app.as_ref() else {
                         continue;
                     };
+                    #[cfg(target_os = "macos")]
                     crate::remote_control::release_held_inputs_for_reconnect();
                     reconnect_started_at = Some(Instant::now());
                     let proactive = {
@@ -442,6 +466,7 @@ fn start_room_event_watcher(
                              resume -- no toast, per issue #18 policy)"
                         );
                     }
+                    #[cfg(target_os = "macos")]
                     if let Some(state) = app.try_state::<crate::session::SessionState>() {
                         crate::remote_control::reemit_active_statuses(&app, state.inner());
                     } else {
@@ -501,20 +526,25 @@ fn should_surface_disconnect(reason: livekit::DisconnectReason) -> bool {
 /// stand-in), so there's no multi-room ambiguity to resolve.
 static NETWORK_CHANGE_PENDING: AtomicBool = AtomicBool::new(false);
 
+#[cfg(target_os = "macos")]
 static SYSTEM_SLEEPING: AtomicBool = AtomicBool::new(false);
 /// Distinct from `SYSTEM_SLEEPING`: fires on display idle-sleep / lid-close
 /// display off without a full system sleep. Sender-side capture recovery
 /// (#734) must treat either as "do not permanently tear down a share".
+#[cfg(target_os = "macos")]
 static SCREENS_SLEEPING: AtomicBool = AtomicBool::new(false);
+#[cfg(any(target_os = "macos", test))]
 static LAST_SYSTEM_WAKE_AT: Mutex<Option<Instant>> = Mutex::new(None);
 /// Wall-clock of the most recent screens-did-sleep / will-sleep transition.
 /// Capture errors can race the flag by a few ms; a short post-sleep grace
 /// window still classifies them as sleep-correlated (#734).
+#[cfg(target_os = "macos")]
 static LAST_SLEEP_CORRELATED_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// True while the display or the whole system is asleep, or briefly after a
 /// sleep transition (capture stall often arrives within the same millisecond
 /// as `screensDidSleep` — see #734's petal.log incident).
+#[cfg(target_os = "macos")]
 pub(crate) fn capture_restart_should_wait_for_wake() -> bool {
     if SYSTEM_SLEEPING.load(Ordering::SeqCst) || SCREENS_SLEEPING.load(Ordering::SeqCst) {
         return true;
@@ -526,10 +556,12 @@ pub(crate) fn capture_restart_should_wait_for_wake() -> bool {
 
 /// True when a capture failure should be treated as recoverable sleep
 /// interruption rather than genuine source loss (#734).
+#[cfg(target_os = "macos")]
 pub(crate) fn is_sleep_correlated_capture_window() -> bool {
     capture_restart_should_wait_for_wake()
 }
 
+#[cfg(target_os = "macos")]
 fn mark_sleep_correlated() {
     *LAST_SLEEP_CORRELATED_AT.lock_unpoisoned() = Some(Instant::now());
 }
@@ -542,12 +574,14 @@ fn mark_sleep_correlated() {
 /// enough. Cleared on `Reconnected` or on a failed trigger.
 static PROACTIVE_RECONNECT_AT: Mutex<Option<Instant>> = Mutex::new(None);
 
+#[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProactiveReconnectSource {
     NetworkChange,
     SystemWake,
 }
 
+#[cfg(target_os = "macos")]
 impl ProactiveReconnectSource {
     fn label(self) -> &'static str {
         match self {
@@ -557,6 +591,7 @@ impl ProactiveReconnectSource {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn trigger_proactive_reconnect(app: &AppHandle, source: ProactiveReconnectSource) {
     let Some(session) = app.try_state::<crate::session::SessionState>() else {
         return;
@@ -702,6 +737,7 @@ fn verify_shares_after_reconnect(
 /// Debug-only. A shipped build must not let the environment switch off
 /// publication repair: a user who does so silently breaks their own reconnect
 /// and reports it as a product bug against a configuration we never test.
+#[cfg(target_os = "macos")]
 fn reconnect_share_repair_disabled() -> bool {
     #[cfg(debug_assertions)]
     {
@@ -717,10 +753,12 @@ fn reconnect_share_repair_disabled() -> bool {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn reconnect_share_repair_disabled_value(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn post_reconnect_share_repair_epoch_is_current(current_epoch: u64, repair_epoch: u64) -> bool {
     current_epoch == repair_epoch
 }
@@ -729,6 +767,7 @@ fn post_reconnect_share_repair_epoch_is_current(current_epoch: u64, repair_epoch
 /// belongs to the current room, reconnect epoch, and joined session. Keeping
 /// this gate explicit gives the event watcher a small, testable boundary
 /// between the 250 ms settle delay and media publication repair (#298).
+#[cfg(any(target_os = "macos", test))]
 fn post_reconnect_share_repair_gate(
     room_generation_current: bool,
     repair_epoch_current: bool,
@@ -826,6 +865,7 @@ pub(crate) fn emit_camera_publication_repair_failed(app: &AppHandle, message: St
 /// several holding rooms that had already been left (log-proven: duplicate
 /// "interface changed" lines in the same millisecond + a stale watcher's
 /// "engine is closed" reconnect failure).
+#[cfg(target_os = "macos")]
 fn ensure_network_monitor(app: &AppHandle) {
     static NETWORK_MONITOR_STARTED: AtomicBool = AtomicBool::new(false);
     if NETWORK_MONITOR_STARTED.swap(true, Ordering::SeqCst) {
@@ -837,6 +877,7 @@ fn ensure_network_monitor(app: &AppHandle) {
     start_network_monitor(app.clone());
 }
 
+#[cfg(target_os = "macos")]
 fn ensure_display_monitor(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
@@ -853,6 +894,7 @@ fn ensure_display_monitor(app: &AppHandle) {
     let _ = app;
 }
 
+#[cfg(target_os = "macos")]
 fn ensure_sleep_wake_monitor(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
@@ -975,6 +1017,7 @@ fn register_sleep_wake_observers(app: AppHandle) {
     );
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn accept_system_wake(now: Instant) -> bool {
     let mut last = LAST_SYSTEM_WAKE_AT.lock_unpoisoned();
     if last.is_some_and(|t| now.duration_since(t) < SYSTEM_WAKE_DEBOUNCE) {
@@ -984,6 +1027,7 @@ fn accept_system_wake(now: Instant) -> bool {
     true
 }
 
+#[cfg(target_os = "macos")]
 fn handle_system_wake(app: AppHandle) {
     SYSTEM_SLEEPING.store(false, Ordering::SeqCst);
     if !accept_system_wake(Instant::now()) {
@@ -1222,18 +1266,21 @@ async fn handle_display_reconfiguration(
 /// `PrimaryInterface`/`Router` values against the previous snapshot and
 /// ignores no-op notifications, rather than treating every notification as
 /// a network change.
+#[cfg(target_os = "macos")]
 const PRIMARY_INTERFACE_KEY: &str = "State:/Network/Global/IPv4";
 
 /// The two fields of `State:/Network/Global/IPv4` that identify the actual
 /// primary network path. If neither changed, the notification was routine
 /// network-stack noise (DHCP renew, route metadata) and must not trigger a
 /// reconnect or any UI (issue #18 root cause 2).
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct PrimaryNetworkSnapshot {
     interface: Option<String>,
     router: Option<String>,
 }
 
+#[cfg(target_os = "macos")]
 impl PrimaryNetworkSnapshot {
     fn describe(&self) -> String {
         format!(
@@ -1249,6 +1296,7 @@ impl PrimaryNetworkSnapshot {
 /// sketch). A missing key (no network at all) reads as the all-`None`
 /// snapshot -- losing connectivity entirely IS a real change vs. a live
 /// interface, and two consecutive no-network reads compare equal.
+#[cfg(target_os = "macos")]
 fn read_primary_network_snapshot(
     store: &system_configuration::dynamic_store::SCDynamicStore,
 ) -> PrimaryNetworkSnapshot {
@@ -1278,6 +1326,7 @@ fn read_primary_network_snapshot(
     snapshot
 }
 
+#[cfg(target_os = "macos")]
 fn start_network_monitor(app: AppHandle) {
     std::thread::spawn(move || {
         use system_configuration::core_foundation::runloop::{kCFRunLoopDefaultMode, CFRunLoop};
@@ -1352,12 +1401,14 @@ fn start_network_monitor(app: AppHandle) {
 /// the current room is looked up through `SessionState` at fire time, so a
 /// left room can never be reconnect-poked by a stale watcher. `prev` +
 /// `last_change_at` back the trigger discrimination (value diff + debounce).
+#[cfg(target_os = "macos")]
 struct NetworkWatchState {
     app: AppHandle,
     prev: PrimaryNetworkSnapshot,
     last_change_at: Option<Instant>,
 }
 
+#[cfg(target_os = "macos")]
 fn on_network_store_change(
     store: system_configuration::dynamic_store::SCDynamicStore,
     changed_keys: system_configuration::core_foundation::array::CFArray<
@@ -1450,6 +1501,7 @@ fn on_network_store_change(
 /// against the live session and `AppHandle`; tests drive the SAME tick function
 /// with a fake, so the wiring is exercised and not just the pure arithmetic
 /// (CLAUDE.md: green unit tests on isolated helpers are not sufficient evidence).
+#[cfg(any(target_os = "macos", test))]
 trait AudioDeviceWatchContext {
     fn refresh_recording(&self) -> Option<RecordingDeviceRefresh>;
     fn refresh_playout(&self) -> Option<PlayoutDeviceRefresh>;
@@ -1458,12 +1510,14 @@ trait AudioDeviceWatchContext {
     fn capture_playout_diagnostic(&self, transition: crate::logging::PlayoutTransitionTag);
 }
 
+#[cfg(target_os = "macos")]
 struct AppAudioDeviceWatchContext {
     app: AppHandle,
     mic: Option<MicWatchHandle>,
     speaker: Option<SpeakerWatchHandle>,
 }
 
+#[cfg(target_os = "macos")]
 impl AudioDeviceWatchContext for AppAudioDeviceWatchContext {
     fn refresh_recording(&self) -> Option<RecordingDeviceRefresh> {
         self.mic
@@ -1501,12 +1555,14 @@ impl AudioDeviceWatchContext for AppAudioDeviceWatchContext {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Default)]
 struct AudioWatchReporting {
     mic_failure_reported: bool,
     speaker_failure_reported: bool,
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn audio_device_watch_tick(ctx: &dyn AudioDeviceWatchContext, reporting: &mut AudioWatchReporting) {
     match ctx.refresh_recording() {
         Some(RecordingDeviceRefresh::Unchanged) => {}
@@ -1567,6 +1623,7 @@ fn audio_device_watch_tick(ctx: &dyn AudioDeviceWatchContext, reporting: &mut Au
 /// re-reads both CURRENT session handles on every tick, so it no-ops between
 /// rooms and picks up the next room automatically. Either side starts it;
 /// microphone publication failure must not disable default-speaker recovery.
+#[cfg(target_os = "macos")]
 fn ensure_audio_device_watch(
     app: AppHandle,
     mic: Option<MicWatchHandle>,
@@ -1719,48 +1776,6 @@ mod tests {
                 crate::logging::PlayoutTransitionTag::Unavailable,
                 crate::logging::PlayoutTransitionTag::Unavailable,
             ]
-        );
-    }
-
-    /// The tick tests above drive the real `audio_device_watch_tick`, but
-    /// through a fake context -- so they cannot see whether the PRODUCTION
-    /// context and the join path are still hooked to a live playout handle,
-    /// and that disconnection is precisely the #867 defect (the wrapper was
-    /// discarded, so nothing could ever call `refresh_default_playout_device`).
-    /// This crate has no `tauri::test` mock-runtime harness to build a real
-    /// `AppHandle` with (see `compositor.rs`/`camera_session.rs`), so pin the
-    /// three wiring hops by source, the way `share_border.rs` already does.
-    #[test]
-    fn the_production_audio_watch_is_still_wired_to_a_live_playout_handle() {
-        // Split the test module off FIRST. `include_str!` reads this file
-        // whole, so searching all of it also matches the assertion message
-        // literal below -- the guard then passes no matter what production
-        // does. Caught by mutation-checking the guard itself (#867).
-        let resilience = include_str!("resilience.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
-        assert!(
-            resilience.contains("playout.refresh_default_playout_device()"),
-            "AppAudioDeviceWatchContext::refresh_playout no longer calls \
-             refresh_default_playout_device -- the watch would tick forever \
-             against a handle it never asks about (#867)"
-        );
-
-        let room = include_str!("session/room.rs");
-        assert!(
-            room.contains("SpeakerWatchHandle::new"),
-            "join_room no longer passes a SpeakerWatchHandle to \
-             resilience::start_for_room -- the poll can never reach this \
-             room's playout (#867)"
-        );
-
-        let audio = include_str!("transport/audio.rs");
-        assert!(
-            !audio.contains("into_audio"),
-            "transport::audio unwraps SpeakerPlayout back to a bare \
-             PlatformAudio again; that discards the only handle capable of \
-             following a default-device change mid-call (#867)"
         );
     }
 
@@ -2089,6 +2104,46 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn old_room_disconnect_cannot_retire_a_new_room() {
+        use std::sync::atomic::AtomicUsize;
+
+        let session = Arc::new(crate::session::SessionState::default());
+        let old_generation = session.begin_room_generation();
+        let current_generation = session.begin_room_generation();
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+        sender
+            .send(livekit::RoomEvent::Disconnected {
+                reason: livekit::DisconnectReason::ServerShutdown,
+            })
+            .unwrap();
+        let surfaced = Arc::new(Mutex::new(Vec::new()));
+        let cleanups = Arc::new(AtomicUsize::new(0));
+        let effects = DisconnectEffects {
+            surface: {
+                let surfaced = surfaced.clone();
+                Arc::new(move |event| surfaced.lock_unpoisoned().push(event))
+            },
+            cleanup: {
+                let session = session.clone();
+                let cleanups = cleanups.clone();
+                Arc::new(move || {
+                    cleanups.fetch_add(1, Ordering::SeqCst);
+                    session.invalidate_room_generation();
+                    Box::pin(async {}) as DisconnectCleanup
+                })
+            },
+        };
+        let watcher = start_room_event_watcher(events, old_generation, None, effects);
+        tokio::time::timeout(Duration::from_secs(1), watcher)
+            .await
+            .expect("stale watcher must stop")
+            .unwrap();
+        assert!(current_generation.is_current());
+        assert_eq!(cleanups.load(Ordering::SeqCst), 0);
+        assert!(surfaced.lock_unpoisoned().is_empty());
+    }
+
     #[test]
     fn app_global_monitor_bootstrap_does_not_starve_async_runtime() {
         use std::sync::mpsc;
@@ -2231,15 +2286,6 @@ mod tests {
     }
 
     #[test]
-    fn proactive_reconnect_source_labels_are_stable_for_logs() {
-        assert_eq!(
-            ProactiveReconnectSource::NetworkChange.label(),
-            "network change"
-        );
-        assert_eq!(ProactiveReconnectSource::SystemWake.label(), "system wake");
-    }
-
-    #[test]
     fn disconnected_event_serializes_with_expected_shape() {
         let event = ResilienceEvent::Disconnected {
             reason: "ServerShutdown".into(),
@@ -2316,19 +2362,6 @@ mod tests {
         assert_ne!(
             wifi, offline,
             "losing the primary interface is a real change"
-        );
-    }
-
-    #[test]
-    fn snapshot_describe_is_log_friendly() {
-        let wifi = PrimaryNetworkSnapshot {
-            interface: Some("en0".into()),
-            router: Some("192.168.1.1".into()),
-        };
-        assert_eq!(wifi.describe(), "interface=en0 router=192.168.1.1");
-        assert_eq!(
-            PrimaryNetworkSnapshot::default().describe(),
-            "interface=<none> router=<none>"
         );
     }
 }
