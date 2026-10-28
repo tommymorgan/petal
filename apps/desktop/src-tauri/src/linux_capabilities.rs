@@ -1,12 +1,13 @@
-//! Receive-only admission runs before Tauri argument decoding and dispatch.
+//! Admission for unfinished Linux paths runs before Tauri argument decoding.
 //! Keeping unsupported commands out of the handler alone yields an ambiguous
 //! "command not found", rather than the product's explicit Linux limitation.
 
-pub(crate) const SCREEN_LIMITATION: &str =
-    "Screen publication is unsupported on Linux (receive-only milestone)";
-pub(crate) const CAMERA_LIMITATION: &str =
-    "Camera publication is unsupported on Linux (receive-only milestone)";
-pub(crate) const CONTROL_LIMITATION: &str = "Remote control requests, grants, input sending and replay are unsupported on Linux (receive-only milestone)";
+const WINDOW_LIMITATION: &str = "Application-window sharing is unsupported on Linux in this unit";
+const REGION_LIMITATION: &str = "Region sharing is unsupported on Linux";
+const PICKER_LIMITATION: &str = "This window picker command is unsupported on Linux; use the native monitor Share action";
+const AUDIO_LIMITATION: &str = "Computer, system and application audio sharing is unsupported on Linux";
+pub(crate) const CAMERA_LIMITATION: &str = "Camera publication is unsupported on Linux";
+pub(crate) const CONTROL_LIMITATION: &str = "Remote control requests, grants, input sending and replay are unsupported on Linux";
 
 pub(crate) fn require_camera_publication() -> Result<(), String> {
     Err(CAMERA_LIMITATION.to_string())
@@ -18,15 +19,10 @@ pub(crate) fn require_remote_input() -> Result<(), String> {
 
 pub(crate) fn command_error(command: &str) -> Option<&'static str> {
     match command {
-        "share_window"
-        | "toggle_window_share"
-        | "toggle_region_share"
-        | "open_window_picker_window"
-        | "toggle_window_picker_window"
-        | "open_region_window"
-        | "open_system_content_picker"
-        | "set_share_audio_enabled"
-        | "set_region_share_audio" => Some(SCREEN_LIMITATION),
+        "share_window" | "toggle_window_share" => Some(WINDOW_LIMITATION),
+        "toggle_region_share" | "open_region_window" => Some(REGION_LIMITATION),
+        "open_system_content_picker" => Some(PICKER_LIMITATION),
+        "set_share_audio_enabled" | "set_region_share_audio" => Some(AUDIO_LIMITATION),
         "start_camera_publish_command" => Some(CAMERA_LIMITATION),
         "remote_control_send"
         | "remote_control_set_active"
@@ -66,8 +62,6 @@ mod tests {
             "share_window",
             "toggle_window_share",
             "toggle_region_share",
-            "open_window_picker_window",
-            "toggle_window_picker_window",
             "open_region_window",
             "open_system_content_picker",
             "set_share_audio_enabled",

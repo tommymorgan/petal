@@ -67,7 +67,7 @@ pub async fn open_window_picker_window(
     open_custom_window_picker_window(&app)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub async fn open_window_picker_window(
     app: AppHandle,
@@ -83,6 +83,7 @@ pub async fn open_window_picker_window(
     open_custom_window_picker_window(&app)
 }
 
+#[cfg(not(target_os = "linux"))]
 #[tauri::command]
 pub async fn toggle_window_picker_window(app: AppHandle) -> Result<bool, String> {
     toggle_custom_window_picker_window(&app)

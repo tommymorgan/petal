@@ -153,6 +153,240 @@ No `tauri dev`, browser, macOS signing/permissions, Windows SDK, or installer
 step is involved. This requires the system GTK3/WebKitGTK runtime and normal
 Linux build dependencies; general distribution packaging is not this gate.
 
+Monitor publication additionally requires the GNOME ScreenCast portal on the
+current user session bus, PipeWire, GStreamer 1.28 or newer, and the
+`pipewiresrc`, `videoconvert`, `videoflip`, `videorate`, `capsfilter` and `appsink`
+elements. The Linux-target Rust bindings use the existing GLib 0.18 family;
+there is no GTK4 or browser-media path. A missing capture element is a
+per-attempt error, not permission to install software or capture a different
+source. Camera and desktop input are separate, unavailable capabilities.
+
+The monitor-entry assertion requires no room join or source selection:
+
+```sh
+/usr/bin/python3 apps/desktop/scripts/check-linux-capabilities.py \
+  apps/desktop/src-tauri/target/debug/desktop --monitor-entry
+```
+
+It checks that the native Share command reports a missing room rather than
+blanket Linux unavailability. It does not prove capture or publication. The
+S01 gate in `plans/2026-10-28-native-linux-publishing-control.md` separately
+requires explicit approval of a non-sensitive monitor, the actual native
+picker, a changing counter rendered by the released Windows peer, and normal
+Stop removing its publication and remote window. Do not activate a whole
+monitor merely to run the admission assertion.
+
+S01 was exercised on this GNOME Wayland computer at source snapshot
+`8ea2059d` on October 28, 2026: the released Windows client rendered DP-1
+in an independent share window, followed the owned counter from 10 to 11,
+and closed that window after normal Stop. An isolated mutation suppressing
+ongoing `PublishedTrack::push_frame` calls left a native publication active
+but failed to sustain the Windows picture; the unchanged candidate then
+passed the changing-counter and Stop checks again. This is monitor-path
+evidence, not completion of the remaining publishing/control tasks.
+
+GNOME preselects a sole monitor. Automation must inspect the source toggle's
+settled `PRESSED` state before acting; do not toggle an already selected
+source off. Approve Share only while the intended source remains pressed
+and the native Share button is sensitive. Accepting an empty selection
+crashed the tested GNOME portal backend; a transient activation state is
+not settled source-selection proof.
+
+`scripts/check-linux-monitor-publication.py` binds that picture gate to the
+actual Windows VM pixels and actual SFU publications. Its retained-app
+`run_s01(app, observe_participant, approve_share, windows_vm, evidence_dir)`
+entrypoint creates a real owned GTK counter with a per-run nonce, requires
+Windows to render its 10 → 11 transition, and checks both SFU unpublication
+and sustained remote-window absence after normal UI Stop. It neither uses a
+second SDK participant nor substitutes synthetic video. The standalone CLI
+requires an explicitly named owned Windows VM, existing native peer/room,
+private short-lived room-admin token file and `--allow-desktop-share`.
+Screenshots stay in a new private evidence directory. Wake an idle VM's
+display through its normal authorized flow; the witness does not change VM
+settings or inject guest input.
+
+The same real screenshot is read with sparse and block OCR segmentation:
+sparse layout retains the nonce counter, while block layout retains a colored
+native title bar when recursive desktop pictures confuse sparse layout.
+Both predicates still come from the actual Windows frame; neither is seeded
+from expected text or a test-only receiver API.
+
+While a Linux monitor is active, More → Change monitor uses the existing native
+`open_window_picker_window` entrypoint for a fresh monitor permission attempt.
+The original picture keeps running until the new publisher accepts a real frame.
+Only then does the owner promote the new share identity and retire the old
+publication; the command waits for that retirement while the new picture keeps
+pumping. Cancellation or failure before that commit releases only the new
+attempt. The normal Share/Stop action still stops the owned active/pending work.
+This is single-picture replacement, not Task1.2 multi-share support.
+
+`scripts/check-linux-share-audio-preservation.py` exercises the S05 matrix using
+real native commands plus read-only SFU publication observations. Its retained-app
+`run_s05(app, observe_participant, approve_share)` entrypoint avoids creating
+another room participant. The observer must read the actual original Linux
+participant; the approval callback must operate the actual owned-source picker.
+For a focused muted change, pass `rows=((True, 'change'),)`. The default runs all
+six muted/unmuted start/change/stop rows; the CLI requires
+`--allow-microphone-unmute` for any selected unmuted row, which still needs
+explicit runtime authorization. It samples the sole microphone publication's
+SID/mute state, native mute state, and absence of other audio publications while
+operations are pending and settled. A change is one picker operation while the
+original share is active, not a test-created stop/restart. Its host-only scoped
+room-admin bearer is never passed to Petal or followed through a redirect/proxy.
+These checks do not establish speech quality or acoustic AEC.
+
+All six S05 rows passed against the local pre-S08 monitor candidate
+(`06d8aa56` source lineage), with explicit permission for the unmuted rows.
+Unmuted start/change/stop yielded 130/201/115 independent microphone samples;
+the earlier muted rows also passed. An isolated mutation forcing real microphone
+mute at monitor start failed specifically because the share action changed the
+SFU microphone mute state. The unchanged original then passed unmuted start
+again (136 samples). Each run remuted the microphone, stopped owned shares and
+left normally. These are local acceptance results, not delivery or speech/AEC
+acceptance; later production changes require current-head checks.
+
+`scripts/check-linux-share-permission.py` separately exercises real native
+Cancel while an original monitor remains live. A fresh nonce counter rendered
+10 → 11 in Windows before/after Cancel, with the original native identity,
+SFU video SID and sole muted microphone retained. Changing only attempt-local
+cleanup to owner-wide cancellation failed after the real Cancel, once the
+original publication had been established; the unchanged candidate then passed
+again with 25 microphone samples and changing Windows pixels. The production
+portal protocol test also rejects actual private-bus Cancel, Deny and unknown
+responses emitted before the method reply. Treating Deny as success failed its
+negative-response assertion; restoring that branch passed. No global portal
+was replaced. GNOME offers no separate runtime Deny button here, and the planned
+Add share affordance belongs to multi-share work: full S06 remains incomplete.
+
+S08 also passed with real captured A frames delayed by a non-stop debugger
+attached only to the owned native process. Pause after `source.next_frame()`
+returns and before `is_current` admits the first frame; inspect only its width
+and height, not captured bytes. For Stop, Leave, replacement and actual removal
+of the owned Linux SFU participant, retire A before resuming that thread.
+Every row rejected the stale 3840 × 1080 frame without publishing A, then
+required fresh explicit B permission and actual Windows nonce counters 10 → 11.
+B retained its native identity, sole video SID and view-only metadata.
+Room retirement correctly created a new, still-muted microphone on re-entry.
+
+The Stop row additionally held A after identity-qualified `finish` and before
+its ready result, then explicitly started B. B published while both A's start
+and Stop commands remained unresolved. Releasing A rejected its old start and
+resolved Stop after B, without changing B's publication or Windows pixels.
+Start B only after that held retirement boundary: queuing it beforehand can
+leave its wakeup in the paused Tokio worker's non-stealable LIFO slot, which
+tests debugger scheduling rather than share ownership. Leave/disconnection
+serialize room cleanup; their old completion preceded B and is not claimed
+as an after-B callback. The permission-only helper
+`scripts/check-linux-share-generation.py` remains a separately labeled prefix,
+not evidence that unapproved A produced frames.
+
+Three ownership tests independently reject old frame admission, stale commit
+and identity-unqualified cleanup. Isolated mutations removing those respective
+guards each failed its corresponding assertion; all three passed after
+restoration. These results establish the generation scenario, not S10 failure
+recovery or completion of Task1.1.
+
+All four S10 replacement failures were exercised against the corrected native
+artifact, with the original muted participant and released Windows peer:
+disconnect only B's newly opened private portal socket; remove only this
+process's `videoflip` registry feature while retaining/restoring its reference;
+shut down only B's restricted PipeWire remote before capture starts; and pass
+an invalid owned `PETAL_SHARE_LADDER` value through the real native publisher.
+The last fixture restores the process environment immediately after Rust has
+read its owned value. It is native configuration rejection, not SFU rejection.
+No shared portal, PipeWire, SFU or VM was stopped or reconfigured.
+
+Each real More → Change monitor failure rendered a newly observed visible
+warning. Its attempt-time socket identities eventually disappeared; asynchronous
+GStreamer/connection retirement is not assumed complete at the first toast.
+The original share ID/video SID, sole muted microphone and changing Windows
+nonce counters 10 → 11 remained intact. Fresh explicit source consent after
+restoring the resource produced a new share ID/video SID and changing Windows
+pixels. No retry selected content or granted input automatically.
+
+The native-publication fixture first reproduced a real cleanup panic:
+`JoinHandle polled after completion`. Propagating a completed publisher error
+left its handle in `publishing`, so cleanup awaited it again and the UI lost
+the underlying error. The completed handle is now cleared before propagating
+its result; cancellation/timeouts still retain unfinished work for retirement.
+Metadata completion follows the same ownership rule. Repeating the real
+failure now displays `Native monitor publication rejected: invalid video
+publish configuration`, releases B, preserves A and permits explicit retry;
+the owned corrected process recorded no repeat of that panic. Five focused
+Linux share/portal tests and the native build passed. These are local build
+results, not publication, deployment or completion of the remaining tasks.
+
+The Task1.1 boundary additionally exercised a normal, traced native launch:
+joined the existing private room, received the released Windows client's real
+safe Notepad window, and read changing counters 890 → 891 from the independent
+GTK window through owned window-only compositor pixels. The original sole
+microphone remained muted with the same SID and no computer-audio track.
+Normal Leave during a real, unapproved monitor chooser rejected that pending
+start, removed the incoming GTK window and SFU membership, closed the chooser,
+and left no share IDs. The launch's actual execution/activation observations
+found no browser or foreign-platform preparation.
+
+The VM peer's hardware H.264 path first reported `MFT is not asynchronous`,
+`InitEncode` failure and repeated encode error `-7`; no incoming pixels were
+claimed from that run. The same native Windows artifact works with its existing
+process-local `PETAL_FORCE_SOFTWARE_ENCODE=1` override. Preserve the independent
+`PETAL_BACKEND_URL` override as well when restarting this owned test client:
+without it, its saved room code does not establish membership on the owned SFU.
+Use the profile menu's normal Quit Petal action, not Alt-F4, which can destroy
+the main window while leaving the single-instance process alive. VM, OS,
+hardware permissions and shared services were not reconfigured.
+
+The bounded basic review of `48490804b846 → 06c293716cb7` reported no
+demonstrated defects; later native-module changes were formatting only.
+The final native Linux layer gate passed 10 tests and built the executable.
+Clippy completed with 67 warnings in unchanged modules; the frontend check
+reported zero errors and the existing RoomRow accessibility warning.
+
+Run the native read-only prerequisite diagnostic with an intentionally missing
+capture-plugin search path:
+
+```sh
+/usr/bin/python3 apps/desktop/scripts/check-linux-capabilities.py \
+  apps/desktop/src-tauri/target/debug/desktop --prerequisites
+```
+
+The caller launches the production executable with an empty private GStreamer
+plugin directory and registry, then invokes `linux_native_prerequisites`.
+The command loads factory metadata without constructing capture elements and
+reads only advertised ScreenCast properties from the portal's existing unique
+bus owner. It neither starts a stopped portal service nor creates a portal
+session, requests permission, opens a PipeWire remote, selects a device or
+installs software. Its report names missing components and their monitor-sharing
+effect. Camera and input remain unavailable in this unit. A positive component
+report is not permission, a working capture stream or Windows-rendering proof.
+The check observes owned portal method-call headers and rejects media/input
+activation; it does not record selected content.
+
+The missing-plugin diagnostic passed again on October 29 without portal,
+screen, camera or input activation (4.27 seconds). Its earlier isolated
+`pipewiresrc`-availability mutation failed the actual native diagnostic; the
+restored command passed. The documented scope remains this GNOME Wayland
+computer, not general distribution support.
+
+For connected X03 acceptance, import `run_x03` from
+`scripts/check-linux-capabilities.py` with the retained native app, original
+participant observer, authorized monitor approval/Cancel callbacks, owned
+Windows VM and private evidence directory. Unlike the disconnected default
+CLI check, this runs the actual monitor Share/Windows-counter/Stop witness,
+inspects native room controls and rejects 25 unfinished direct operations.
+A real UI Share followed by native Cancel must render a new visible degraded
+toast while leaving no publication; the original room and muted microphone
+remain. This passed against the S08 candidate. Bypassing the native unfinished
+window admission guard failed on the resulting command-not-found response;
+the unchanged original then passed again, including real Windows 10 → 11
+pixels and remote-window teardown. No camera or input capability was activated.
+
+To report the actual installed environment instead of the deliberate
+missing-plugin fixture, use `--prerequisite-report` in the same command.
+It prints the native JSON component report and exits 1 when monitor
+prerequisites are unavailable. Neither mode requests a device or permission;
+the empty-plugin witness is not a report about the host's normal plugin set.
+
 The Linux main window uses an ordinary opaque, decorated GTK toplevel that is
 visible before WebKit loads, rather than the macOS/Windows hidden-window
 first-paint reveal lifecycle.
@@ -245,7 +479,20 @@ Linux startup/session modules passed `rustfmt --edition 2021 --check`. Task-owne
 formatting differences were corrected without suppressing formatter rules or
 restyling unrelated baseline files.
 
-### Native Linux receive-only capability boundary
+### Native Linux capability boundary
+
+The receive-only results below are dated historical evidence. The current
+capability check admits the native monitor Share action, requires a missing-room
+error before permission when disconnected, and retains window/region/audio,
+camera and input denials. It uses a reserved non-listening loopback backend so
+inspecting the meeting route cannot join a real service or activate room media.
+The current bounded living scenario is in
+`apps/desktop/features/linux-publishing-interop.feature`. It replaces the
+obsolete blanket screen-denial contract; the historical receive-only plan is
+unchanged. Its unbound default native driver passed on 2026-10-28 against the
+reserved loopback backend, checking controls and disconnected-room admission
+only. This is not full X03 or S01 acceptance, a real connected-room check, or
+Windows-rendering evidence.
 
 Use the same actual Wayland/session environment as the launch check. WebKitGTK
 can stop animation-frame/view-transition callbacks while the desktop is blanked;
@@ -285,7 +532,7 @@ gnome-session-inhibit --inhibit=idle --app-id=com.petal.app \
   --reason='Native capability verification' \
   /usr/bin/python3 apps/desktop/scripts/check-linux-capabilities.py \
   apps/desktop/src-tauri/target/debug/desktop \
-  --feature apps/desktop/features/linux-meeting-capabilities.feature
+  --feature apps/desktop/features/linux-publishing-interop.feature
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --locked \
   linux_unsupported_commands_are_rejected_without_revoking_receive_or_audio
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --locked \
@@ -295,11 +542,13 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib --locked \
 ```
 
 The native check uses real IPC, nonempty production-shaped window/control
-requests, the existing room-controls route, and actual device enumeration and
-preference commands. It requires explicit Linux errors from every covered
-unsupported entrypoint, disabled visible controls with limitation explanations,
-and unchanged disconnected-room/camera state. The exact six-row living table
-and each step are bound; an added, omitted or changed clause fails the driver.
+requests and the existing room-controls route. It requires an enabled monitor
+Share control with disconnected-room admission, explicit per-operation Linux
+errors for unfinished entrypoints, disabled camera/region/input controls, and
+unchanged disconnected-room, picture-share and camera state. It does not apply
+audio-device preferences or prove hosted membership, actual media, incoming
+rendering, or monitor consent. Its current living scenario binds every step;
+added, omitted or changed clauses fail the driver.
 Network-only replay is independently checked against the actual Linux replay
 backend with decoded pointer, keyboard, wheel and text packets.
 

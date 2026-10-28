@@ -8,7 +8,7 @@
 
 ## Execution boundary
 
-This is one complete plan for all agreed requirements, not a hidden later-phase placeholder. Planning only: every scenario is TODO and no new living feature file is written. The earlier receive-only plan and its DONE progress and TODO speech/AEC acceptance remain unchanged. Build permission, device/input activation and publication require their existing action-specific authorization; this document grants none.
+This is one complete plan for all agreed requirements, not a hidden later-phase placeholder. Local build is authorized; scenario metadata and living features record only exercised behavior. No PR, push or deployment is authorized. The earlier receive-only plan and its DONE progress and TODO speech/AEC acceptance remain unchanged. Device/input activation requires its existing action-specific authorization; this document grants none.
 
 Reuse the current room/settings/received-window controls and native permission dialogs; no new visual layout exploration or Figma artifact is required. There is no invented Design reference. The Linux received-share surface is GTK, so controller interaction must work there, not merely in Svelte remote-window code.
 
@@ -31,13 +31,14 @@ All unit-head checks use the real native executable and current owned backend/Li
 > Depends on: none.
 > Shippable state: A complete picture-only monitor path works; camera/input remain unavailable. Failed or retired starts cannot leak capture or revive shares.
 > Boundary verification: Launch the exact task-head executable, publish DP-1 to released Windows, cancel another attempt and leave during a delayed start; observe correct picture and no residual publication/device session. Repeat existing join, incoming-share and microphone smoke.
+> Allocation correction: Full S06 stays unchanged and belongs to Task 1.2, where Add share exists. Task 1.1 still verifies cancellation of a real replacement attempt at its own boundary; it does not claim the later Add share scenario.
 
-<!-- TODO -->
+<!-- DONE -->
 # Requirement: S01
 # Living: apps/desktop/features/linux-share-publication.feature::Publish a selected monitor to Windows
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Publish a selected monitor to Windows
   Given Linux and the released Windows peer are in room abc-defg-hjk on the owned service
@@ -47,12 +48,12 @@ Scenario: Publish a selected monitor to Windows
   Then its publication and Windows remote window close
 ```
 
-<!-- TODO -->
+<!-- DONE -->
 # Requirement: S05
 # Living: apps/desktop/features/linux-share-publication.feature::Share actions preserve independent audio state
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario Outline: Share actions preserve independent audio state
   Given Linux has its microphone <mute_state> and no computer-audio publication
@@ -68,6 +69,85 @@ Scenario Outline: Share actions preserve independent audio state
     | muted | stop |
     | unmuted | stop |
 ```
+
+<!-- DONE -->
+# Requirement: S08
+# Living: apps/desktop/features/linux-share-publication.feature::Retired share work cannot change the current generation
+# Action: creates
+# Status: DONE
+# Living updated: YES
+```gherkin
+Scenario Outline: Retired share work cannot change the current generation
+  Given a Linux monitor start from generation A is delayed
+  When I <retire_action> and explicitly start the current share generation B where applicable
+  And the old A start, frame and stop completions arrive late
+  Then A cannot create a publication or remove or overwrite B
+  And recovery selects no new content and restores no remote-control grant
+  Examples:
+    | retire_action |
+    | stop the pending share |
+    | leave the room |
+    | replace the selected source |
+    | disconnect and reconnect |
+```
+
+<!-- DONE -->
+# Requirement: S10
+# Living: apps/desktop/features/linux-share-publication.feature::Report a failed picture attempt and permit explicit retry
+# Action: creates
+# Status: DONE
+# Living updated: YES
+```gherkin
+Scenario Outline: Report a failed picture attempt and permit explicit retry
+  Given Linux already publishes DP-1 to Windows
+  When a new share attempt encounters <failure>
+  Then Linux shows the failure and releases that attempt's capture, portal and publication resources
+  And DP-1 continues unchanged without a browser or X11 fallback
+  When I resolve the failure and explicitly retry
+  Then the selected new picture can be published
+  Examples:
+    | failure |
+    | ScreenCast portal unavailable |
+    | required capture plugin missing |
+    | capture failure before first frame |
+    | native publication rejected |
+```
+
+<!-- DONE -->
+# Requirement: X03
+# Living: apps/desktop/features/linux-publishing-interop.feature::UI and direct commands expose only completed capability paths
+# Action: creates
+# Status: DONE
+# Living updated: YES
+```gherkin
+Scenario: UI and direct commands expose only completed capability paths
+  Given this implementation unit's Linux executable is running
+  When I inspect each publication and input action and invoke its direct command
+  Then completed capabilities use their real native path with explicit per-operation permission state
+  And incomplete camera or input capabilities remain unavailable without effects
+  And missing permission or service is reported as a visible failure rather than success
+```
+
+<!-- DONE -->
+# Requirement: X04
+# Living: apps/desktop/features/linux-publishing-interop.feature::Report Linux native prerequisites without activating devices
+# Action: creates
+# Status: DONE
+# Living updated: YES
+```gherkin
+Scenario: Report Linux native prerequisites without activating devices
+  Given the documented Linux launch environment for this GNOME Wayland computer
+  When I run the documented prerequisite check with a required native component unavailable
+  Then it identifies the missing portal, PipeWire, capture/camera or input component and its effect
+  And the check neither activates screen/camera/input nor installs software
+  And documentation does not promise full cross-distro support
+```
+
+### Task 1.2: Publish multiple monitors and application windows
+<!-- estimate: ~600–1100 reviewable lines (low confidence) | feature-files: apps/desktop/features/linux-share-publication.feature | demoable: yes -->
+> Depends on: Task 1.1.
+> Shippable state: Up to four independent monitor/window pictures work with individual teardown and correct geometry; camera/input remain unavailable.
+> Boundary verification: Publish monitor and editor simultaneously to released Windows; add to four, reject five without eviction, stop one, resize, close a source and revoke its portal permission; observe only the intended tracks/windows retire. Repeat X03 UI/direct-command checks: monitor and window publication work; camera and input remain unavailable.
 
 <!-- TODO -->
 # Requirement: S06
@@ -86,85 +166,6 @@ Scenario Outline: Share permission never selects content implicitly
     | cancel |
     | deny |
 ```
-
-<!-- TODO -->
-# Requirement: S08
-# Living: apps/desktop/features/linux-share-publication.feature::Retired share work cannot change the current generation
-# Action: creates
-# Status: TODO
-# Living updated: NO
-```gherkin
-Scenario Outline: Retired share work cannot change the current generation
-  Given a Linux monitor start from generation A is delayed
-  When I <retire_action> and explicitly start the current share generation B where applicable
-  And the old A start, frame and stop completions arrive late
-  Then A cannot create a publication or remove or overwrite B
-  And recovery selects no new content and restores no remote-control grant
-  Examples:
-    | retire_action |
-    | stop the pending share |
-    | leave the room |
-    | replace the selected source |
-    | disconnect and reconnect |
-```
-
-<!-- TODO -->
-# Requirement: S10
-# Living: apps/desktop/features/linux-share-publication.feature::Report a failed picture attempt and permit explicit retry
-# Action: creates
-# Status: TODO
-# Living updated: NO
-```gherkin
-Scenario Outline: Report a failed picture attempt and permit explicit retry
-  Given Linux already publishes DP-1 to Windows
-  When a new share attempt encounters <failure>
-  Then Linux shows the failure and releases that attempt's capture, portal and publication resources
-  And DP-1 continues unchanged without a browser or X11 fallback
-  When I resolve the failure and explicitly retry
-  Then the selected new picture can be published
-  Examples:
-    | failure |
-    | ScreenCast portal unavailable |
-    | required capture plugin missing |
-    | capture failure before first frame |
-    | native publication rejected |
-```
-
-<!-- TODO -->
-# Requirement: X03
-# Living: apps/desktop/features/linux-publishing-interop.feature::UI and direct commands expose only completed capability paths
-# Action: creates
-# Status: TODO
-# Living updated: NO
-```gherkin
-Scenario: UI and direct commands expose only completed capability paths
-  Given this implementation unit's Linux executable is running
-  When I inspect each publication and input action and invoke its direct command
-  Then completed capabilities use their real native path with explicit per-operation permission state
-  And incomplete camera or input capabilities remain unavailable without effects
-  And missing permission or service is reported as a visible failure rather than success
-```
-
-<!-- TODO -->
-# Requirement: X04
-# Living: apps/desktop/features/linux-publishing-interop.feature::Report Linux native prerequisites without activating devices
-# Action: creates
-# Status: TODO
-# Living updated: NO
-```gherkin
-Scenario: Report Linux native prerequisites without activating devices
-  Given the documented Linux launch environment for this GNOME Wayland computer
-  When I run the documented prerequisite check with a required native component unavailable
-  Then it identifies the missing portal, PipeWire, capture/camera or input component and its effect
-  And the check neither activates screen/camera/input nor installs software
-  And documentation does not promise full cross-distro support
-```
-
-### Task 1.2: Publish multiple monitors and application windows
-<!-- estimate: ~600–1100 reviewable lines (low confidence) | feature-files: apps/desktop/features/linux-share-publication.feature | demoable: yes -->
-> Depends on: Task 1.1.
-> Shippable state: Up to four independent monitor/window pictures work with individual teardown and correct geometry; camera/input remain unavailable.
-> Boundary verification: Publish monitor and editor simultaneously to released Windows; add to four, reject five without eviction, stop one, resize, close a source and revoke its portal permission; observe only the intended tracks/windows retire. Repeat X03 UI/direct-command checks: monitor and window publication work; camera and input remain unavailable.
 
 <!-- TODO -->
 # Requirement: S02

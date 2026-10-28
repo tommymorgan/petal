@@ -55,7 +55,7 @@
   import { identityColorCss, identityInkCss } from '$lib/data/identityColor';
   import { ensureCameraAccess, openPrivacySettings } from '$lib/data/permissions';
   import { startNativeSelfView, stopNativeSelfView } from '$lib/data/selfView';
-  import { isWindows } from '$lib/platform';
+  import { isLinux, isWindows } from '$lib/platform';
   import {
     cameraPublishSyncPlan,
     meetingTeardownPlan,
@@ -107,6 +107,7 @@
   // feeds the local tile's non-interactive multi-share count pill.
   let shareCount = $state(0);
   let sharePickerOpen = $state(false);
+  let sharePickerRevision = 0;
   let remoteControlAllowed = $state(session.remoteControlPolicy !== 'off');
 
   // In-meeting bug report (#786) — same build-time gate as MainMenu's home
@@ -301,13 +302,23 @@
       unlistenSharePicker = await listen(EVENTS.sharePickerChanged, () => {
         void refreshShareState();
       });
-      unlistenShareState = await listen<{ windowId: number; shared: boolean }>(
+      unlistenShareState = await listen<{ windowId: number; shared: boolean; error?: string | null }>(
         EVENTS.shareStateChanged,
-        () => void refreshShareState()
+        (event) => {
+          void refreshShareState();
+          if (event.payload.error) showShareToast(event.payload.error);
+        }
       );
-      unlistenSharePickerVisibility = await listen<{ open: boolean }>(
+      unlistenSharePickerVisibility = await listen<{ open: boolean; attemptId?: number }>(
         EVENTS.sharePickerVisibilityChanged,
         (event) => {
+          const attempt = event.payload.attemptId;
+          if (attempt !== undefined) {
+            // Completion wins even if this attempt's admission event was delayed.
+            const revision = attempt * 2 + (event.payload.open ? 0 : 1);
+            if (revision < sharePickerRevision) return;
+            sharePickerRevision = revision;
+          }
           sharePickerOpen = event.payload.open;
         }
       );
@@ -525,19 +536,21 @@
     }
   }
 
-  async function openSharePicker() {
+  async function openSharePicker(changeMonitor = false) {
     if (hasTauri) {
       try {
-        // Thread the local user's own identity color through so the system
-        // content-sharing-picker share flow (the primary "Share" button
-        // path) shows the correct per-user border/bar color instead of
-        // falling back to a stale/default color -- see window_picker.rs's
-        // `open_system_content_picker`.
-        sharePickerOpen = await invoke<boolean>(COMMANDS.toggleWindowPickerWindow);
+        if (changeMonitor) {
+          await invoke<void>(COMMANDS.openWindowPickerWindow, { color: localShareColor });
+        } else {
+          const open = await invoke<boolean>(COMMANDS.toggleWindowPickerWindow);
+          // Linux completions can belong to superseded permission attempts;
+          // only the native attempt-qualified events own picker visibility.
+          if (!isLinux()) sharePickerOpen = open;
+        }
         return;
       } catch (e) {
-        console.error('toggle_window_picker_window failed', e);
-        showShareToast("Couldn't open the share picker window. Relaunch Petal and try again.");
+        console.error('native share selection failed', e);
+        showShareToast(typeof e === 'string' ? e : "Couldn't open the share picker window. Relaunch Petal and try again.");
         return;
       }
     }
@@ -732,6 +745,7 @@
         stateTone={meeting.galleryStateTone}
         bind:expanded={pill.expanded}
         onControl={handleControl}
+        onChangeShare={hasTauri && isLinux() ? () => void openSharePicker(true) : undefined}
         {inviteAriaLabel}
         {inviteTooltip}
         onInviteLinkCopy={copyInviteLink}

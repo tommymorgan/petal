@@ -195,7 +195,15 @@ pub mod video_color;
 #[cfg(target_os = "linux")]
 mod linux_capabilities;
 #[cfg(target_os = "linux")]
+mod linux_prerequisites;
+#[cfg(target_os = "linux")]
 mod linux_startup;
+#[cfg(target_os = "linux")]
+mod linux_share;
+#[cfg(target_os = "linux")]
+mod linux_share_capture;
+#[cfg(target_os = "linux")]
+mod linux_share_portal;
 pub mod rooms;
 #[cfg(target_os = "macos")]
 mod session;

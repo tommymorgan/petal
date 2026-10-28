@@ -116,6 +116,7 @@
      * as read it back. */
     expanded?: boolean;
     onControl?: (icon: ControlIcon) => void;
+    onChangeShare?: () => void;
     /** Public-code disclosure passed from the route; never derive it from the
      * opaque meeting credential inside the presentation layer. */
     inviteAriaLabel?: string;
@@ -173,6 +174,7 @@
     stateTone = 'info',
     expanded = $bindable(true),
     onControl,
+    onChangeShare,
     inviteAriaLabel = 'Copy invite link',
     inviteTooltip = 'Copy invite link',
     onInviteLinkCopy,
@@ -792,6 +794,7 @@
       {stateDetail}
       {stateTone}
       {onControl}
+      {onChangeShare}
       {inviteAriaLabel}
       {inviteTooltip}
       {onInviteLinkCopy}
@@ -975,6 +978,15 @@
             <span class:invite-control-tooltip={icon === 'invite'}>{linuxMeetingLimitation(icon) ?? tooltipFor(icon)}</span>
           </button>
         {/each}
+        {#if sharingActive && onChangeShare}
+          <button type="button" role="menuitem" class="more-item" aria-label="Change monitor" onclick={() => {
+            moreOpen = false;
+            onChangeShare?.();
+          }}>
+            <span class="more-item-icon" aria-hidden="true">{@render menuGlyph('screenshare')}</span>
+            <span>Change monitor</span>
+          </button>
+        {/if}
       </div>
     {/if}
   </div>

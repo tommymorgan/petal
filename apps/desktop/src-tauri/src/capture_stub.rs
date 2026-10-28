@@ -12,11 +12,22 @@ pub type CaptureBufferPool = Arc<Mutex<Vec<Vec<u8>>>>;
 
 pub struct PooledFrameData {
     bytes: Vec<u8>,
+    #[cfg(target_os = "linux")]
+    pool: Option<CaptureBufferPool>,
 }
 
 impl PooledFrameData {
     pub fn from_vec(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            #[cfg(target_os = "linux")]
+            pool: None,
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_pool(bytes: Vec<u8>, pool: CaptureBufferPool) -> Self {
+        Self { bytes, pool: Some(pool) }
     }
 }
 
@@ -31,6 +42,19 @@ impl Deref for PooledFrameData {
 
     fn deref(&self) -> &Self::Target {
         &self.bytes
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PooledFrameData {
+    fn drop(&mut self) {
+        if let Some(pool) = &self.pool {
+            if let Ok(mut pool) = pool.lock() {
+                if pool.len() < 2 {
+                    pool.push(std::mem::take(&mut self.bytes));
+                }
+            }
+        }
     }
 }
 

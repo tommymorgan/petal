@@ -193,12 +193,13 @@ class NativeInput:
 class BrowserActivations:
     """Observe relevant message headers, never desktop message bodies."""
 
-    def __init__(self, address):
+    def __init__(self, address, *, forbid_media=False):
         self.address = address
         self.monitor = None
         self.query = None
         self.pending = queue.SimpleQueue()
         self.sender_pids = {}
+        self.forbid_media = forbid_media
 
     def __enter__(self):
         flags = Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT | Gio.DBusConnectionFlags.MESSAGE_BUS_CONNECTION
@@ -216,7 +217,12 @@ class BrowserActivations:
                             or (interface == "org.freedesktop.Application"
                                 and member in ("Open", "Activate", "ActivateAction"))
                             or (interface == "org.gtk.Actions" and member == "Activate")):
-                        self.pending.put(message.get_sender())
+                        self.pending.put((message.get_sender(), "browser or URI opener"))
+                    if self.forbid_media and interface in (
+                        "org.freedesktop.portal.ScreenCast", "org.freedesktop.portal.Camera",
+                        "org.freedesktop.portal.RemoteDesktop", "org.freedesktop.portal.InputCapture",
+                    ):
+                        self.pending.put((message.get_sender(), "screen/camera/input permission or capture"))
                     # A monitor must not reply to another connection's calls.
                     return None
                 return message
@@ -229,6 +235,11 @@ class BrowserActivations:
                 "type='method_call',interface='org.freedesktop.Application',member='ActivateAction'",
                 "type='method_call',interface='org.gtk.Actions',member='Activate'",
             ]
+            if self.forbid_media:
+                rules.extend(f"type='method_call',interface='{interface}'" for interface in (
+                    "org.freedesktop.portal.ScreenCast", "org.freedesktop.portal.Camera",
+                    "org.freedesktop.portal.RemoteDesktop", "org.freedesktop.portal.InputCapture",
+                ))
             self.monitor.call_sync(
                 "org.freedesktop.DBus", "/org/freedesktop/DBus",
                 "org.freedesktop.DBus.Monitoring", "BecomeMonitor",
@@ -243,7 +254,7 @@ class BrowserActivations:
         assert not self.monitor.is_closed(), "Browser activation monitor disconnected"
         while True:
             try:
-                sender = self.pending.get_nowait()
+                sender, effect = self.pending.get_nowait()
             except queue.Empty:
                 break
             assert sender, "Browser activation request had no attributable sender"
@@ -258,7 +269,8 @@ class BrowserActivations:
                 except GLib.Error:
                     raise AssertionError("Could not attribute a browser activation request during launch") from None
                 self.sender_pids[sender] = reply.unpack()[0]
-            assert self.sender_pids[sender] not in owned_pids, "Owned startup activated a browser or URI opener through the desktop bus"
+            assert self.sender_pids[sender] not in owned_pids, \
+                f"Owned no-activation check requested {effect} through the desktop bus"
 
     def __exit__(self, _kind, _value, _traceback):
         for connection in (self.monitor, self.query):
@@ -337,12 +349,15 @@ class NativeLaunch:
     ENTRY_CONTROLS = ("Meeting name, invite link, or meeting code", "Create/Join", "User profile")
     IDENTITY_FIXTURE = 'Linux <launch> "check" & Δ'
 
-    def __init__(self, executable, timeout, *, backend_url=None, trace_network=False, profile_root=None):
+    def __init__(self, executable, timeout, *, backend_url=None, trace_network=False, profile_root=None,
+                 forbid_media=False, capture_plugin_directory=None):
         self.executable = Path(executable)
         self.timeout = timeout
         self.backend_url = backend_url
         self.trace_network = trace_network
         self.profile_root = profile_root
+        self.forbid_media = forbid_media
+        self.capture_plugin_directory = capture_plugin_directory
         self.desktop = None
         self.process = None
         self.resources = ExitStack()
@@ -370,7 +385,7 @@ class NativeLaunch:
         runtime, wayland, bus = self.desktop
         scratch = self.profile_root if self.profile_root is not None else self.resources.enter_context(launch_scratch())
         home = Path(scratch)
-        self.activations = self.resources.enter_context(BrowserActivations(bus))
+        self.activations = self.resources.enter_context(BrowserActivations(bus, forbid_media=self.forbid_media))
         self.native_input = NativeInput()
         # No inherited platform SDK/signing/test configuration can prepare this
         # launch. Retain only the actual graphical session and isolated profile.
@@ -387,6 +402,12 @@ class NativeLaunch:
         if self.backend_url is not None:
             # Hosted checks select the backend explicitly, never server keys.
             env["PETAL_BACKEND_URL"] = self.backend_url
+        if self.capture_plugin_directory is not None:
+            # Real registry isolation, not a mocked prerequisite result. The
+            # empty-directory witness cannot load installed capture factories.
+            env["GST_PLUGIN_SYSTEM_PATH_1_0"] = str(self.capture_plugin_directory)
+            env["GST_PLUGIN_PATH_1_0"] = str(self.capture_plugin_directory)
+            env["GST_REGISTRY_1_0"] = str(home / "capture-registry.bin")
         self.trace = home / "exec.trace"
         output = self.resources.enter_context((home / "process.log").open("w"))
         self.process = subprocess.Popen(
@@ -415,11 +436,19 @@ class NativeLaunch:
         while time.monotonic() < deadline:
             assert self.process.poll() is None, "Production Linux app exited before room entry appeared"
             current = self.observe_processes()
-            window, visible = controls(current)
-            observed = tuple(sorted(
-                (name, node.get_role_name(), node.get_state_set().contains(Atspi.StateType.SENSITIVE))
-                for name, node in visible.items()
-            ))
+            try:
+                window, visible = controls(current)
+            except GLib.GError as error:
+                stale = (error.message == "The application no longer exists"
+                         or error.message.startswith("No such interface “org.a11y.atspi.Accessible” on object at path "))
+                if error.domain != "atspi_error" or not stale:
+                    raise
+                # Onboarding replaces its accessibility application while this
+                # traversal is in flight. Reobserve within the existing deadline;
+                # the process and real room-entry assertions still must pass.
+                time.sleep(0.2)
+                continue
+            observed = tuple(sorted(visible))
             if observed != last_controls:
                 print(f"Owned control transition: {observed}", flush=True)
                 last_controls = observed

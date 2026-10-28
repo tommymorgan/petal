@@ -2,7 +2,7 @@
 //!
 //! This adapter owns membership and presence; the ordered media tasks attach
 //! microphone, playout and incoming-share resources to this same connection.
-//! Screen/camera publication and remote input remain unavailable on Linux.
+//! Monitor publication attaches to the same connection; camera/input remain unavailable.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -23,6 +23,7 @@ use tauri::Manager;
 struct JoinedRoom {
     record: crate::rooms::RoomRecord,
     connection: Arc<RoomConnection>,
+    generation: RoomGeneration,
     identity: String,
     presence: Arc<crate::presence::PresenceState>,
     receiver: crate::linux_compositor::LinuxReceiveFeed,
@@ -47,6 +48,7 @@ pub struct SessionState {
     desired_mic_muted: AtomicBool,
     camera_intent: AtomicBool,
     camera_healing: AtomicBool,
+    pub(crate) monitor: Arc<crate::linux_share::MonitorOwner>,
 }
 
 impl Default for SessionState {
@@ -61,6 +63,7 @@ impl Default for SessionState {
             desired_mic_muted: AtomicBool::new(true),
             camera_intent: AtomicBool::new(false),
             camera_healing: AtomicBool::new(false),
+            monitor: Arc::new(crate::linux_share::MonitorOwner::default()),
         }
     }
 }
@@ -80,6 +83,7 @@ impl SessionState {
 
     pub(crate) fn invalidate_room_generation(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
+        self.monitor.cancel();
     }
 
     pub(crate) fn is_in_room(&self) -> bool {
@@ -91,6 +95,12 @@ impl SessionState {
             .lock_unpoisoned()
             .as_ref()
             .map(|joined| (joined.connection.clone(), joined.identity.clone()))
+    }
+
+    pub(crate) fn monitor_connection_snapshot(&self) -> Option<(Arc<RoomConnection>, RoomGeneration)> {
+        self.joined.lock_unpoisoned().as_ref()
+            .filter(|joined| joined.generation.is_current())
+            .map(|joined| (joined.connection.clone(), joined.generation.clone()))
     }
 
     pub(crate) fn current_room_record(&self) -> Option<crate::rooms::RoomRecord> {
@@ -110,28 +120,29 @@ impl SessionState {
             .unwrap_or_default()
     }
 
-    pub(crate) fn is_share_active(&self, _window_id: u32) -> bool {
-        false
+    pub(crate) fn is_share_active(&self, window_id: u32) -> bool {
+        self.monitor.frame(window_id).is_some()
     }
 
-    pub(crate) fn is_display_share(&self, _window_id: u32) -> bool {
-        false
+    pub(crate) fn is_display_share(&self, window_id: u32) -> bool {
+        self.is_share_active(window_id)
     }
 
-    pub(crate) fn active_share_frame(&self, _window_id: u32) -> Option<WindowFrame> {
-        None
+    pub(crate) fn active_share_frame(&self, window_id: u32) -> Option<WindowFrame> {
+        self.monitor.frame(window_id)
     }
 
     pub(crate) fn active_share_pid(&self, _window_id: u32) -> Option<i32> {
         None
     }
 
-    pub(crate) fn active_share_source_title(&self, _window_id: u32) -> Option<String> {
-        None
+    pub(crate) fn active_share_source_title(&self, window_id: u32) -> Option<String> {
+        self.is_share_active(window_id).then(|| "Selected monitor".to_string())
     }
 
-    pub(crate) fn shared_window_screen_status(&self, _window_id: u32) -> SharedWindowScreenStatus {
-        SharedWindowScreenStatus::NotShared
+    pub(crate) fn shared_window_screen_status(&self, window_id: u32) -> SharedWindowScreenStatus {
+        self.monitor.frame(window_id).map(SharedWindowScreenStatus::OnScreen)
+            .unwrap_or(SharedWindowScreenStatus::NotShared)
     }
 
     pub(crate) fn remote_control_allowed(&self) -> bool {
@@ -315,6 +326,7 @@ pub(crate) async fn join_room_command(
         *state.joined.lock_unpoisoned() = Some(JoinedRoom {
             record: record.clone(),
             connection: connection.clone(),
+            generation: generation.clone(),
             identity: identity.clone(),
             presence: presence.clone(),
             receiver: receiver.clone(),
@@ -667,6 +679,9 @@ async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: b
             if let Err(error) = joined.connection.room().close().await {
                 log::warn!("linux session: room close failed: {error}");
             }
+        }
+        if let Err(error) = state.monitor.stop(app).await {
+            log::warn!("linux monitor cleanup after room retirement: {error}");
         }
         let _ = tauri::Emitter::emit(
             app,

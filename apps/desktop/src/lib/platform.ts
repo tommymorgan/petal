@@ -27,20 +27,25 @@ export function isMac(ua?: string): boolean {
   return platformKey(ua) === 'macos';
 }
 
-/** Presentation only: native Linux IPC independently refuses these effects. */
+export function isLinux(
+  ua: string = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+): boolean {
+  return /Linux/i.test(ua) && !/Android/i.test(ua);
+}
+
+/** Presentation only: native Linux IPC independently admits completed paths. */
 export function linuxMeetingLimitation(
   action: string,
   ua: string = typeof navigator !== 'undefined' ? navigator.userAgent : ''
 ): string | undefined {
-  if (!hasTauriBridge() || !/Linux/i.test(ua) || /Android/i.test(ua)) return undefined;
+  if (!hasTauriBridge() || !isLinux(ua)) return undefined;
   switch (action) {
     case 'camera':
-      return 'Camera publication is unsupported on Linux (receive-only milestone)';
-    case 'screenshare':
+      return 'Camera publication is unsupported on Linux';
     case 'region':
-      return 'Screen publication is unsupported on Linux (receive-only milestone)';
+      return 'Region sharing is unsupported on Linux';
     case 'remotecontrol':
-      return 'Remote control requests, grants, input sending and replay are unsupported on Linux (receive-only milestone)';
+      return 'Remote control requests, grants, input sending and replay are unsupported on Linux';
     default:
       return undefined;
   }
