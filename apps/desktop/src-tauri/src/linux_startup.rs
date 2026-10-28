@@ -75,6 +75,7 @@ pub(crate) fn run() {
                 crate::session::leave_room_command,
                 crate::session::current_room,
                 crate::session::room_presence,
+                crate::linux_compositor::compositor_list_windows,
                 crate::session::set_display_name,
                 crate::menubar::get_menubar_state,
                 crate::transport::audio::list_audio_devices,

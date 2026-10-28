@@ -18,7 +18,7 @@ A working build is not acceptance. Build and launch the executable in this compu
 
 **Global acceptance environment**: a real Tommy-owned stateless Petal backend and official non-development LiveKit service run on this workstation and are reachable from both native clients over trusted TLS. Linux and the released Windows client are explicitly configured for that same service; server API secrets stay on the backend/LiveKit service, never either client. The bounded placement is recorded in ADR 0001. No paid signup, public firewall/router/DNS change, or cloud deployment was used. “Hosted” in the preserved scenarios denotes this explicitly configured real service, not an upstream-only dependency. Task 1.3's preserved scenario describes membership after both peers are configured; it does not prohibit the accepted one-time Windows service configuration.
 
-**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Five scenarios are built locally and twelve remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof on the same date independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, and same-profile URL-only configuration recovery. Native media acceptance remains pending.
+**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Six scenarios are built locally and eleven remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof on the same date independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, same-profile URL-only configuration recovery and Task 2.1's changing native share with independent desktop movement/resize. Source fidelity, audio and later lifecycle acceptance remain pending.
 
 ## Slice 1: Enter a hosted room from the native Linux app
 
@@ -169,12 +169,15 @@ Scenario: Missing hosted configuration never falls back silently
 <!-- estimate: ~1000 reviewable lines | feature-files: apps/desktop/features/linux-remote-windows.feature | demoable: yes -->
 
 **Soft-cap flag**: low-confidence estimate; one scenario, preserved atomically.
+> Depends on: Task 1.4.
+> Shippable state: Linux can receive a real Windows window share into one independently managed native window while existing membership, Leave and unsupported-publication boundaries remain intact; audio is still unavailable and is not needed to make this receive-only window usable.
+> Boundary verification: at the Task 2.1 head with no successors, publish the actual safe Windows editor through released Petal, observe continuing editor-counter pixels in exactly one Linux native window, move and resize it through desktop controls without changing the main window geometry, then Leave and confirm membership and the remote window are gone.
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: apps/desktop/features/linux-remote-windows.feature::Receive a movable and resizable native share from the Windows peer
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario Outline: Receive a movable and resizable native share from the Windows peer
   Given Linux and a native <peer> client are in hosted room abc-defg-hjk
@@ -189,6 +192,8 @@ Scenario Outline: Receive a movable and resizable native share from the Windows 
     | peer    |
     | Windows |
 ```
+
+> Verified locally on 2026-10-27: actual released Windows native share, continuing editor-counter pixels before and after normal OS Move/Resize, compositor-observed remote movement with unchanged meeting position/size, and normal Leave removing membership and the remote window before process teardown. Desktop observation was explicitly authorized; a non-resizable production mutant was rejected by the complete living outline. No audio or later task is accepted by this boundary.
 
 ### Task 2.2: Preserve source geometry and text
 <!-- estimate: ~300 reviewable lines | feature-files: apps/desktop/features/linux-remote-windows.feature | demoable: yes -->

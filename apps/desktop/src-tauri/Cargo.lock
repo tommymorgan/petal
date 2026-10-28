@@ -1397,6 +1397,7 @@ dependencies = [
  "futures",
  "futures-util",
  "getrandom 0.4.3",
+ "gtk",
  "image",
  "libc",
  "livekit",

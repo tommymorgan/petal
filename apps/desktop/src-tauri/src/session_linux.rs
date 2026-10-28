@@ -21,6 +21,7 @@ struct JoinedRoom {
     connection: Arc<RoomConnection>,
     identity: String,
     presence: Arc<crate::presence::PresenceState>,
+    receiver: crate::linux_compositor::LinuxReceiveFeed,
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum SharedWindowScreenStatus {
@@ -74,6 +75,12 @@ impl SessionState {
             .lock_unpoisoned()
             .as_ref()
             .map(|joined| joined.record.clone())
+    }
+
+    pub(crate) fn remote_window_summaries(&self) -> Vec<crate::linux_compositor::RemoteWindowSummary> {
+        self.joined.lock_unpoisoned().as_ref()
+            .map(|joined| joined.receiver.summaries())
+            .unwrap_or_default()
     }
 
     pub(crate) fn is_share_active(&self, _window_id: u32) -> bool {
@@ -228,16 +235,26 @@ pub(crate) async fn join_room_command(
     let record = connected.room_record;
     let connection = connected.room_connection;
     let presence = Arc::new(crate::presence::PresenceState::default());
-    // Consume the original connect-time queue, including an early disconnect.
-    // There is no compositor or resilience owner on Linux at this task boundary.
+    // The same original connect-time queue serves native media and disconnect.
     let events = connection.take_compositor_events();
     connection.discard_resilience_events();
+    let receiver = match crate::linux_compositor::LinuxReceiveFeed::new(
+        &app, generation.clone(), identity.clone(),
+    ) {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            state.invalidate_room_generation();
+            connection.room().close().await.ok();
+            return Err(crate::meeting_core::RoomJoinError::RoomConnect(error.to_string()));
+        }
+    };
     {
         *state.joined.lock_unpoisoned() = Some(JoinedRoom {
             record: record.clone(),
             connection: connection.clone(),
             identity: identity.clone(),
             presence: presence.clone(),
+            receiver: receiver.clone(),
         });
     }
     crate::presence::start_for_room(
@@ -254,7 +271,13 @@ pub(crate) async fn join_room_command(
         let connection = connection.clone();
         let generation = generation.clone();
         tauri::async_runtime::spawn(async move {
-            while let Some(event) = events.recv().await {
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = receiver.cancelled() => break,
+                    event = events.recv() => event,
+                };
+                let Some(event) = event else { break };
                 if !generation.is_current() {
                     break;
                 }
@@ -273,7 +296,9 @@ pub(crate) async fn join_room_command(
                     }
                     break;
                 }
+                receiver.handle_event(event);
             }
+            receiver.stop();
         });
     }
     match connection
@@ -333,6 +358,7 @@ async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: b
     crate::ai_chat::room_auth::forget();
     let joined = state.joined.lock_unpoisoned().take();
     if let Some(joined) = joined {
+        joined.receiver.stop();
         if close {
             if let Err(error) = joined.connection.room().close().await {
                 log::warn!("linux session: room close failed: {error}");

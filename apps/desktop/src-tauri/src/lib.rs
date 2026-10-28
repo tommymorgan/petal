@@ -126,6 +126,8 @@ pub mod logging;
 mod main_window;
 mod meeting_core;
 mod menubar;
+#[cfg(target_os = "linux")]
+mod linux_compositor;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos_screen_audio;
 pub(crate) mod screen_audio;

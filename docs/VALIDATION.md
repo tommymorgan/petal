@@ -431,9 +431,10 @@ the corrected join. The strict missing-configuration scenario also passed:
 zero owned IPv4/IPv6 join destinations before a URL-only restart preserving
 the same profile and identity, followed by Windows-room membership and Leave.
 Both clients used explicit backend configuration without server API secrets.
-The real stack's trusted TLS and native membership are now exercised; audio
-and incoming-share acceptance remain unverified. Earlier upstream investigation
-made no mutation and is not being relabeled as owned-stack proof.
+Those Task 1.4 checks exercised trusted TLS and native membership, not audio
+or incoming-share acceptance. Task 2.1's later incoming-window evidence is
+recorded below. Earlier upstream investigation made no mutation and is not
+being relabeled as owned-stack proof.
 
 The final Task 1.4 desktop integration gate passed 984 tests plus 96 harness
 tests, with one Windows-only integration skip. Panel-close validation passed.
@@ -441,6 +442,59 @@ Svelte checked 613 files with zero errors and the existing `RoomRow.svelte`
 accessibility warning. The frontend and native executable rebuilt successfully.
 Rust library and Clippy results above are retained earlier checks; they were
 not rerun for the later one-line status-phrase classification fix.
+
+### Native incoming-window development checks
+
+The native receiver consumes the original room connection's video events and
+renders an incoming window through GTK3/Cairo, independently of the meeting
+WebView. No browser media path or second room connection is used. The complete
+Task 2.1 outline passed locally on 2026-10-27 with the released Windows peer.
+
+On 2026-10-27, the released Windows artifact shared a real, non-sensitive
+Notepad document whose counter changed in the editor once per second. Its
+virtual-machine hardware encoder initially reported
+`WEBRTC_VIDEO_CODEC_UNINITIALIZED`; the existing release-supported
+`PETAL_FORCE_SOFTWARE_ENCODE=1` override selected OpenH264 without changing
+the artifact or the H264 codec. Actual Linux decoding and compositor pixels
+then showed the editor and three increasing counter values in exactly one
+native GTK window. Normal Leave cleared membership and removed that window.
+
+The final post-review executable repeated that pixel/Leave smoke successfully.
+Rust library checks passed 1,332 tests (two ignored); the new compositor's two
+focused tests and formatting check passed. Clippy completed with existing
+warnings. Frontend checks passed 984 and 96 tests (one Windows-only skip);
+Svelte reported zero errors and one existing accessibility warning.
+
+`scripts/check-linux-receive.py` observes received pixels with Mutter's
+window-only ScreenCast/PipeWire path. Full geometry acceptance additionally
+requires explicit human authorization and `--observe-desktop`: it briefly
+captures the monitor, including other visible windows, and keeps the evidence
+in a private directory. It never acquires a privileged screenshot bus name.
+Unique owned-client pixel patches locate both native windows in actual desktop
+pixels; GTK's fabricated Wayland screen origin is never used as position proof.
+The meeting is arranged separately before the measurement baseline.
+
+| Observation | Remote visible origin | Remote native allocation | Meeting visible origin | Meeting native allocation |
+|---|---|---|---|---|
+| Baseline | (1446, 260) | 1000 × 641 | (914, 216) | 504 × 818 |
+| Normal desktop Move | (1486, 300) | 1000 × 641 | (914, 216) | 504 × 818 |
+| Normal desktop Resize | (1486, 300) | 1030 × 671 | (914, 216) | 504 × 818 |
+
+Changing editor-counter pixels remained observable after resizing. Normal
+Leave cleared membership and removed the received window. An unrelated
+desktop authorization modal had blocked earlier keyboard window-manager
+operations; cancelling its request without approving privileges restored
+actual resize behavior in the owned GTK fixture.
+
+A disposable, byte-verified copy rejected both erased converted pixels and a
+suppressed original room event feed at the corresponding pixel/window
+assertions. The candidate source and executable hashes were unchanged by those
+mutations. The full desktop-observed outline also rejected a native production
+mutation that made the received GTK window non-resizable, specifically at the
+unchanged native-allocation assertion; the current executable then passed the
+complete living outline again, including remote-window removal before process
+teardown. Audio, acoustic AEC and later lifecycle scenarios remain separate
+gates; Task 2.1 is not a completed receive-and-conversation milestone.
 
 ## Rules — each traceable to a real incident
 
