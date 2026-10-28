@@ -195,6 +195,11 @@ impl LinuxReceiveFeed {
                 if let Some(previous) = self.slots.lock_unpoisoned().insert(key, slot.clone()) {
                     previous.stop();
                 }
+                log::info!(
+                    "linux incoming subscribed window_id={} sid={}",
+                    window_id,
+                    slot.sid
+                );
                 // Both controls are required for simulcast: the quality request
                 // alone can leave a subscription on the tiny editor layer.
                 publication.set_video_quality(VideoQuality::High);
@@ -252,6 +257,11 @@ impl LinuxReceiveFeed {
                     self.remove_if_sid(
                         &(participant.identity().to_string(), id),
                         &publication.sid().to_string(),
+                    );
+                    log::info!(
+                        "linux incoming unpublished window_id={} sid={}",
+                        id,
+                        publication.sid()
                     );
                 }
             }

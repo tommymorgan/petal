@@ -545,6 +545,70 @@ and the panel-close check, using the existing isolated Playwright compatibility
 runtime. A first invocation without that runtime failed WebKit's host-library
 prerequisite; no host libraries were installed and no validation was bypassed.
 
+### Native replacement publication and late retirement
+
+For Task 2.3 only, Tommy authorized the Windows-only
+`windows_wgc_race_publisher` example as an acceptance fixture. It captures the
+actual selected Notepad HWND through WGC, uses normal backend admission and
+the same non-development LiveKit service, and publishes two distinct track
+SIDs with the same share name. It feeds real fresh source frames to B while A
+remains published; only an explicit later command unpublishes A. No receiver
+event injection, generated media, browser peer or server secret is involved.
+The released Windows app remains the final milestone compatibility peer.
+
+Build the example with `cargo build --locked --target
+x86_64-pc-windows-msvc --example windows_wgc_race_publisher`. On Windows,
+provide the explicit backend URL, human 3-4-3 room code, decimal source HWND
+and an initially empty UTF-8 control file. The example uses the existing room
+credential conversion and generated-participant identity convention.
+`scripts/windows-receive-editor.ps1 -ReplacementPhaseFile <path>` updates the
+real editor with `Publication A` or `Replacement B` and a changing counter;
+the default and geometry-fidelity modes are unchanged.
+
+Run `scripts/check-linux-receive-replacement.py <linux-executable>
+--backend-url <url> --room-code <code> --evidence-dir <private-directory>
+--feature apps/desktop/features/linux-remote-windows.feature`. At
+`REPLACEMENT_PUBLICATION_REQUIRED`, append `publish-b` and a newline to the
+publisher control file, and write `b` to the editor phase file. Wait for
+`OLD_PUBLICATION_RETIREMENT_REQUIRED` before appending `retire-a` and a newline.
+Append `stop` and a newline after verification to close the owned publisher.
+Its five-minute lifetime is an additional cleanup bound, not media evidence.
+
+The actual original Linux room connection logged A subscription, B
+subscription for the same share, then A unpublication. Window-only compositor
+pixels showed three increasing A counters, three increasing B counters before
+A teardown and three newer B counters afterward. The original native remote
+and meeting windows remained the same objects. Normal Leave cleared
+membership and removed the remote window. The candidate witness exited zero.
+
+A separate plain-copy mutation removed only the publication-SID retirement
+guard. The same real WGC race established A and B, then rejected the missing
+native window immediately after A retirement, exiting one. Its normal Leave
+also cleared membership. Mutter automatically destroys a window-capture
+session when that window closes; capture cleanup accepts that specific
+already-destroyed-session error and still reports other failures.
+
+The bounded basic review also exposed a source-selection bug in the new
+publisher: a hidden selected HWND could be replaced by an eligible sibling
+with the same process and title. Two owned real Windows forms reproduced
+that substitution before the fix. The publisher now checks the unfiltered
+top-level HWND set before and after picker resolution and refuses ambiguous
+or ineligible selections. The same hidden/sibling witness then exited one
+before capture; scoped re-review found the corrected contract satisfied.
+
+After that correction, the byte-verified Windows executable and original
+Linux receiver passed the exact living `--feature` race and normal Leave
+again. Serial Rust library tests passed 1,332 with two ignored; Linux and
+Windows Clippy and changed-module rustfmt completed with existing warnings.
+Svelte checked 613 files with zero errors and one existing warning. The
+frontend gate passed 984 tests plus 96 harness tests, with one Windows-only
+skip and a passing panel-close check in the existing isolated runtime.
+
+The production SID guard already satisfied this contract; the acceptance
+fixture and witness establish it rather than claiming a newly repaired race.
+This does not establish acoustic AEC, audio, reconnect or later lifecycle
+acceptance.
+
 ## Rules — each traceable to a real incident
 
 1. **A harness may not decide a question above its layer.** The synthetic

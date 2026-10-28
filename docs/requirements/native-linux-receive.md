@@ -2,7 +2,7 @@
 
 > Source: Tommy's planning interview, 2026-10-14, and accepted peer/hosting changes, 2026-10-27.
 > Status: accepted product boundary; detailed behaviors below operationalize that boundary for planning. No pre-existing PRD was supplied or found.
-> Implementation status: seven scenarios built locally, ten TODO. Trusted TLS, mutual native membership, join/configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's aspect, source-size and one-to-one text fidelity now pass on the selected owned stack. Earlier upstream-hosted observations remain historical. Audio, later lifecycle acceptance and a fresh independent fidelity audit remain pending.
+> Implementation status: eight scenarios built locally, nine TODO. Trusted TLS, mutual native membership, join/configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, Task 2.2's aspect, source-size and one-to-one text fidelity, and Task 2.3's authorized actual-WGC replacement/late-retirement race pass on the selected owned stack. Earlier upstream-hosted observations remain historical. Audio, later lifecycle acceptance and a fresh independent fidelity audit remain pending.
 
 ## 1. Outcome and accepted boundary
 
@@ -44,5 +44,13 @@ No outgoing Linux screen capture, local camera publication, or remote control. N
 Run the Linux executable in the actual graphical Wayland session, not merely in a headless test. Deploy a real Tommy-owned stateless Petal backend and LiveKit service and establish reachability from Linux and the released Windows native client before acceptance. Configure both clients explicitly for that same service; do not change global source-build defaults or install server API secrets on either client. The backend holds the LiveKit server credentials and issues scoped client tokens. Self-hosting selection is not evidence of deployment, reachability, or acceptance. Keep room codes, identities, credentials, and personal audio/video out of committed evidence.
 
 For image validation share a non-sensitive editor/test-pattern window with a visible changing counter, corner markers, and known text. Observe receiver pixels, aspect, movement and resize directly. For audio, both ends listen to real speech including overlap with the Linux speakers active; a processing-option flag, synthetic tone, energy counter, or video recording with no audible track is insufficient evidence for AC4. The five-minute duration is a sustained-use observation, not a new latency/performance guarantee.
+
+For E4/Task 2.3 only, Tommy authorized a dedicated Windows native acceptance
+publisher on 2026-10-28. It must capture actual source HWND pixels through WGC,
+use the same real owned backend and LiveKit service, publish B for the same
+share before explicitly retiring A, and exercise the unchanged production
+Linux event and rendering paths. This is not a synthetic-media exception and
+does not replace the released Windows native client for final compatibility,
+audio or subsequent lifecycle acceptance.
 
 Record exact app revisions, service environment, peer platform, device names privately, and pass/fail for each exercised behavior. Peer hardware and a listening partner are prerequisites for final acoustic acceptance; unavailable hardware means unvalidated, not passed. An accessible room and an isolated identity actually denied by the owned service are prerequisites for join/recovery evidence; an unknown valid-format room code is not a refusal fixture. Intermediate local/synthetic checks may unblock implementation but cannot replace the owned-stack native call or real speaker/microphone observations. Mocks, dev-server token minting, and processing-option flags do not establish media acceptance. Preserve successful upstream-hosted observations as historical evidence under that environment; do not relabel them as owned-stack proof or reopen completed scenarios solely for this scope change. See [VALIDATION.md](../VALIDATION.md) for the distinction between layers of evidence.

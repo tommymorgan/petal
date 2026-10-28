@@ -18,7 +18,7 @@ A working build is not acceptance. Build and launch the executable in this compu
 
 **Global acceptance environment**: a real Tommy-owned stateless Petal backend and official non-development LiveKit service run on this workstation and are reachable from both native clients over trusted TLS. Linux and the released Windows client are explicitly configured for that same service; server API secrets stay on the backend/LiveKit service, never either client. The bounded placement is recorded in ADR 0001. No paid signup, public firewall/router/DNS change, or cloud deployment was used. “Hosted” in the preserved scenarios denotes this explicitly configured real service, not an upstream-only dependency. Task 1.3's preserved scenario describes membership after both peers are configured; it does not prohibit the accepted one-time Windows service configuration.
 
-**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Seven scenarios are built locally and ten remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof on the same date independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, same-profile URL-only configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's source aspect, letterboxing and native-pixel text after source-size changes. Audio and later lifecycle acceptance remain pending.
+**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Eight scenarios are built locally and nine remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, same-profile URL-only configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's source aspect, letterboxing and native-pixel text after source-size changes. Task 2.3 additionally passes the actual WGC B-before-late-A race under the narrow authorized Windows publisher exception. Audio and later lifecycle acceptance remain pending.
 
 ## Slice 1: Enter a hosted room from the native Linux app
 
@@ -228,11 +228,11 @@ Scenario: Preserve source aspect and readable text across size changes
 ### Task 2.3: Track share replacement and retirement
 <!-- estimate: ~220 reviewable lines | feature-files: apps/desktop/features/linux-remote-windows.feature | demoable: yes -->
 
-<!-- TODO -->
+<!-- DONE -->
 # Living: apps/desktop/features/linux-remote-windows.feature::Late teardown cannot retire a replacement share
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Late teardown cannot retire a replacement share
   Given Linux is displaying a peer's share publication A
@@ -242,6 +242,12 @@ Scenario: Late teardown cannot retire a replacement share
   And it continues showing publication B's current changing content
   And publication A cannot replace or close that presentation
 ```
+
+> Acceptance-fixture decision on 2026-10-28: the released Windows sender does not republish on resize; normal stop/start changes share identity, and the bounded Windows-only NIC interruption retired A before any B. Tommy authorized a dedicated Windows native publisher for this task only: actual selected-HWND WGC pixels, the same real owned backend and LiveKit, and explicit B publication before A retirement. The released Windows app remains the final compatibility peer; no browser, synthetic media or receiver lifecycle injection is permitted.
+
+> Boundary proof on 2026-10-28: the original Linux room connection subscribed A, then distinct-SID B for the same share, then received A's actual delayed unpublication. The exact complete living scenario observed three increasing source counters in A, three in B before teardown, and three newer B counters afterward, with the same one native remote window and unchanged meeting object. Normal Leave cleared membership and removed the remote window. An isolated copy with only the publication-SID guard removed established A and B, then failed at the missing native window after A retirement; normal Leave still completed. The production guard already worked and remains unchanged.
+
+> One bounded basic review found an exact-HWND selection defect in the new fixture. A real hidden-selected/visible-sibling Windows witness reproduced capture of the unselected same-process/title sibling. The fixture now checks the unfiltered native HWND set before and after picker resolution and fails closed on ambiguity; the same actual witness then exited one before capture. Scoped re-review closed the finding. The corrected Windows binary passed byte-verified VM transfer and the full native `--feature` race again. Windows and Linux builds, serial library tests (1,332 passed, two ignored), Linux and Windows Clippy, changed-module rustfmt, Svelte (zero errors, one existing warning), and frontend checks (984 plus 96 passed, one Windows-only skip and panel-close passed) completed. Existing warnings remain; no audio or later lifecycle claim is made.
 
 ## Slice 3: Converse using native speakers and microphone
 

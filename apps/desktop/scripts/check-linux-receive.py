@@ -230,6 +230,11 @@ class WindowPixels:
             if self.session is not None:
                 session, self.session = self.session, None
                 self.call(session, self.SERVICE + ".Session", "Stop")
+        except GLib.Error as error:
+            # Mutter already destroys this session when its captured window
+            # closes. Other Stop failures still indicate incomplete cleanup.
+            if not error.matches(Gio.dbus_error_quark(), Gio.DBusError.UNKNOWN_METHOD):
+                raise
         finally:
             if not self.bus.is_closed():
                 self.bus.close_sync(None)

@@ -8,6 +8,17 @@ The target is the inspected x86_64 Arch-family Wayland desktop and its actual au
 
 Previously completed scenarios and upstream-hosted runtime observations retain their original status and environment. They are historical implementation evidence, not owned-stack acceptance proof. Separate 2026-10-27 owned-stack checks now establish trusted TLS, Windows and Linux mutual membership, actual refused-identity recovery, malformed-invite correction, same-profile URL-only configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's source aspect, letterboxing and one-to-one text fidelity. Native audio and later lifecycle acceptance remain pending.
 
+On 2026-10-28 Tommy authorized one narrow acceptance-fixture exception for
+Task 2.3: a dedicated Windows native publisher captures real selected-HWND
+pixels through WGC and explicitly publishes B before retiring A, on the same
+owned backend and LiveKit service. Released Windows resize did not republish,
+stop/start changed share identity, and a bounded NIC interruption retired A
+before any B. The dedicated publisher establishes the required event order
+without changing the Linux receiver or injecting lifecycle events. The actual
+native race passed, and an isolated receiver without the SID guard failed
+after late A retirement. The released Windows app remains the final peer;
+this exception grants no synthetic-media, audio or later lifecycle acceptance.
+
 ## Acceptance service placement
 
 The bounded acceptance stack runs on this workstation: the unmodified `backend/api/` handlers use Vercel's local handler runtime, and the official LiveKit 1.13.11 standalone binary runs with generated server-only credentials and a non-dev configuration. Vercel's local runtime is a handler host, not a replacement token service; clients still use the real backend and LiveKit path with a non-empty backend URL.

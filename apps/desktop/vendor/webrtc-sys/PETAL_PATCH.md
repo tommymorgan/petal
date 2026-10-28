@@ -224,3 +224,16 @@ each function in `@autoreleasepool` (these run on pool-less Rust threads --
 the same hazard as this file's sibling `objc_video_frame_buffer.mm` #886
 patch). Verify with `leaks <pid>` after several share/unshare cycles: the
 `ObjCVideoEncoderFactory` roots must not accumulate.
+
+## Windows MSVC: match the generated `PeerContext` struct declaration
+
+`include/livekit/jsep.h` now forward-declares `PeerContext` with `struct`,
+matching the Rust CXX bridge and its generated C++ definition. Declaring it
+as `class` produced different MSVC-mangled parameter types across translation
+units: the native SDP observer constructors and `rust::Box<PeerContext>::drop`
+were unresolved when linking the real Windows WGC replacement publisher.
+
+The one-keyword change fixes the declaration mismatch without changing layout,
+ownership or runtime behavior. Verified by linking the Windows MSVC example
+and the Linux desktop binary, then running actual Windows WGC A/B publications
+through the self-hosted backend and LiveKit to the native Linux receiver.

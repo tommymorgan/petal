@@ -24,3 +24,11 @@ Feature: Native Linux remote windows
     And all four corner markers remain visible
     When I view the received image at one-to-one image scale
     Then "Petal Linux 67890" is readable rather than the previous text
+
+  Scenario: Late teardown cannot retire a replacement share
+    Given Linux is displaying a peer's share publication A
+    When replacement publication B for that same share arrives showing "Replacement B"
+    And publication A's delayed teardown arrives afterward
+    Then exactly one remote window remains open for the share
+    And it continues showing publication B's current changing content
+    And publication A cannot replace or close that presentation

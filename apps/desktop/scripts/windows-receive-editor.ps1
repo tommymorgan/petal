@@ -18,16 +18,23 @@ Only this mode requests 960x560 / 800x650 and places four corner labels using th
 native formatting rectangle and measured editor font. Each phase emits public
 FIDELITY_SOURCE_METADATA JSON: width/height are measured DWM visible frame pixels,
 not the outer window request or an assumption about invisible borders.
+Optional -ReplacementPhaseFile selects the Task2.3 source label: an absent file
+means a; its trimmed value must be a or b. Both phases keep the real editor's
+counter changing. This mode cannot be combined with -GeometryPhaseFile.
 #>
 param(
   [ValidateRange(30, 3600)] [int]$DurationSeconds = 600,
   [ValidateRange(500, 5000)] [int]$IntervalMilliseconds = 1000,
   [int]$ProcessId = 0,
   [long]$WindowHandle = 0,
-  [string]$GeometryPhaseFile = ''
+  [string]$GeometryPhaseFile = '',
+  [string]$ReplacementPhaseFile = ''
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($GeometryPhaseFile -and $ReplacementPhaseFile) {
+  throw 'Select either GeometryPhaseFile or ReplacementPhaseFile, not both'
+}
 
 Add-Type -TypeDefinition @'
 using System;
@@ -397,6 +404,17 @@ while ([DateTime]::UtcNow -lt $until) {
     Start-Sleep -Milliseconds 1000
   } else {
     $text = "PETAL SAFE EDITOR`r`n`r`nPETAL RECEIVE COUNTER $counter`r`n`r`nThis is a non-sensitive Windows Notepad acceptance document.`r`nThe counter changes in the real editor, not in generated video.`r`n"
+    if ($ReplacementPhaseFile) {
+      $phase = 'a'
+      if (Test-Path -LiteralPath $ReplacementPhaseFile -PathType Leaf) {
+        $phase = [IO.File]::ReadAllText($ReplacementPhaseFile).Trim()
+      }
+      if ($phase -cne 'a' -and $phase -cne 'b') {
+        throw 'ReplacementPhaseFile must contain exactly a or b'
+      }
+      $label = if ($phase -ceq 'b') { 'Replacement B' } else { 'Publication A' }
+      $text = $text.Replace('PETAL SAFE EDITOR', "PETAL SAFE EDITOR`r`n$label")
+    }
     [PetalReceiveEditor]::Update($edit, [uint32]$editor.Id, $text)
     Start-Sleep -Milliseconds $IntervalMilliseconds
   }
