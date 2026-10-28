@@ -15,7 +15,7 @@ Petal has one meeting vocabulary: [Petal meetings](CONTEXT.md). This map describ
 - Native desktop app ↔ owned LiveKit service: publish microphone audio, receive remote audio and the supported incoming share, exchange meeting presence. The real backend and LiveKit must be deployed and reachable from both clients; a mock or dev-server path is not media acceptance.
 - Native sharer → Linux receiver: a share becomes a remote window; unpublishing or leaving retires that presentation.
 
-Tommy selected self-hosted acceptance on 2026-10-27, replacing the upstream-hosted-room requirement and removing upstream operator access as a prerequisite. Earlier upstream-hosted runtime observations remain historical evidence. Separate owned-stack checks now prove trusted TLS, native Linux/Windows mutual membership, join/configuration recovery and Task 2.1's changing native share with independent desktop movement/resize. Source fidelity, physical audio and later lifecycle acceptance remain pending.
+Tommy selected self-hosted acceptance on 2026-10-27, replacing the upstream-hosted-room requirement and removing upstream operator access as a prerequisite. Earlier upstream-hosted runtime observations remain historical evidence. Separate owned-stack checks now prove trusted TLS, native Linux/Windows mutual membership, join/configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's source aspect, letterboxing and one-to-one text fidelity. Physical audio and later lifecycle acceptance remain pending.
 
 ## Canonical planning sources
 

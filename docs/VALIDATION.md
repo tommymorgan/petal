@@ -496,6 +496,55 @@ complete living outline again, including remote-window removal before process
 teardown. Audio, acoustic AEC and later lifecycle scenarios remain separate
 gates; Task 2.1 is not a completed receive-and-conversation milestone.
 
+### Native incoming-image fidelity
+
+The complete Task 2.2 scenario passed against the same released Windows peer
+and owned backend/LiveKit stack. `scripts/windows-receive-editor.ps1` updates
+the same real Notepad control with known text and four corner labels. Its
+optional `-GeometryPhaseFile` switches between two actual source sizes; native
+DWM and editor-coordinate measurements establish the source geometry without
+changing Notepad preferences or generating video.
+
+| Phase | Measured Windows DWM frame | Actual decoded pixels | Native DrawingArea |
+|---|---|---|---|
+| Initial source after receiver resize | 950 × 555 | 948 × 552 | 1000 × 900 |
+| Changed source at one-to-one scale | 790 × 645 | 788 × 644 | 788 × 644 |
+
+`scripts/check-linux-receive-fidelity.py` keeps the original native room
+connection, uses normal OS resizing, and observes window-only compositor
+pixels. Both source aspects retain all four corners and centered black
+letterboxes at the tall allocation. The source changes from `Petal Linux 12345`
+to `Petal Linux 67890`; native-resolution OCR reads the new text, not the old,
+after contraction to the exact decoded dimensions. Normal Leave clears room
+membership and removes the native remote window before process teardown.
+
+The existing read-only `compositor_list_windows` result reports Linux
+`decodedSize`: null before the first accepted frame, then the actual source
+dimensions accepted by Cairo. This is distinct from DWM border geometry and
+the receiver's window allocation. A black source-border row makes the lit
+content bounds one row shorter than the full frame; it is not a scale error.
+The one-to-one gate requires exact decoded/allocation equality and scale 1.0,
+not equality between full-frame dimensions and a nonblack pixel bounding box.
+
+An independent plain-copy mutation changed the production Cairo fit from
+minimum scale to maximum scale. The same witness joined the real room and
+received the source, then rejected the cropped image after receiver resizing.
+The mutated process also completed normal Leave. Only the copy was mutated;
+its source was restored afterward. The current candidate then passed every
+scenario clause, including the source transition, native-pixel text and Leave.
+This does not establish audio, acoustic AEC or later lifecycle acceptance.
+
+The post-review executable also passed the exact complete living scenario.
+The changed Rust module passed rustfmt; serial library tests passed 1,332
+with two ignored, and Clippy completed with 63 existing warnings. The initial
+parallel library run exposed an unchanged process-wide descriptor-count test
+race; serial execution avoids concurrent descriptor changes. Svelte checked
+613 files with zero errors and one existing accessibility warning. The full
+frontend gate passed 984 tests plus 96 harness tests, one Windows-only skip
+and the panel-close check, using the existing isolated Playwright compatibility
+runtime. A first invocation without that runtime failed WebKit's host-library
+prerequisite; no host libraries were installed and no validation was bypassed.
+
 ## Rules — each traceable to a real incident
 
 1. **A harness may not decide a question above its layer.** The synthetic

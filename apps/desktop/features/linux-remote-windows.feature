@@ -12,3 +12,15 @@ Feature: Native Linux remote windows
     Examples:
       | peer    |
       | Windows |
+
+  Scenario: Preserve source aspect and readable text across size changes
+    Given a peer shares an editor window containing "Petal Linux 12345" and four visible corner markers
+    And Linux displays that share in its native remote window
+    When I resize the remote window to a different aspect ratio
+    Then the whole received image remains visible without cropping or stretching
+    And any unused area is letterboxed
+    When the peer changes the source window dimensions and changes the text to "Petal Linux 67890"
+    Then Linux displays the new source aspect ratio without stretching
+    And all four corner markers remain visible
+    When I view the received image at one-to-one image scale
+    Then "Petal Linux 67890" is readable rather than the previous text

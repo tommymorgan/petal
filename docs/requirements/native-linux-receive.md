@@ -2,7 +2,7 @@
 
 > Source: Tommy's planning interview, 2026-10-14, and accepted peer/hosting changes, 2026-10-27.
 > Status: accepted product boundary; detailed behaviors below operationalize that boundary for planning. No pre-existing PRD was supplied or found.
-> Implementation status: six scenarios built locally, eleven TODO. Trusted TLS, mutual native membership, join/configuration recovery and Task 2.1's changing native share with independent desktop movement/resize now pass on the selected owned stack. Earlier upstream-hosted observations remain historical. Source fidelity, audio, later lifecycle acceptance and a fresh independent fidelity audit remain pending.
+> Implementation status: seven scenarios built locally, ten TODO. Trusted TLS, mutual native membership, join/configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's aspect, source-size and one-to-one text fidelity now pass on the selected owned stack. Earlier upstream-hosted observations remain historical. Audio, later lifecycle acceptance and a fresh independent fidelity audit remain pending.
 
 ## 1. Outcome and accepted boundary
 

@@ -754,6 +754,8 @@ export interface RemoteWindowSummary {
   ownerDisplayName: string;
   sourceTitle: string;
   hidden: boolean;
+  /** Linux: decoded source pixels accepted by the native renderer; null before its first frame. */
+  decodedSize?: [number, number] | null;
 }
 
 /** Mirrors `presence::PresenceUpdate` (src-tauri/src/presence.rs). */

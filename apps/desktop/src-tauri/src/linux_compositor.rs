@@ -36,6 +36,8 @@ pub(crate) struct RemoteWindowSummary {
     source_kind: SharedSourceKind,
     share_instance_id: Option<String>,
     content_crop: Option<(f64, f64, f64, f64)>,
+    /// Actual decoded pixels accepted by the native renderer, not window allocation.
+    decoded_size: Option<(u32, u32)>,
 }
 
 struct Pixels {
@@ -184,6 +186,7 @@ impl LinuxReceiveFeed {
                             &metadata, window_id,
                         ),
                         content_crop: None,
+                        decoded_size: None,
                     }),
                     latest: Mutex::new(None),
                     cancel: self.cancel.child_token(),
@@ -386,9 +389,11 @@ fn start_gtk_pump(feed: LinuxReceiveFeed) {
                 let native = windows.get_mut(&slot.key).expect("inserted native window");
                 match pixels.into_surface() {
                     Ok(surface) => {
+                        let decoded_size = (surface.width() as u32, surface.height() as u32);
                         *native.surface.borrow_mut() = Some(surface);
                         native.area.queue_draw();
-                        let summary = slot.summary.lock_unpoisoned();
+                        let mut summary = slot.summary.lock_unpoisoned();
+                        summary.decoded_size = Some(decoded_size);
                         if native.title != summary.source_title {
                             native.title.clone_from(&summary.source_title);
                             native
@@ -483,6 +488,7 @@ mod tests {
                     source_kind: SharedSourceKind::Window,
                     share_instance_id: None,
                     content_crop: None,
+                    decoded_size: None,
                 }),
             })
         };

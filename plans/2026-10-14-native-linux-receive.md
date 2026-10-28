@@ -18,7 +18,7 @@ A working build is not acceptance. Build and launch the executable in this compu
 
 **Global acceptance environment**: a real Tommy-owned stateless Petal backend and official non-development LiveKit service run on this workstation and are reachable from both native clients over trusted TLS. Linux and the released Windows client are explicitly configured for that same service; server API secrets stay on the backend/LiveKit service, never either client. The bounded placement is recorded in ADR 0001. No paid signup, public firewall/router/DNS change, or cloud deployment was used. “Hosted” in the preserved scenarios denotes this explicitly configured real service, not an upstream-only dependency. Task 1.3's preserved scenario describes membership after both peers are configured; it does not prohibit the accepted one-time Windows service configuration.
 
-**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Six scenarios are built locally and eleven remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof on the same date independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, same-profile URL-only configuration recovery and Task 2.1's changing native share with independent desktop movement/resize. Source fidelity, audio and later lifecycle acceptance remain pending.
+**Evidence continuity**: all previously DONE scenario text, living identities and task names remain unchanged. Seven scenarios are built locally and ten remain TODO. The earlier 2026-10-27 Task 1.3 membership and Task 1.4 partial observations remain historical upstream-hosted evidence. New owned-stack proof on the same date independently establishes trusted TLS, released Windows and Linux mutual membership, malformed-input recovery, actual server-refused identity recovery, same-profile URL-only configuration recovery, Task 2.1's changing native share with independent desktop movement/resize, and Task 2.2's source aspect, letterboxing and native-pixel text after source-size changes. Audio and later lifecycle acceptance remain pending.
 
 ## Slice 1: Enter a hosted room from the native Linux app
 
@@ -198,11 +198,15 @@ Scenario Outline: Receive a movable and resizable native share from the Windows 
 ### Task 2.2: Preserve source geometry and text
 <!-- estimate: ~300 reviewable lines | feature-files: apps/desktop/features/linux-remote-windows.feature | demoable: yes -->
 
-<!-- TODO -->
+> Depends on: Task 2.1.
+> Shippable state: The existing native receive window preserves the complete source aspect and black letterboxing across receiver and source size changes, and displays current source text at actual decoded one-to-one scale; Task 2.3 and audio successors are not required for this safe receive-only state.
+> Boundary verification: At the Task 2.2 head with predecessors present and no successors, run check-linux-receive-fidelity.py against the released Windows native peer on the owned backend and LiveKit service; require all four source corners and initial text, normal OS receiver resize with min-fit geometry and black bars, actual peer source dimension/text changes, exact native viewport equality to Cairo-accepted decoded dimensions with scale 1 and current-text OCR, then normal Leave removing membership and the remote window. An isolated production min-to-max scaling mutant must fail this same scenario.
+
+<!-- DONE -->
 # Living: apps/desktop/features/linux-remote-windows.feature::Preserve source aspect and readable text across size changes
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Preserve source aspect and readable text across size changes
   Given a peer shares an editor window containing "Petal Linux 12345" and four visible corner markers
@@ -216,6 +220,10 @@ Scenario: Preserve source aspect and readable text across size changes
   When I view the received image at one-to-one image scale
   Then "Petal Linux 67890" is readable rather than the previous text
 ```
+
+> Verified locally on 2026-10-27 by the parent on the actual released Windows native peer and owned service: the complete staged scenario passed on the original Linux room connection, including normal OS resize to a 1000×900 DrawingArea, source change from the measured initial DWM frame to 790×645 with new text and all four corner markers, centered min-fit geometry and black letterboxes, and normal OS contraction to the actual 788×644 decoded image dimensions. The final native DrawingArea was exactly 788×644 with scale 1; native-pixel OCR read "Petal Linux 67890" rather than the previous text. Normal Leave cleared membership and removed the native remote window. The unchanged production min-scale formula already satisfied the scenario; replacing min with max in an isolated copy caused the complete witness to reject cropped initial text after receiver resize (exit 1), with normal Leave cleanup. The candidate scenario run exited 0. DWM source bounds, decoded image dimensions and nonblack content bounds are distinct; a black source-border row is not a scale discrepancy. No Task 2.3 or audio behavior is accepted by this boundary.
+
+> Final boundary checks on 2026-10-28: the post-review executable passed the exact complete living scenario via `--feature apps/desktop/features/linux-remote-windows.feature`, including source transition, decoded-size one-to-one text and normal Leave. One bounded independent basic review found no demonstrated defects. The changed Rust module passed rustfmt; serial library tests passed 1,332 with two ignored and Clippy completed with existing warnings. Svelte reported zero errors and one existing warning; the retained isolated Playwright runtime passed 984 frontend tests plus 96 harness tests, one Windows-only skip and panel-close. An initial parallel descriptor-count test race and a first frontend invocation missing its established compatibility runtime are documented in `docs/VALIDATION.md`; neither was hidden or patched into this unit.
 
 ### Task 2.3: Track share replacement and retirement
 <!-- estimate: ~220 reviewable lines | feature-files: apps/desktop/features/linux-remote-windows.feature | demoable: yes -->
