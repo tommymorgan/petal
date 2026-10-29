@@ -170,4 +170,40 @@ impl NativeVideoSource {
     pub fn video_resolution(&self) -> VideoResolution {
         self.sys_handle.video_resolution().into()
     }
+
+    /// Update intrinsic source dimensions after adopting a new capture mode.
+    /// Clones share the native source and its coherent resolution snapshot.
+    pub fn set_video_resolution(&self, resolution: VideoResolution) {
+        self.sys_handle
+            .set_video_resolution(&resolution.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloned_sources_observe_coherent_adopted_capture_dimensions() {
+        let source = NativeVideoSource::new(VideoResolution { width: 1280, height: 720 }, true);
+        let reader = source.clone();
+        source.set_video_resolution(VideoResolution { width: 640, height: 480 });
+        let adopted = reader.video_resolution();
+        assert_eq!((adopted.width, adopted.height), (640, 480));
+
+        let writer = source.clone();
+        let thread = std::thread::spawn(move || {
+            for _ in 0..1000 {
+                writer.set_video_resolution(VideoResolution { width: 1280, height: 720 });
+                writer.set_video_resolution(VideoResolution { width: 640, height: 480 });
+            }
+        });
+        for _ in 0..1000 {
+            let size = reader.video_resolution();
+            assert!(matches!((size.width, size.height), (1280, 720) | (640, 480)));
+        }
+        thread.join().unwrap();
+        let adopted = reader.video_resolution();
+        assert_eq!((adopted.width, adopted.height), (640, 480));
+    }
 }

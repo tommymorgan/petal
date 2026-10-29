@@ -10,10 +10,11 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
+#[cfg(test)]
 use std::time::Duration;
 
 use serde::Serialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tokio_util::sync::CancellationToken;
 
 use crate::linux_camera_capture::{CameraCapturePipeline, CameraCaptureStatus};
@@ -28,8 +29,6 @@ use crate::transport::camera::{
 
 /// Preview/publication events for the Settings surface.
 pub(crate) const PREVIEW_STATE_EVENT: &str = "linux-camera-preview-state";
-/// One portal permission dialog is bounded, like the ScreenCast path.
-const PORTAL_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub(crate) enum Permission {
@@ -195,6 +194,20 @@ impl OwnerCore {
         selection
     }
 
+    fn preview_selection(
+        &mut self,
+        device_id: Option<&str>,
+        mode: Option<PreferredCameraMode>,
+    ) -> Result<OwnerSelection, String> {
+        let device = self.find_device(device_id)?;
+        if let Some(selection) = &self.selection {
+            if selection.node == device.node && selection.mode == mode {
+                return Ok(selection.clone());
+            }
+        }
+        Ok(self.begin_selection(device_id, mode))
+    }
+
     /// Whether a capture opened for `generation` still has a consumer.
     fn wants_capture(&self, generation: u64) -> bool {
         self.selection
@@ -203,16 +216,24 @@ impl OwnerCore {
             && (self.publication.is_some() || self.preview.is_some())
     }
 
+    fn validate_selection(
+        &self,
+        generation: u64,
+        node: u32,
+        mode: Option<PreferredCameraMode>,
+    ) -> Result<(), String> {
+        let selection = self.selection.as_ref().ok_or("Camera selection retired")?;
+        if selection.generation != generation || selection.node != node || selection.mode != mode {
+            return Err("Camera selection superseded".to_string());
+        }
+        Ok(())
+    }
+
     /// Register the one low-level capture. A stale generation is rejected
     /// (the caller tears that pipeline down); a duplicate of the serving
     /// capture is accepted while the caller drops the extra pipeline.
     fn capture_started(&mut self, capture: OwnerCapture) -> Result<(), String> {
-        let Some(selection) = self.selection.clone() else {
-            return Err("Camera selection retired".to_string());
-        };
-        if capture.generation != selection.generation || capture.node != selection.node {
-            return Err("Camera selection superseded".to_string());
-        }
+        self.validate_selection(capture.generation, capture.node, capture.mode)?;
         if self.capture.is_some() {
             return Ok(());
         }
@@ -393,6 +414,22 @@ pub(crate) struct OwnerSnapshot {
     last_error: Option<String>,
 }
 
+fn resolve_advertised_mode(
+    supported: &[CameraMode],
+    requested: PreferredCameraMode,
+) -> Option<CameraMode> {
+    if !requested.frame_rate.is_finite() || requested.frame_rate <= 0.0 {
+        return None;
+    }
+    supported.iter().copied().find(|candidate| {
+        candidate.width == requested.width
+            && candidate.height == requested.height
+            && candidate.frame_rate_numerator > 0
+            && candidate.frame_rate_denominator > 0
+            && candidate.frame_rate_numerator as f64 / candidate.frame_rate_denominator as f64
+                == requested.frame_rate
+    })
+}
 /// The application-scoped owner: portal session + registry + one capture.
 pub(crate) struct LinuxCameraOwner {
     core: Mutex<OwnerCore>,
@@ -443,7 +480,12 @@ impl LinuxCameraOwner {
     }
 
     pub(crate) fn set_app(&self, app: &tauri::AppHandle) {
-        *self.app.lock_unpoisoned() = Some(app.clone());
+        let mut installed_app = self.app.lock_unpoisoned();
+        if installed_app.is_some() {
+            return;
+        }
+        *installed_app = Some(app.clone());
+        drop(installed_app);
         let view = self.view.clone();
         let main_app = app.clone();
         let _ = app.run_on_main_thread(move || {
@@ -518,6 +560,17 @@ impl LinuxCameraOwner {
         self: &Arc<Self>,
         app: &tauri::AppHandle,
     ) -> Result<(), String> {
+        self.ensure_access_with_cancel(app, &CancellationToken::new()).await
+    }
+
+    async fn ensure_access_with_cancel(
+        self: &Arc<Self>,
+        app: &tauri::AppHandle,
+        cancel: &CancellationToken,
+    ) -> Result<(), String> {
+        if cancel.is_cancelled() {
+            return Err("Camera permission cancelled; the camera stays off".to_string());
+        }
         self.set_app(app);
         {
             let core = self.core.lock_unpoisoned();
@@ -525,7 +578,13 @@ impl LinuxCameraOwner {
                 return Ok(());
             }
         }
-        let mut portal_guard = self.portal.lock().await;
+        // A retired publication must not wait for or cancel an independently
+        // owned Settings request already holding the shared portal lock.
+        let mut portal_guard = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err("Camera permission cancelled; the camera stays off".to_string()),
+            guard = self.portal.lock() => guard,
+        };
         // Another task may have completed the dialog while we waited.
         {
             let core = self.core.lock_unpoisoned();
@@ -540,14 +599,15 @@ impl LinuxCameraOwner {
             return self.ensure_access_direct().await;
         }
 
-        let cancel = CancellationToken::new();
-        let mut session = CameraPortalSession::connect().await?;
-        log::trace!("camera ensure: portal connection established");
-        let access = tokio::select! {
-            _ = cancel.cancelled() => Err("Camera permission cancelled; the camera stays off".to_string()),
-            result = tokio::time::timeout(PORTAL_TIMEOUT, session.request_access(&cancel)) =>
-                result.unwrap_or_else(|_| Err("Camera permission timed out; turn the camera on again to retry".to_string())),
+        let mut session = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err("Camera permission cancelled; the camera stays off".to_string()),
+            session = CameraPortalSession::connect() => session?,
         };
+        log::trace!("camera ensure: portal connection established");
+        // This future owns Request.Close on cancellation/timeout. Await its
+        // cleanup instead of dropping it from an outer select or timeout.
+        let access = session.request_access(cancel).await;
         log::trace!("camera ensure: access outcome={:?}", access.is_ok());
         if let Err(error) = access {
             {
@@ -736,6 +796,7 @@ impl LinuxCameraOwner {
         }
     }
 
+
     /// Resolve the preference against real devices and start the single
     /// low-level capture on the selected node. Called before the
     /// platform-neutral publish path acquires its lease.
@@ -744,8 +805,12 @@ impl LinuxCameraOwner {
         app: &tauri::AppHandle,
         device_id: Option<&str>,
         mode: Option<PreferredCameraMode>,
+        cancel: &CancellationToken,
     ) -> Result<(), String> {
-        self.ensure_access(app).await?;
+        self.ensure_access_with_cancel(app, cancel).await?;
+        if cancel.is_cancelled() {
+            return Err("Camera permission cancelled; the camera stays off".to_string());
+        }
         {
             let core = self.core.lock_unpoisoned();
             core.find_device(device_id).map(|_| ())?;
@@ -754,32 +819,10 @@ impl LinuxCameraOwner {
             let mut core = self.core.lock_unpoisoned();
             core.begin_selection(device_id, mode)
         };
-        if let Some(mode) = mode {
-            let registry = self.registry.lock_unpoisoned().clone();
-            if let Some(registry) = registry {
-                let supported = registry.modes(selection.node)?;
-                let advertised = supported.iter().any(|candidate| {
-                    candidate.width == mode.width
-                        && candidate.height == mode.height
-                        && (candidate.frame_rate_numerator as f64
-                            / candidate.frame_rate_denominator.max(1) as f64)
-                            .round() as u32
-                            == mode.frame_rate
-                });
-                if !advertised {
-                    self.core.lock_unpoisoned().selection = None;
-                    return Err(format!(
-                        "The selected camera mode ({}×{}@{}) is not available",
-                        mode.width, mode.height, mode.frame_rate
-                    ));
-                }
-            }
-        }
         self.ensure_capture(
             selection.generation,
             selection.node,
             selection.mode,
-            &selection.label,
         )
         .await
     }
@@ -790,11 +833,11 @@ impl LinuxCameraOwner {
         generation: u64,
         node: u32,
         mode: Option<PreferredCameraMode>,
-        label: &str,
     ) -> Result<(), String> {
         let _serial = self.capture_serial.lock().await;
         {
             let mut core = self.core.lock_unpoisoned();
+            core.validate_selection(generation, node, mode)?;
             // Same device and mode: adopt the serving capture for the new
             // selection instead of racing a rebuild against the old
             // pipeline's teardown. The preview→publication transition keeps
@@ -809,11 +852,33 @@ impl LinuxCameraOwner {
                 return Ok(());
             }
         }
-        // Stop any previous capture for a superseded selection.
-        let previous = self.core.lock_unpoisoned().capture.take();
+        // Match the actual advertised ratio, never an integer-rounded preset.
+        // Keep that ratio intact through GStreamer caps negotiation.
+        let advertised_mode = if let Some(mode) = mode {
+            let registry = self.registry.lock_unpoisoned().clone()
+                .ok_or_else(|| "Camera mode discovery is unavailable".to_string())?;
+            let supported = registry.modes(node)?;
+            Some(resolve_advertised_mode(&supported, mode).ok_or_else(|| {
+                format!(
+                    "The selected camera mode ({}×{}@{}) is not available",
+                    mode.width, mode.height, mode.frame_rate
+                )
+            })?)
+        } else {
+            None
+        };
+        // Discovery can outlive a newer selection. Recheck under the same
+        // lock as take so a stale request cannot cancel the serving capture.
+        let previous = {
+            let mut core = self.core.lock_unpoisoned();
+            core.validate_selection(generation, node, mode)?;
+            core.capture.take()
+        };
         if let Some(previous) = previous {
             previous.cancel.cancel();
-            self.retire_capture_resources(Some(previous));
+            // Never overlap old and replacement PipeWire streams: retiring
+            // the old buffer pool can otherwise tear down the new capture.
+            previous.status.wait_stopped().await;
         }
         let remote = {
             let portal = self.portal.lock().await;
@@ -829,9 +894,12 @@ impl LinuxCameraOwner {
             }
         };
         let status = CameraCaptureStatus::new();
+        if let Some(registry) = self.registry.lock_unpoisoned().clone() {
+            registry.watch_capture(&status);
+        }
         let opened = tokio::task::spawn_blocking({
             let status = status.clone();
-            move || CameraCapturePipeline::open(remote, node, mode, status)
+            move || CameraCapturePipeline::open(remote, node, advertised_mode, status)
         })
         .await
         .map_err(|e| format!("Native camera worker failed: {e}"))?;
@@ -863,19 +931,17 @@ impl LinuxCameraOwner {
         if let Some(registry) = self.registry.lock_unpoisoned().clone() {
             registry.watch(Some(node));
         }
-        self.spawn_capture_pump(pipeline, generation, label.to_string(), cancel);
+        self.spawn_capture_pump(pipeline, status, cancel);
         Ok(())
     }
 
     fn spawn_capture_pump(
         self: &Arc<Self>,
         pipeline: CameraCapturePipeline,
-        generation: u64,
-        label: String,
+        status: Arc<CameraCaptureStatus>,
         cancel: CancellationToken,
     ) {
         let owner = Arc::clone(self);
-        let view = self.view.clone();
         tokio::spawn(async move {
             let mut pipeline = pipeline;
             loop {
@@ -883,12 +949,12 @@ impl LinuxCameraOwner {
                     _ = cancel.cancelled() => break,
                     frame = pipeline.next_frame() => match frame {
                         Ok(frame) => {
-                            let negotiated = (frame.width, frame.height, 30, 1);
-                            view.publish(frame.clone());
-                            owner.frame_arrived(generation, frame, negotiated, &label);
+                            let (numerator, denominator) = pipeline.frame_rate();
+                            let negotiated = (frame.width, frame.height, numerator, denominator);
+                            owner.frame_arrived(&status, frame, negotiated);
                         }
                         Err(error) => {
-                            owner.capture_failed(generation, &error, &label);
+                            owner.capture_failed(&status, &error);
                             break;
                         }
                     },
@@ -899,23 +965,31 @@ impl LinuxCameraOwner {
         });
     }
 
-    /// One captured frame arrived from the generation's pipeline.
+    /// A pipeline keeps its physical identity when a same-device selection
+    /// adopts it. Resolve the current generation only after matching that
+    /// identity; superseded pipelines cannot feed either consumer.
     fn frame_arrived(
         &self,
-        generation: u64,
+        status: &Arc<CameraCaptureStatus>,
         frame: CameraFrame,
         negotiated: (u32, u32, u32, u32),
-        _label: &str,
     ) {
-        let current = {
+        let (generation, current) = {
             let mut core = self.core.lock_unpoisoned();
+            let Some(generation) = core.capture.as_ref()
+                .filter(|capture| Arc::ptr_eq(&capture.status, status))
+                .map(|capture| capture.generation)
+            else {
+                return;
+            };
             if !core.wants_capture(generation) {
                 return;
             }
             core.note_negotiated(generation, negotiated);
-            core.publication
+            self.view.publish(frame.clone());
+            (generation, core.publication
                 .as_ref()
-                .map(|lease| (lease.id, lease.generation))
+                .map(|lease| (lease.id, lease.generation)))
         };
         self.view
             .set_surface_state(current.is_some(), self.view.preview_surface_active(), None);
@@ -939,17 +1013,16 @@ impl LinuxCameraOwner {
         }
     }
 
-    fn capture_failed(&self, generation: u64, error: &str, _label: &str) {
-        let capture = {
+    fn capture_failed(&self, status: &Arc<CameraCaptureStatus>, error: &str) {
+        let (capture, generation) = {
             let mut core = self.core.lock_unpoisoned();
-            if !core
-                .capture
-                .as_ref()
-                .is_some_and(|capture| capture.generation == generation)
-            {
+            let Some(generation) = core.capture.as_ref()
+                .filter(|capture| Arc::ptr_eq(&capture.status, status))
+                .map(|capture| capture.generation)
+            else {
                 return;
-            }
-            core.invalidate_all(CAMERA_ACCESS_LOST.to_string())
+            };
+            (core.invalidate_all(CAMERA_ACCESS_LOST.to_string()), generation)
         };
         self.retire_capture_resources(capture);
         self.emit_preview_state(false, None, Some(CAMERA_ACCESS_LOST));
@@ -969,21 +1042,18 @@ impl LinuxCameraOwner {
         app: &tauri::AppHandle,
     ) -> Result<(String, String), String> {
         self.ensure_access(app).await?;
-        let selection = {
-            let mut core = self.core.lock_unpoisoned();
-            if core.selection.is_none() && !core.devices.is_empty() {
-                // The Settings preview opens standalone (before any camera-on
-                // in this process): seed the default device so preview-first
-                // ordering works; publication keeps its own lease.
-                core.begin_selection(None, None);
-            }
-            core.selection.clone().ok_or("No camera is available")?
-        };
+        let (device_id, mode) = app
+            .try_state::<crate::transport::camera::CameraDevicePreferences>()
+            .map(|preferences| (preferences.preferred_device(), preferences.preferred_mode()))
+            .unwrap_or((None, None));
+        let selection = self
+            .core
+            .lock_unpoisoned()
+            .preview_selection(device_id.as_deref(), mode)?;
         self.ensure_capture(
             selection.generation,
             selection.node,
             selection.mode,
-            &selection.label,
         )
         .await?;
         let (_lease, device_id, label) = {
@@ -998,6 +1068,63 @@ impl LinuxCameraOwner {
         );
         self.emit_preview_state(true, Some((device_id.clone(), label.clone())), None);
         Ok((device_id, label))
+    }
+
+    /// Preference changes must update a visible preview even without a room
+    /// publication. Seeding preferences with no consumer never acquires access.
+    pub(crate) async fn refresh_visible_preview(
+        self: &Arc<Self>,
+        app: &tauri::AppHandle,
+    ) -> Result<bool, String> {
+        let (device_id, mode) = app
+            .try_state::<crate::transport::camera::CameraDevicePreferences>()
+            .map(|preferences| (preferences.preferred_device(), preferences.preferred_mode()))
+            .unwrap_or((None, None));
+        let (lease, selection) = {
+            let mut core = self.core.lock_unpoisoned();
+            let Some(lease) = core.preview else { return Ok(false) };
+            (lease, core.preview_selection(device_id.as_deref(), mode)?)
+        };
+        let result = self.ensure_capture(selection.generation, selection.node, selection.mode).await;
+        if let Err(error) = result {
+            // Failure of retired work must not close a newer preview owner.
+            let mut core = self.core.lock_unpoisoned();
+            if core.preview != Some(lease) {
+                return Ok(false);
+            }
+            let capture = core.release_lease(lease);
+            if let Some(capture) = capture {
+                capture.cancel.cancel();
+            }
+            self.view.set_surface_state(core.publication.is_some(), false, None);
+            if core.publication.is_none() {
+                self.view.clear();
+            }
+            self.emit_preview_state(false, None, Some(error.as_str()));
+            return Err(error);
+        }
+        Ok(self.complete_preview_refresh(lease, &selection))
+    }
+
+    /// Commit only to the lease that requested the refresh. Closing the
+    /// preview during capture startup permanently retires that request.
+    fn complete_preview_refresh(&self, lease: LeaseId, selection: &OwnerSelection) -> bool {
+        let mut core = self.core.lock_unpoisoned();
+        let current = core.preview == Some(lease)
+            && core.validate_selection(selection.generation, selection.node, selection.mode).is_ok();
+        if !current {
+            if core.preview.is_none() && core.publication.is_none() {
+                if let Some(capture) = core.capture.take() {
+                    capture.cancel.cancel();
+                }
+            }
+            return false;
+        }
+        // Keep the original lease rather than manufacturing a replacement.
+        // Visibility is committed under the same lock close_preview uses.
+        self.view.set_surface_state(core.publication.is_some(), true, Some(&selection.label));
+        self.emit_preview_state(true, Some((selection.device_id.clone(), selection.label.clone())), None);
+        true
     }
 
     pub(crate) async fn preview_close(&self) -> Result<(), String> {
@@ -1229,6 +1356,8 @@ pub(crate) struct PreviewOpened {
 pub(crate) async fn linux_camera_preview_open(
     app: tauri::AppHandle,
 ) -> Result<PreviewOpened, String> {
+    let state = app.state::<crate::session::SessionState>();
+    let _control = state.lock_camera_control().await;
     let (device_id, label) = global_owner().preview_open(&app).await?;
     Ok(PreviewOpened { device_id, label })
 }
@@ -1241,6 +1370,25 @@ pub(crate) async fn linux_camera_preview_close() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_mode_preserves_advertised_fractional_cadences_without_rounding() {
+        let modes = [
+            CameraMode { width: 1280, height: 720, frame_rate_numerator: 10, frame_rate_denominator: 1 },
+            CameraMode { width: 1280, height: 720, frame_rate_numerator: 15, frame_rate_denominator: 2 },
+            CameraMode { width: 1280, height: 720, frame_rate_numerator: 5, frame_rate_denominator: 1 },
+        ];
+        for (frame_rate, expected) in [(10.0, modes[0]), (7.5, modes[1]), (5.0, modes[2])] {
+            assert_eq!(resolve_advertised_mode(&modes, PreferredCameraMode {
+                width: 1280, height: 720, frame_rate,
+            }), Some(expected));
+        }
+        for frame_rate in [7.0, 8.0, 7.499, 30.0, 0.0, -7.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(resolve_advertised_mode(&modes, PreferredCameraMode {
+                width: 1280, height: 720, frame_rate,
+            }), None);
+        }
+    }
 
     fn device(node: u32, label: &str) -> OwnerDevice {
         OwnerDevice {
@@ -1260,7 +1408,7 @@ mod tests {
         Some(PreferredCameraMode {
             width,
             height: width * 9 / 16,
-            frame_rate: 30,
+            frame_rate: 30.0,
         })
     }
 
@@ -1272,6 +1420,172 @@ mod tests {
             negotiated: None,
             status: CameraCaptureStatus::new(),
             cancel: CancellationToken::new(),
+        }
+    }
+
+    fn owner_with_preview() -> (Arc<LinuxCameraOwner>, Arc<CameraCaptureStatus>) {
+        let owner = Arc::new(LinuxCameraOwner::new());
+        let status = {
+            let mut core = owner.core.lock_unpoisoned();
+            *core = core_with_cameras();
+            let selection = core.begin_selection(Some("11"), None);
+            let capture = capture_for(selection.generation, 11);
+            let status = capture.status.clone();
+            core.capture_started(capture).unwrap();
+            core.lease_preview(&owner.next_lease).unwrap();
+            status
+        };
+        (owner, status)
+    }
+
+    #[test]
+    fn closed_preview_refresh_cannot_reopen_or_retain_its_late_capture() {
+        let (owner, _) = owner_with_preview();
+        let (lease, selection) = {
+            let mut core = owner.core.lock_unpoisoned();
+            let lease = core.preview.unwrap();
+            let selection = core.preview_selection(Some("22"), mode(640)).unwrap();
+            // ensure_capture is awaiting the replacement worker.
+            core.capture.take();
+            (lease, selection)
+        };
+        owner.close_preview();
+        let late = OwnerCapture {
+            mode: selection.mode,
+            ..capture_for(selection.generation, selection.node)
+        };
+        let cancel = late.cancel.clone();
+        owner.core.lock_unpoisoned().capture_started(late).unwrap();
+        assert!(!owner.complete_preview_refresh(lease, &selection));
+        assert!(!owner.view.preview_surface_active());
+        assert!(!owner.snapshot().preview);
+        assert!(!owner.snapshot().capture_active);
+        assert!(cancel.is_cancelled(), "the unowned replacement must be stopped");
+    }
+
+    #[test]
+    fn closed_preview_refresh_preserves_the_publication_consumer() {
+        let (owner, _) = owner_with_preview();
+        let (lease, selection, publication) = {
+            let mut core = owner.core.lock_unpoisoned();
+            let lease = core.preview.unwrap();
+            let selection = core.selection.clone().unwrap();
+            let publication = core.lease_publication(&owner.next_lease).unwrap();
+            (lease, selection, publication)
+        };
+        owner.close_preview();
+        assert!(!owner.complete_preview_refresh(lease, &selection));
+        assert!(!owner.view.preview_surface_active());
+        assert!(owner.view.publication_surface_active());
+        assert!(owner.snapshot().capture_active);
+        assert!(publication.status.terminal_error().is_none());
+        assert!(owner.core.lock_unpoisoned().capture_matches(
+            selection.generation, selection.node, selection.mode
+        ));
+    }
+
+    fn solid_frame(luma: u8) -> CameraFrame {
+        CameraFrame {
+            width: 2,
+            height: 2,
+            y: vec![luma; 4],
+            y_stride: 2,
+            uv: vec![128; 2],
+            uv_stride: 2,
+            capture_wall_time_us: 1,
+        }
+    }
+
+    #[tokio::test]
+    async fn preview_first_publication_receives_frames_after_capture_adoption() {
+        let (owner, capture_status) = owner_with_preview();
+        let selection = owner.core.lock_unpoisoned().begin_selection(Some("11"), None);
+        owner
+            .ensure_capture(selection.generation, selection.node, selection.mode)
+            .await
+            .unwrap();
+        let (sent, received) = std::sync::mpsc::channel();
+        let (_, publication_status, _, _) = owner
+            .acquire_publication(Arc::new(move |frame| sent.send(frame.y[0]).unwrap()))
+            .unwrap();
+
+        owner.frame_arrived(&capture_status, solid_frame(41), (2, 2, 30, 1));
+        assert_eq!(received.try_recv(), Ok(41));
+        assert!(owner.view.publication_surface_active());
+        // A failure of this same, adopted pipeline must still retire its leases.
+        owner.capture_failed(&capture_status, "fixture camera disconnected");
+        assert_eq!(publication_status.terminal_error().as_deref(), Some(CAMERA_ACCESS_LOST));
+        assert!(!owner.core.lock_unpoisoned().snapshot().capture_active);
+        assert!(!owner.view.publication_surface_active());
+    }
+
+    #[test]
+    fn superseded_pipeline_frames_and_errors_cannot_replace_current_camera() {
+        let (owner, old_status) = owner_with_preview();
+        let current_status = {
+            let mut core = owner.core.lock_unpoisoned();
+            let selection = core.begin_selection(Some("22"), None);
+            core.capture.take();
+            let capture = capture_for(selection.generation, 22);
+            let status = capture.status.clone();
+            core.capture_started(capture).unwrap();
+            status
+        };
+        let (sent, received) = std::sync::mpsc::channel();
+        let (_, publication_status, _, _) = owner
+            .acquire_publication(Arc::new(move |frame| sent.send(frame.y[0]).unwrap()))
+            .unwrap();
+
+        owner.frame_arrived(&old_status, solid_frame(17), (2, 2, 30, 1));
+        owner.capture_failed(&old_status, "superseded fixture disconnected");
+        assert_eq!(received.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty));
+        assert!(publication_status.terminal_error().is_none());
+        owner.frame_arrived(&current_status, solid_frame(73), (2, 2, 30, 1));
+        assert_eq!(received.try_recv(), Ok(73));
+        assert!(owner.core.lock_unpoisoned().snapshot().publication);
+    }
+
+    #[tokio::test]
+    async fn late_start_preserves_current_camera_frames_and_leases() {
+        for (old_node, old_mode) in [("11", None), ("22", None), ("22", mode(1280))] {
+            let owner = Arc::new(LinuxCameraOwner::new());
+            let (old, current_status, current_cancel) = {
+                let mut core = owner.core.lock_unpoisoned();
+                *core = core_with_cameras();
+                let old = core.begin_selection(Some(old_node), old_mode);
+                let current = core.begin_selection(Some("22"), None);
+                let capture = capture_for(current.generation, current.node);
+                let status = capture.status.clone();
+                let cancel = capture.cancel.clone();
+                core.capture_started(capture).unwrap();
+                core.lease_preview(&owner.next_lease).unwrap();
+                (old, status, cancel)
+            };
+            let (sent, received) = std::sync::mpsc::channel();
+            let (_, publication_status, _, _) = owner
+                .acquire_publication(Arc::new(move |frame| sent.send(frame.y[0]).unwrap()))
+                .unwrap();
+            owner.frame_arrived(&current_status, solid_frame(41), (2, 2, 30, 1));
+            assert_eq!(received.try_recv(), Ok(41));
+
+            let result = tokio::time::timeout(
+                Duration::from_millis(100),
+                owner.ensure_capture(old.generation, old.node, old.mode),
+            )
+            .await
+            .expect("a late start must not wait for the current capture to stop");
+            assert_eq!(result.unwrap_err(), "Camera selection superseded");
+            assert!(!current_cancel.is_cancelled());
+            assert!(publication_status.terminal_error().is_none());
+            owner.frame_arrived(&current_status, solid_frame(73), (2, 2, 30, 1));
+            assert_eq!(received.try_recv(), Ok(73));
+            let snapshot = owner.snapshot();
+            assert_eq!(snapshot.selected.unwrap().device_id, "22");
+            assert!(snapshot.capture_active);
+            assert!(snapshot.publication);
+            assert!(snapshot.preview);
+            assert!(owner.view.publication_surface_active());
+            assert!(snapshot.last_error.is_none());
         }
     }
 
@@ -1296,16 +1610,44 @@ mod tests {
         assert_eq!(cam_b.generation, cam_a.generation + 1);
         // Cam-A's late capture completion must not become the live capture.
         assert!(core
-            .capture_started(capture_for(cam_a.generation, 11))
+            .capture_started(OwnerCapture { mode: cam_a.mode, ..capture_for(cam_a.generation, 11) })
             .is_err());
         assert!(core.capture.is_none());
         // Cam-B's completion is accepted; a duplicate is not stored.
-        core.capture_started(capture_for(cam_b.generation, 22))
+        core.capture_started(OwnerCapture { mode: cam_b.mode, ..capture_for(cam_b.generation, 22) })
             .unwrap();
-        assert!(core.capture_matches(cam_b.generation, 22, None));
-        core.capture_started(capture_for(cam_b.generation, 22))
+        assert!(core.capture_matches(cam_b.generation, 22, cam_b.mode));
+        core.capture_started(OwnerCapture { mode: cam_b.mode, ..capture_for(cam_b.generation, 22) })
             .unwrap();
-        assert!(core.capture_matches(cam_b.generation, 22, None));
+        assert!(core.capture_matches(cam_b.generation, 22, cam_b.mode));
+    }
+
+    #[test]
+    fn preview_preferences_replace_old_capture_but_unchanged_preferences_keep_generation() {
+        let mut core = core_with_cameras();
+        let next = AtomicU64::new(1);
+        let a = core.preview_selection(Some("11"), mode(1280)).unwrap();
+        core.capture_started(OwnerCapture { mode: a.mode, ..capture_for(a.generation, 11) })
+            .unwrap();
+        core.lease_preview(&next).unwrap();
+        let b = core.preview_selection(Some("22"), mode(640)).unwrap();
+        assert!(!core.wants_capture(a.generation), "old preview frames must be retired");
+        assert!(core.validate_selection(a.generation, 11, a.mode).is_err());
+        // The production ensure_capture path drops A before admitting B.
+        core.capture.take();
+        assert!(core.capture_started(OwnerCapture {
+            mode: a.mode, ..capture_for(a.generation, 11)
+        }).is_err());
+        core.capture_started(OwnerCapture { mode: b.mode, ..capture_for(b.generation, 22) })
+            .unwrap();
+        let (_, id, label) = core.lease_preview(&next).unwrap();
+        assert_eq!((id.as_str(), label.as_str()), ("22", "Cam-B"));
+        assert!(core.capture_matches(b.generation, 22, mode(640)));
+        let unchanged = core.preview_selection(Some("22"), mode(640)).unwrap();
+        assert_eq!(unchanged.generation, b.generation, "opening the same preview must not restart");
+        let changed_mode = core.preview_selection(Some("22"), None).unwrap();
+        assert!(core.validate_selection(b.generation, 22, b.mode).is_err());
+        assert!(changed_mode.generation > b.generation);
     }
 
     #[test]

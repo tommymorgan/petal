@@ -26,8 +26,8 @@ COMMANDS = [
     ("set_remote_control_policy", {"policy": "ask"}),
     ("set_share_remote_control_allowed", {"windowId": 427, "allowed": True}),
     ("set_share_control_mode", {"windowId": 427, "mode": "fullControl"}),
-    ("remote_control_answer_consent", {"windowId": 427, "controllerId": "native-controller", "approve": True}),
-    ("remote_control_answer_escalation", {"windowId": 427, "controllerId": "native-controller", "approve": True}),
+    ("remote_control_answer_consent", {"windowId": 427, "controllerId": "native-controller", "requestId": "boundary-attempt", "approve": True}),
+    ("remote_control_answer_escalation", {"windowId": 427, "controllerId": "native-controller", "requestId": "boundary-attempt", "approve": True}),
     ("remote_control_request_escalation", {"windowId": 427, "ownerIdentity": "native-host"}),
     ("remote_clipboard_copy", {"windowId": 427, "ownerIdentity": "native-host", "grantToken": "native-grant-427"}),
     ("remote_clipboard_paste", {"windowId": 427, "ownerIdentity": "native-host", "grantToken": "native-grant-427"}),
@@ -80,23 +80,37 @@ def assert_denials(app):
         }));
     """ % json.dumps(COMMANDS))
     assert len(results) == len(COMMANDS)
+    # Task 3.1: controller-role commands (request/input send, controller
+    # clipboard) are registered capabilities; outside a Windows grant they
+    # still reject, at the honest authority gate: the room gate before
+    # joining, or the open-share gate once a room exists.
+    controller_commands = {
+        "remote_control_send",
+        "remote_control_set_active",
+        "remote_clipboard_copy",
+        "remote_clipboard_paste",
+    }
     for command, status, result in results:
-        # The camera command rejects at the room gate ("not in room"), which
-        # carries no platform word; every other command must name Linux.
-        platform_word_required = command != "start_camera_publish_command"
-        assert status == "rejected" and (not platform_word_required or "linux" in str(result).lower()), \
-            f"{command} must explicitly reject without authority, got {status}: {result}"
         if command in ("share_window", "toggle_window_share"):
-            assert "add share" in str(result).lower(), \
+            assert status == "rejected" and "add share" in str(result).lower(), \
                 f"{command} must direct raw window IDs to fresh native source consent: {result}"
-        elif command == "start_camera_publish_command":
+            continue
+        if command == "start_camera_publish_command":
             # Task 2.1: the camera command is registered on Linux; outside a
             # room it stops at the honest room gate instead.
-            assert "not in room" in str(result).lower(), \
+            assert status == "rejected" and "not in room" in str(result).lower(), \
                 f"{command} must reject outside a room with the room gate: {result}"
-        else:
-            assert "unsupported" in str(result).lower(), \
-                f"{command} must explicitly reject as unsupported on Linux: {result}"
+            continue
+        if command in controller_commands:
+            message = str(result).lower()
+            assert status == "rejected" and (
+                "join a room" in message or "is not open" in message
+            ), f"{command} must reject without a Windows grant at its authority gate: {result}"
+            continue
+        assert status == "rejected" and "linux" in str(result).lower(), \
+            f"{command} must explicitly reject without authority, got {status}: {result}"
+        assert "unsupported" in str(result).lower(), \
+            f"{command} must explicitly reject as unsupported on Linux: {result}"
 
 
 def inspect_room_controls(app, *, navigate=True):
@@ -209,8 +223,10 @@ class CapabilityScenario:
         assert_monitor_start_requires_room(self.app, launch_app=False)
 
     def unavailable(self):
-        # Task 2.1: camera is a supported Linux capability now; only region
-        # and input remain explicitly unsupported.
+        # Task 2.1: camera is supported. Task 3.1: controller input is
+        # supported through the native GTK share window; the meeting-page
+        # toggles gated here are host-policy controls (granting/answering
+        # control of THIS desktop), unavailable until Task 4.1.
         camera = self.controls["camera"]
         assert camera["visible"] and not camera["disabled"], \
             {"control": camera, "diagnostic": self.controls["diagnostic"]}
@@ -396,8 +412,8 @@ STEP_BINDINGS = {
     "When I inspect its room controls and invoke unfinished commands directly": "inspect_and_invoke",
     "Then the monitor Share action is visibly enabled": "monitor_available",
     "And monitor selection without a room reports the missing room before requesting permission": "monitor_admission",
-    "And camera controls are enabled while region and input controls remain unavailable with Linux explanations": "unavailable",
-    "And unfinished region, audio and input commands report unsupported while the camera command reports the missing room, and raw window IDs require native consent": "errors",
+    "And camera controls are enabled while region and host-input controls remain unavailable with Linux explanations": "unavailable",
+    "And region, audio and host-input commands report unsupported while camera and controller commands report their missing authority gate, and raw window IDs require native consent": "errors",
     "And no room, picture or camera publication is created": "no_effects",
     "And room-entry and microphone controls remain available": "supported",
     "And repeated unfinished actions leave the native app without publication or input effects": "invariant",

@@ -378,6 +378,7 @@ export interface ActiveRemoteControl {
   windowId: number;
   pointerId: number | null;
   grantToken: string | null;
+  requestId?: string;
   targetKind?: 'window' | 'display';
   shareInstanceId?: string;
   hostCapabilities?: RemoteControlCapability[];

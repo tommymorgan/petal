@@ -1297,11 +1297,10 @@ pub struct PublishedTrack {
     /// live quality switch, the encoder and the session's push gate all report
     /// the SAME number for this share.
     cadence_fps: Arc<std::sync::atomic::AtomicU32>,
-    /// Frame rate the track was published at, so a reconnect republish
-    /// (`republish_camera_after_reconnect`) rebuilds the identical encoding.
-    /// Meaningful only for camera tracks; window shares derive their fps from
-    /// `ShareQuality` and store 0.0 (unused).
-    published_frame_rate: f64,
+    /// Current capture's exact frame rate, including fractional cadence, so
+    /// reconnect rebuilds the mode last adopted by a camera capture handoff.
+    /// Window shares derive fps from ShareQuality and keep 0.0 here.
+    published_frame_rate: Mutex<f64>,
     /// (mismatched captured size, first-seen instant) while a resize has not
     /// yet settled; cleared when the captured size matches the published size.
     resize_settle: Mutex<Option<((u32, u32), std::time::Instant)>>,
@@ -2369,7 +2368,7 @@ impl RoomConnection<Arc<Room>> {
             published_width,
             published_height,
             cadence_fps: shared_cadence,
-            published_frame_rate: 0.0, // window shares derive fps from ShareQuality
+            published_frame_rate: Mutex::new(0.0), // window shares derive fps from ShareQuality
             resize_settle: Mutex::new(None),
             camera_size_recovery: Mutex::new(CameraSizeRecovery::default()),
             simulcast_ladder,
@@ -2474,7 +2473,7 @@ impl RoomConnection<Arc<Room>> {
             cadence_fps: Arc::new(std::sync::atomic::AtomicU32::new(
                 frame_rate.round().max(0.0) as u32,
             )),
-            published_frame_rate: frame_rate,
+            published_frame_rate: Mutex::new(frame_rate),
             resize_settle: Mutex::new(None),
             camera_size_recovery: Mutex::new(CameraSizeRecovery::default()),
             // Camera has one source encoding and never receives share-quality
@@ -2554,6 +2553,9 @@ fn camera_video_encoding(
 /// subscriptions begin at 320x180 and climb through 640x360 even when every
 /// receiver requested HIGH; a single 2.5 Mbps/30 fps encoding keeps startup at
 /// source resolution on every native platform.
+/// Camera tiles consume browser video, not the native window-frame metadata.
+/// Leave packet trailers off: stripping them for browser subscribers truncates
+/// an aggregated H.264 STAP-A NAL without repairing its declared length.
 fn camera_publish_options(width: u32, height: u32, frame_rate: f64) -> TrackPublishOptions {
     let encoding = camera_video_encoding(width, height, frame_rate);
     TrackPublishOptions {
@@ -2564,12 +2566,6 @@ fn camera_publish_options(width: u32, height: u32, frame_rate: f64) -> TrackPubl
         simulcast_layers: None,
         min_bitrate: startup_allocation_floor(|| camera_min_bitrate_bps(encoding.max_bitrate)),
         video_encoding: Some(encoding),
-        frame_metadata_features: {
-            let mut f = livekit::options::FrameMetadataFeatures::default();
-            f.user_timestamp = true;
-            f.frame_id = true;
-            f
-        },
         ..Default::default()
     }
 }
@@ -6020,26 +6016,6 @@ mod track_name_tests {
         assert_eq!(reduced_framerate, 4.0);
     }
 
-    #[test]
-    fn camera_publish_options_pin_single_source_encoding() {
-        let options = camera_publish_options(1280, 720, 30.0);
-
-        assert_eq!(options.source, TrackSource::Camera);
-        assert_eq!(options.video_codec, VideoCodec::H264);
-        assert_eq!(options.video_encoder, select_encoder_backend());
-        assert!(options.frame_metadata_features.user_timestamp);
-        assert!(options.frame_metadata_features.frame_id);
-        assert!(!options.simulcast);
-        assert!(options.simulcast_layers.is_none());
-
-        let source_encoding = options
-            .video_encoding
-            .as_ref()
-            .expect("camera publish must keep an explicit source ceiling");
-        assert_eq!(source_encoding.max_bitrate, CAMERA_MAX_BITRATE_BPS);
-        assert_eq!(source_encoding.max_framerate, CAMERA_MAX_FRAMERATE_FPS);
-    }
-
     #[cfg(target_os = "windows")]
     #[test]
     fn windows_camera_publish_options_request_hardware_720p30_source() {
@@ -7844,6 +7820,38 @@ impl PublishedTrack {
         }
     }
 
+    /// Adopt a camera capture mode without replacing its source, track or SID.
+    /// The caller has retired the old pump and accepted a real new capture frame.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn update_camera_capture_mode(
+        &self,
+        width: u32,
+        height: u32,
+        frame_rate: f64,
+    ) -> Result<(), RoomConnectionError> {
+        let encoding = camera_video_encoding(width, height, frame_rate);
+        let frame_rate = encoding.max_framerate;
+        let publication = self
+            .room
+            .local_participant()
+            .get_track_publication(&self.sid())
+            .ok_or_else(|| {
+                RoomConnectionError::InvalidVideoConfig(
+                    "camera publication retired during capture replacement".into(),
+                )
+            })?;
+        publication.set_single_video_encoding(encoding)?;
+        self.rtc_source
+            .set_video_resolution(VideoResolution { width, height });
+        self.published_width.store(width, Ordering::Relaxed);
+        self.published_height.store(height, Ordering::Relaxed);
+        self.cadence_fps
+            .store(frame_rate.round() as u32, Ordering::Relaxed);
+        *self.published_frame_rate.lock_unpoisoned() = frame_rate;
+        *self.camera_size_recovery.lock_unpoisoned() = CameraSizeRecovery::default();
+        Ok(())
+    }
+
     /// Republish this track's already-created `LocalVideoTrack` onto its
     /// room's local participant, rebuilding publish options from this
     /// track's published size and frame rate (#713 camera reconnect repair).
@@ -7860,11 +7868,12 @@ impl PublishedTrack {
     /// SDK's own republish shape (same Track Arc, new server-assigned SID).
     pub(crate) async fn republish_camera_after_reconnect(&self) -> Result<(), RoomConnectionError> {
         let (width, height) = self.published_size();
+        let frame_rate = *self.published_frame_rate.lock_unpoisoned();
         self.room
             .local_participant()
             .publish_track(
                 LocalTrack::Video(self.track.clone()),
-                camera_publish_options(width, height, self.published_frame_rate),
+                camera_publish_options(width, height, frame_rate),
             )
             .await?;
         log::info!(
@@ -11068,5 +11077,126 @@ mod tests {
         let native_min: sys_rp::ffi::RtpEncodingParameters = set.into();
         assert!(native_min.has_min_bitrate_bps);
         assert_eq!(native_min.min_bitrate_bps, 12_000_000);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod camera_capture_handoff_integration_tests {
+    use super::*;
+
+    async fn feed_mode_frames(
+        published: &PublishedTrack,
+        width: u32,
+        height: u32,
+        frame_rate: f64,
+    ) -> Result<(), RoomConnectionError> {
+        let y = vec![80; width as usize * height as usize];
+        let uv = vec![128; width as usize * height as usize / 2];
+        for _ in 0..8 {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap().as_micros() as u64;
+            published.push_nv12(&y, width, &uv, width, width, height, timestamp)
+                .ok_or_else(|| RoomConnectionError::InvalidVideoConfig("controlled SDK frame was rejected".into()))?;
+            tokio::time::sleep(std::time::Duration::from_secs_f64(1.0 / frame_rate)).await;
+        }
+        Ok(())
+    }
+
+    /// Requires an exclusively owned room and token; never run beside the app.
+    /// Exercises the SDK's real client-local full reconnect and republish path.
+    #[tokio::test]
+    #[ignore = "requires exclusive owned LiveKit fixture and PETAL_C04_TEST_URL/TOKEN"]
+    async fn camera_handoff_preserves_identity_and_reconnect_adopts_the_new_mode() {
+        assert_eq!(
+            std::env::var("PETAL_C04_EXCLUSIVE_PUBLISHER").as_deref(),
+            Ok("1"),
+            "stop the owned native publisher before running this fixture",
+        );
+        let url = std::env::var("PETAL_C04_TEST_URL").expect("owned fixture URL");
+        let token = std::env::var("PETAL_C04_TEST_TOKEN").expect("owned fixture token");
+        let connection = RoomConnection::connect(&url, &token).await.unwrap();
+        let mut events = connection.take_resilience_events().expect("owned event receiver");
+        connection.discard_compositor_events();
+        let identity = connection.room.local_participant().identity().to_string();
+        let published = match connection.publish_camera(640, 480, 30.0, &identity).await {
+            Ok(published) => published,
+            Err(error) => {
+                let _ = connection.room.close().await;
+                panic!("owned fixture publication failed: {error}");
+            }
+        };
+        let initial_sid = published.sid();
+        let initial_track_id = published.track.rtc_track().id();
+        let source_clone = published.rtc_source.clone();
+        let observation = async {
+            feed_mode_frames(&published, 640, 480, 30.0).await?;
+            published.update_camera_capture_mode(1280, 720, 10.0)?;
+            feed_mode_frames(&published, 1280, 720, 10.0).await?;
+            let a_live = published.track.publishing_layer_parameters();
+            let a_encoding = connection.room.local_participant()
+                .get_track_publication(&published.sid())
+                .ok_or_else(|| RoomConnectionError::InvalidVideoConfig("missing A publication".into()))?
+                .publish_options().video_encoding;
+            published.update_camera_capture_mode(640, 480, 29.97)?;
+            feed_mode_frames(&published, 640, 480, 29.97).await?;
+            let sid_after_handoff = published.sid();
+            let track_id_after_handoff = published.track.rtc_track().id();
+            let source_size = source_clone.video_resolution();
+            let live = published.track.publishing_layer_parameters();
+            connection
+                .room
+                .simulate_scenario(livekit::SimulateScenario::FullReconnect)
+                .await
+                .map_err(|error| RoomConnectionError::InvalidVideoConfig(format!("owned full reconnect failed: {error}")))?;
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                while let Some(event) = events.recv().await {
+                    if matches!(event, livekit::RoomEvent::Reconnected) {
+                        return Ok::<_, RoomConnectionError>(());
+                    }
+                }
+                Err(RoomConnectionError::InvalidVideoConfig("reconnect event stream closed".into()))
+            })
+            .await
+            .map_err(|_| RoomConnectionError::InvalidVideoConfig("owned full reconnect timed out".into()))??;
+            let reconnected = connection
+                .room
+                .local_participant()
+                .get_track_publication(&published.sid())
+                .ok_or_else(|| RoomConnectionError::InvalidVideoConfig("missing reconnected publication".into()))?;
+            let reconnect_size = reconnected.dimension();
+            let reconnect_live = published.track.publishing_layer_parameters();
+            Ok::<_, RoomConnectionError>((
+                sid_after_handoff,
+                track_id_after_handoff,
+                source_size,
+                live,
+                reconnect_size,
+                reconnect_live,
+                a_live,
+                a_encoding,
+            ))
+        }
+        .await;
+        let retired = published.unpublish().await;
+        let rejected_after_retirement = published.update_camera_capture_mode(1280, 720, 10.0).is_err();
+        let no_publication = connection.room.local_participant().get_track_publication(&published.sid()).is_none();
+        let closed = connection.room.close().await;
+        let (sid, track_id, source_size, live, reconnect_size, reconnect_live, a_live, a_encoding) = observation.unwrap();
+        assert_eq!(sid, initial_sid);
+        assert_eq!(track_id, initial_track_id);
+        assert_eq!((source_size.width, source_size.height), (640, 480));
+        assert_eq!((reconnect_size.0, reconnect_size.1), (640, 480));
+        assert_eq!(a_live.len(), 1);
+        assert_eq!((a_live[0].max_bitrate, a_live[0].max_framerate), (833_333, 10.0));
+        let a_encoding = a_encoding.expect("retained A reconnect encoding");
+        assert_eq!((a_encoding.max_bitrate, a_encoding.max_framerate), (833_333, 10.0));
+        for parameters in [live, reconnect_live] {
+            assert_eq!(parameters.len(), 1);
+            assert_eq!(parameters[0].max_framerate, 29.97);
+            assert_eq!(parameters[0].max_bitrate, 832_500);
+        }
+        assert!(retired.is_ok());
+        assert!(closed.is_ok());
+        assert!(rejected_after_retirement && no_publication);
     }
 }

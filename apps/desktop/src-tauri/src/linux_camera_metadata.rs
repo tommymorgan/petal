@@ -5,9 +5,8 @@
 //! missing usable metadata is an explicit unavailable state.
 
 use std::collections::BTreeMap;
-use std::ffi::CString;
 use std::os::fd::OwnedFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use pipewire as pw;
@@ -17,8 +16,10 @@ use pipewire::spa::pod::{Pod, PodObject};
 use pipewire::spa::sys;
 use pipewire::spa::utils::dict::DictRef;
 use pipewire::thread_loop::ThreadLoopBox;
-use pipewire::{context::ContextBox, core::CoreBox, proxy::Proxy};
+use pipewire::{context::ContextBox, core::CoreBox};
 
+use crate::linux_camera_capture::CameraCaptureStatus;
+use crate::linux_camera_portal::CAMERA_ACCESS_LOST;
 use crate::sync_ext::MutexExt;
 use crate::transport::camera::CameraMode;
 
@@ -50,14 +51,40 @@ struct RegistryState {
     /// Set by a core error/disconnect; never cleared without a new remote.
     lost: Option<String>,
     modes: Option<ModeRequest>,
-    /// Monotonic floor for request sequence numbers (0 is reserved).
-    seq_floor: i32,
+    capture_stream: Option<CaptureStreamWatch>,
 }
 
 struct ModeRequest {
-    node: u32,
     seq: i32,
     done: bool,
+}
+
+struct CaptureStreamWatch {
+    status: Weak<CameraCaptureStatus>,
+    node: Option<u32>,
+}
+
+impl CaptureStreamWatch {
+    fn observe(&mut self, node: u32, name: Option<&str>) {
+        if self
+            .status
+            .upgrade()
+            .is_some_and(|status| name == Some(status.stream_name()))
+        {
+            self.node = Some(node);
+        }
+    }
+
+    fn removed(&self, node: u32) {
+        if self.node != Some(node) {
+            return;
+        }
+        if let Some(status) = self.status.upgrade() {
+            if !status.is_retired() {
+                status.retire(Some(CAMERA_ACCESS_LOST.to_string()));
+            }
+        }
+    }
 }
 
 /// One node EnumFormat entry: the concrete rectangles and frame rates the
@@ -82,6 +109,9 @@ pub(super) struct CameraRegistry {
     core: Option<CoreBox<'static>>,
     registry: Option<pipewire::registry::RegistryBox<'static>>,
     state: Arc<Mutex<RegistryState>>,
+    // One core barrier slot serves both Settings and capture validation.
+    // Serialize complete queries, not only their PipeWire calls.
+    mode_query: Mutex<()>,
     events: std::sync::mpsc::Sender<MetadataEvent>,
 }
 
@@ -143,7 +173,7 @@ impl CameraRegistry {
             watch: None,
             lost: None,
             modes: None,
-            seq_floor: 0,
+            capture_stream: None,
         }));
         let (context, core, registry, registry_listener, core_listener) = {
             let _guard = thread_loop.lock();
@@ -180,6 +210,7 @@ impl CameraRegistry {
             core: Some(core),
             registry: Some(registry),
             state,
+            mode_query: Mutex::new(()),
             events,
         })
     }
@@ -235,74 +266,94 @@ impl CameraRegistry {
         self.state.lock_unpoisoned().watch = node;
     }
 
+    /// Watch the exact pipeline's input node, independently of its source.
+    /// Source buffer-pool rebuilds keep this node and remain nonterminal.
+    pub fn watch_capture(&self, status: &Arc<CameraCaptureStatus>) {
+        self.state.lock_unpoisoned().capture_stream = Some(CaptureStreamWatch {
+            status: Arc::downgrade(status),
+            node: None,
+        });
+    }
+
     /// Enumerate one node's real SPA_PARAM_EnumFormat modes. Called from any
     /// thread; the reply arrives on the loop thread while this one waits.
     pub fn modes(&self, node: u32) -> Result<Vec<CameraMode>, String> {
-        let seq = {
-            let mut state = self.state.lock_unpoisoned();
-            if let Some(error) = &state.lost {
-                return Err(error.clone());
-            }
-            if !state.devices.contains_key(&node) {
-                return Err("Selected camera is no longer available".to_string());
-            }
-            let seq = state.next_seq();
-            state.modes = Some(ModeRequest {
-                node,
-                seq,
-                done: false,
-            });
-            seq
-        };
+        let _query = self.mode_query.lock_unpoisoned();
         let (send, receive) = std::sync::mpsc::channel::<RawFormat>();
-        // Both stay alive until the reply lands (or fails): the listener's
-        // Drop removes the hook and the proxy's Drop destroys the pw_proxy,
-        // both under the loop lock below.
-        let mut listener = None;
-        let mut bound_proxy = None;
-        {
+        // Keep both hooks and the node proxy alive until completion, and
+        // create/drop every PipeWire object under the loop lock.
+        let (listener, bound_proxy, completion_seq) = {
             let _guard = self.loop_.lock();
+            {
+                let state = self.state.lock_unpoisoned();
+                if let Some(error) = &state.lost {
+                    return Err(error.clone());
+                }
+                if !state.devices.contains_key(&node) {
+                    return Err("Selected camera is no longer available".to_string());
+                }
+            }
             let registry = self.registry.as_ref().ok_or("Camera registry retired")?;
             // SAFETY: registry lives in this struct, dropped under the same
             // loop lock after this borrow ends.
             let registry_ref: &'static Registry = unsafe { std::mem::transmute(&**registry) };
             let node_proxy = bind_node(registry_ref, node)?;
-            let parsed = send.clone();
-            listener = Some(
-                node_proxy
-                    .add_listener_local()
-                    .param(move |_seq, id, _index, _next, pod| {
-                        // The pod is only valid during the callback: parse it
-                        // now, never store it.
-                        if id != spa::param::ParamType::EnumFormat {
-                            return;
-                        }
-                        if let Some(format) = pod.and_then(parse_enum_format) {
-                            let _ = parsed.send(RawFormat {
-                                sizes: format.sizes,
-                                rates: format.rates,
-                            });
-                        }
-                    })
-                    .register(),
-            );
-            node_proxy.enum_params(seq, Some(spa::param::ParamType::EnumFormat), 0, u32::MAX);
-            bound_proxy = Some(node_proxy);
-        }
-        let outcome = self.await_modes(receive, deadline());
-        // Retire the enumeration's PipeWire objects under the loop lock.
+            let parsed = send;
+            let listener = node_proxy
+                .add_listener_local()
+                .param(move |_seq, id, _index, _next, pod| {
+                    // The pod is only valid during the callback: parse it
+                    // now, never store it.
+                    if id != spa::param::ParamType::EnumFormat {
+                        return;
+                    }
+                    if let Some(format) = pod.and_then(parse_enum_format) {
+                        let _ = parsed.send(RawFormat {
+                            sizes: format.sizes,
+                            rates: format.rates,
+                        });
+                    }
+                })
+                .register();
+            // Each query binds a separate proxy, so its parameter callbacks
+            // need no shared sequence counter.
+            node_proxy.enum_params(0, Some(spa::param::ParamType::EnumFormat), 0, u32::MAX);
+            // EnumFormat replies do not themselves emit core.done. Request
+            // a barrier after enumeration and match PipeWire's returned
+            // sequence, not the caller-supplied parameter sequence.
+            let reply = self
+                .core
+                .as_ref()
+                .ok_or("Camera registry retired")?
+                .sync(0)
+                .map_err(|e| format!("Camera mode enumeration sync failed: {e:?}"))?;
+            self.state.lock_unpoisoned().modes = Some(ModeRequest {
+                seq: reply.seq(),
+                done: false,
+            });
+            (listener, node_proxy, reply.seq())
+        };
+        let outcome = self.await_modes(receive, completion_seq, deadline());
         {
             let _guard = self.loop_.lock();
             drop(listener);
             drop(bound_proxy);
+            let mut state = self.state.lock_unpoisoned();
+            if state
+                .modes
+                .as_ref()
+                .is_some_and(|request| request.seq == completion_seq)
+            {
+                state.modes = None;
+            }
         }
-        self.state.lock_unpoisoned().modes = None;
         outcome
     }
 
     fn await_modes(
         &self,
         receive: std::sync::mpsc::Receiver<RawFormat>,
+        completion_seq: i32,
         deadline: std::time::Instant,
     ) -> Result<Vec<CameraMode>, String> {
         let mut formats = Vec::new();
@@ -318,11 +369,14 @@ impl CameraRegistry {
                     return Err(error.clone());
                 }
                 match &state.modes {
-                    Some(request) if request.done => {
+                    Some(request) if request.seq == completion_seq && request.done => {
+                        // core.done follows all parameter callbacks, but the
+                        // channel may still hold their queued formats.
+                        formats.extend(receive.try_iter());
                         return Ok(modes_from_formats(formats));
                     }
-                    Some(_) => {}
-                    None => return Err("Camera mode enumeration was superseded".to_string()),
+                    Some(request) if request.seq == completion_seq => {}
+                    _ => return Err("Camera mode enumeration was superseded".to_string()),
                 }
             }
             if std::time::Instant::now() >= deadline {
@@ -359,14 +413,6 @@ impl Drop for CameraRegistry {
         log::trace!("camera registry drop: stopping loop");
         self.loop_.stop();
         log::trace!("camera registry drop: done");
-    }
-}
-
-impl RegistryState {
-    fn next_seq(&mut self) -> i32 {
-        let seq = self.seq_floor + 1;
-        self.seq_floor = seq;
-        seq
     }
 }
 
@@ -413,6 +459,12 @@ fn install_listeners(
                 return;
             }
             let media_class = props.get("media.class").unwrap_or_default();
+            if media_class == "Stream/Input/Video" {
+                if let Some(watch) = registry_state.lock_unpoisoned().capture_stream.as_mut() {
+                    watch.observe(global.id, props.get("node.name"));
+                }
+                return;
+            }
             if !media_class.starts_with("Video/Source") {
                 return;
             }
@@ -423,6 +475,9 @@ fn install_listeners(
         })
         .global_remove(move |id| {
             let mut state = registry_remove_state.lock_unpoisoned();
+            if let Some(watch) = &state.capture_stream {
+                watch.removed(id);
+            }
             let was_camera = state.devices.remove(&id).is_some();
             publish_devices(&state, &registry_remove_events);
             if was_camera && state.watch == Some(id) {
@@ -432,7 +487,6 @@ fn install_listeners(
         .register();
 
     let core_state = state.clone();
-    let core_events = events.clone();
     let core_error_state = state.clone();
     let core_error_events = events.clone();
     let core_listener = core
@@ -641,36 +695,28 @@ fn choice_alternatives(pod: &Pod) -> impl Iterator<Item = (&sys::spa_pod, *const
     children
 }
 
-/// Iterate a choice pod's children: (child header reference, child body ptr).
-/// The child headers live inside the choice pod's own allocation, so their
-/// lifetime is the pod's.
+/// SPA choices have one child header followed by tightly packed value bodies,
+/// not a sequence of individually headed/aligned pods.
 fn choice_children(pod: &Pod) -> impl Iterator<Item = (&sys::spa_pod, *const u8)> {
     let raw = raw_pod(pod);
-    let children_start = unsafe {
-        let choice = (raw as *const sys::spa_pod).cast::<sys::spa_pod_choice>();
-        std::ptr::addr_of!((*choice).body.child) as *const u8
-    };
-    let total = raw.size as usize;
+    let header_size = std::mem::size_of::<sys::spa_pod_choice_body>();
+    let child = (raw.size as usize >= header_size).then(|| unsafe {
+        &(*pod.as_raw_ptr().cast::<sys::spa_pod_choice>()).body.child
+    });
     let mut offset = 0usize;
     std::iter::from_fn(move || {
-        if offset + std::mem::size_of::<sys::spa_pod>() > total {
+        let child = child?;
+        let stride = child.size as usize;
+        let end = offset.checked_add(stride)?;
+        if stride == 0 || end > raw.size as usize - header_size {
             return None;
         }
-        unsafe {
-            let header = &*children_start.add(offset).cast::<sys::spa_pod>();
-            let size = header.size as usize;
-            let body = children_start.add(offset + std::mem::size_of::<sys::spa_pod>());
-            offset += round_up8(std::mem::size_of::<sys::spa_pod>() + size);
-            if offset > total {
-                return None;
-            }
-            Some((header, body))
-        }
+        let body = unsafe {
+            (child as *const sys::spa_pod).add(1).cast::<u8>().add(offset)
+        };
+        offset = end;
+        Some((child, body))
     })
-}
-
-fn round_up8(value: usize) -> usize {
-    value.div_ceil(8) * 8
 }
 
 fn pod_body(pod: &sys::spa_pod) -> Option<*const u8> {
@@ -782,25 +828,18 @@ mod tests {
     }
 
     fn choice_pod(choice: u32, children: &[Vec<u8>]) -> Vec<u8> {
-        // spa_pod_choice_body = { u32 type, u32 flags, spa_pod child, ... }
+        // One shared child header, then packed unheaded value bodies.
         let mut body = Vec::new();
         body.extend_from_slice(&choice.to_le_bytes());
         body.extend_from_slice(&0u32.to_le_bytes());
-        let mut size = 8usize; // body prefix
+        let first = children.first().expect("a choice needs a value type");
+        body.extend_from_slice(&first[..8]);
+        let size = u32::from_le_bytes(first[..4].try_into().unwrap()) as usize;
         for child in children {
-            size += child.len();
+            assert_eq!(&child[..8], &first[..8]);
+            body.extend_from_slice(&child[8..8 + size]);
         }
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&(size as u32).to_le_bytes());
-        bytes.extend_from_slice(&sys::SPA_TYPE_Choice.to_le_bytes());
-        bytes.extend_from_slice(&body);
-        for child in children {
-            bytes.extend_from_slice(child);
-        }
-        while bytes.len() % 8 != 0 {
-            bytes.push(0);
-        }
-        bytes
+        pod_bytes(sys::SPA_TYPE_Choice, &body)
     }
 
     fn prop(key: u32, value: &[u8]) -> Vec<u8> {
@@ -984,23 +1023,36 @@ mod tests {
     }
 
     #[test]
-    fn registry_sequence_numbers_never_collide_between_users() {
-        let mut state = RegistryState::default();
-        let first = state.next_seq();
-        let second = state.next_seq();
-        state.initial_pending = Some(second);
-        let third = state.next_seq();
-        state.modes = Some(ModeRequest {
-            node: 1,
-            seq: third,
-            done: false,
-        });
-        let fourth = state.next_seq();
-        let all = [first, second, third, fourth];
-        let mut unique = all.to_vec();
-        unique.sort_unstable();
-        unique.dedup();
-        assert_eq!(unique.len(), all.len(), "sequences must stay distinct");
-        assert!(fourth > third && third > second && second > first);
+    fn removed_input_stream_retires_only_the_matching_capture() {
+        let old = CameraCaptureStatus::new();
+        let current = CameraCaptureStatus::new();
+        let mut watch = CaptureStreamWatch {
+            status: Arc::downgrade(&current),
+            node: None,
+        };
+        watch.observe(41, Some(old.stream_name()));
+        watch.removed(41);
+        assert!(!current.is_retired());
+        watch.observe(42, Some(current.stream_name()));
+        watch.removed(41);
+        assert!(!current.is_retired());
+        watch.removed(42);
+        assert!(current.is_retired());
+        assert_eq!(current.terminal_error().as_deref(), Some(CAMERA_ACCESS_LOST));
+        assert!(!old.is_retired());
+    }
+
+    #[test]
+    fn intentional_stream_teardown_does_not_add_a_camera_failure() {
+        let status = CameraCaptureStatus::new();
+        let mut watch = CaptureStreamWatch {
+            status: Arc::downgrade(&status),
+            node: None,
+        };
+        watch.observe(42, Some(status.stream_name()));
+        status.retire(None);
+        watch.removed(42);
+        assert!(status.is_retired());
+        assert_eq!(status.terminal_error(), None);
     }
 }

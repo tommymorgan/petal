@@ -14,7 +14,7 @@ import {
   fixedPointCoordinateKey,
   parseRemoteControlJson,
   remoteControlGrantEnvelopeIsValid,
-  remoteControlStatusRestoresSession,
+  remoteControlStatusMatchesRequest,
   remoteControlNegotiatedGrantMatchesRequest,
 } from './remoteControl.ts';
 import {
@@ -334,55 +334,12 @@ export function setupRemoteControlUi(ctx: HarnessContext) {
     // frames can never decode to kind 'status' in the first place, so the
     // JSON-path validation above is the only gate this needs.
     const localIdentity = state.room?.localParticipant.identity;
-    // #808: an `active` status must be able to RE-ESTABLISH the session, not
-    // only update one that already exists. A `stopped` for a superseded
-    // request clears `state.activeRemoteControl` (see the stopped branch
-    // below), and every later `active` was then ignored, because adoption is
-    // guarded by `active &&`. The controller sat permanently out of control
-    // while the host believed it was granting -- measured live: the harness
-    // reported `{granted:false, grantToken:null}` with `active=null` against a
-    // host that had just logged `status emitted (local+controller)
-    // status='active'`, two milliseconds after a `stopped`. It also defeated
-    // #371's reconnect re-emit, whose whole purpose is to restore a
-    // controller whose data channel was recreated.
-    //
-    // The sender check is preserved, not skipped: the restore requires a tile
-    // whose owner IS the LiveKit-verified sender, so a peer cannot conjure a
-    // session for a window it does not own. A grant token is required too --
-    // a tokenless `active` restores nothing.
-    {
-      const restoreTile = tileForRemoteControlStatus(message);
-      if (
-        remoteControlStatusRestoresSession(message, {
-          hasActiveSession: Boolean(state.activeRemoteControl),
-          localIdentity,
-          senderIdentity,
-          tileOwner: restoreTile?.dataset.owner
-        }) &&
-        restoreTile &&
-        senderIdentity
-      ) {
-        const shareInstanceId = restoreTile.dataset.shareInstanceId;
-        state.activeRemoteControl = {
-          tileId: restoreTile.id,
-          targetUserId: senderIdentity,
-          windowId: message.windowId,
-          pointerId: null,
-          grantToken: null,
-          ...(shareInstanceId
-            ? {
-                targetKind: restoreTile.dataset.sourceKind === 'display' ? 'display' : 'window',
-                shareInstanceId
-              }
-            : {})
-        };
-        logEvent(
-          `remote control session restored from host status window_id=${message.windowId}`,
-          'ok'
-        );
-      }
-    }
     const active = state.activeRemoteControl;
+    // No unsolicited restore: only the exact live explicit request can change
+    // authority or UI feedback. Missing IDs from older peers fail closed.
+    if (!remoteControlStatusMatchesRequest(message, active, localIdentity, senderIdentity)) return;
+    if (message.status === 'active' && active?.grantToken &&
+        (message.grantToken !== active.grantToken || message.controlSessionId !== active.controlSessionId)) return;
     // Security: `targetUserId`/`windowId` in the wire message are attacker-
     // controlled and are NOT authentication -- only the LiveKit-authenticated
     // sender identity (from the DataReceived participant, threaded in by the
@@ -428,7 +385,7 @@ export function setupRemoteControlUi(ctx: HarnessContext) {
       if (message.controlSessionId) {
         active.controlSessionId = message.controlSessionId;
         active.resultCapability = message.resultCapability;
-        active.nextInputSeq = 1;
+        active.nextInputSeq ??= 1;
         active.targetKind = message.targetKind;
         active.shareInstanceId = message.shareInstanceId;
         active.hostCapabilities = message.hostCapabilities ?? [];
@@ -692,7 +649,7 @@ export function setupRemoteControlUi(ctx: HarnessContext) {
     flushPendingPointerMove();
     flushPendingWheel();
     const base = remoteControlBase(stopped);
-    if (base) publishRemoteControlFromUi({ ...base, kind: 'release' });
+    if (base) publishRemoteControlFromUi({ ...base, kind: 'release', requestId: stopped.requestId });
     clearPendingRemoteControlInput();
     for (const [inputId, pending] of pendingDiscrete) {
       if (
@@ -733,6 +690,7 @@ export function setupRemoteControlUi(ctx: HarnessContext) {
       windowId: target.windowId,
       pointerId: null,
       grantToken: null,
+      requestId: crypto.randomUUID(),
       ...(shareInstanceId ? { targetKind, shareInstanceId } : {})
     };
     const base = remoteControlBase(state.activeRemoteControl);
@@ -740,6 +698,7 @@ export function setupRemoteControlUi(ctx: HarnessContext) {
       publishRemoteControlFromUi({
         ...base,
         kind: 'request',
+        requestId: state.activeRemoteControl.requestId,
         ...(shareInstanceId
           ? {
               targetKind,

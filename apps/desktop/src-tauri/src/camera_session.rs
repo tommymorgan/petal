@@ -349,6 +349,21 @@ fn camera_start_is_current(
     state.camera_intent() && generation.is_current()
 }
 
+async fn await_current_capture_or_release<C: ReleasableCapture>(
+    state: &crate::session::SessionState,
+    generation: &RoomGeneration,
+    capture: C,
+    size_rx: std::sync::mpsc::Receiver<(u32, u32)>,
+    timeout: Duration,
+) -> Result<(C, (u32, u32)), String> {
+    let (capture, size) = await_first_frame_or_release(capture, size_rx, timeout).await?;
+    if !camera_start_is_current(state, generation) {
+        drop_camera_capture(capture).await;
+        return Err("camera start cancelled".to_string());
+    }
+    Ok((capture, size))
+}
+
 /// Start capturing + publishing the local webcam as
 /// `petal-camera-<identity-slug>` (no-op if
 /// already publishing); requires a joined room + camera intent.
@@ -379,16 +394,92 @@ pub(crate) async fn start_camera_publish_with_device(
         };
         (room_connection, identity, state.current_room_generation())
     };
-    #[cfg(target_os = "linux")]
-    state
-        .cameras
-        .prepare(app, preferred_device_id.as_deref(), preferred_mode)
-        .await?;
     log::info!(
         "session: start_camera_publish begin (identity '{}')",
         crate::logging::log_safe_quoted(&identity)
     );
 
+    let prepared =
+        prepare_camera_capture(app, state, &generation, preferred_device_id, preferred_mode).await?;
+    let PreparedCameraCapture {
+        capture,
+        status,
+        size: (width, height),
+        latest_frame,
+        frame_ready,
+        telemetry,
+    } = prepared;
+
+    if !camera_start_is_current(state, &generation) {
+        drop_camera_capture(capture).await;
+        return Err("camera start cancelled".to_string());
+    }
+
+    // The encoding ceiling scales with the negotiated capture frame rate
+    // (camera_publish_options), so publish with the fps the capture actually
+    // negotiated rather than a hardcoded 30.
+    let (frame_rate_num, frame_rate_den) = capture.frame_rate();
+    let negotiated_frame_rate = frame_rate_num as f64 / frame_rate_den.max(1) as f64;
+    let published = match room_connection
+        .publish_camera(width, height, negotiated_frame_rate, &identity)
+        .await
+    {
+        Ok(published) => Arc::new(published),
+        Err(error) => {
+            log::warn!("session: start_camera_publish track publish failed: {error}");
+            drop_camera_capture(capture).await;
+            return Err(error.to_string());
+        }
+    };
+
+    tokio::time::sleep(CAMERA_SUBSCRIBER_NEGOTIATION_DELAY).await;
+
+    install_camera_capture(
+        app,
+        state,
+        generation,
+        PreparedCameraCapture {
+            capture,
+            status,
+            size: (width, height),
+            latest_frame,
+            frame_ready,
+            telemetry,
+        },
+        published,
+    )
+    .await
+}
+
+struct PreparedCameraCapture {
+    capture: Box<dyn CameraBackend>,
+    status: CameraStatus,
+    size: (u32, u32),
+    latest_frame: Arc<Mutex<Option<CameraFrame>>>,
+    frame_ready: Arc<tokio::sync::Notify>,
+    telemetry: Arc<Mutex<CameraPublishTelemetry>>,
+}
+
+async fn prepare_camera_capture(
+    _app: &tauri::AppHandle,
+    _state: &crate::session::SessionState,
+    generation: &RoomGeneration,
+    preferred_device_id: Option<String>,
+    preferred_mode: Option<PreferredCameraMode>,
+) -> Result<PreparedCameraCapture, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let permission = _state.begin_camera_permission_request(generation)?;
+        _state
+            .cameras
+            .prepare(
+                _app,
+                preferred_device_id.as_deref(),
+                preferred_mode,
+                permission.cancellation(),
+            )
+            .await?;
+    }
     // Frames flow: capture callback -> latest-wins single slot -> tokio pump
     // (NV12->I420 convert + LiveKit push). This bounds queued camera data to
     // one full NV12 frame under encoder backpressure.
@@ -447,7 +538,13 @@ pub(crate) async fn start_camera_publish_with_device(
     // from a clean capture. A platform terminal error (e.g. Media Foundation
     // stream failure) is preferred over the generic timeout message.
     let (capture, (width, height)) =
-        match await_first_frame_or_release(capture, first_frame_rx, CAMERA_FIRST_FRAME_TIMEOUT)
+        match await_current_capture_or_release(
+            _state,
+            generation,
+            capture,
+            first_frame_rx,
+            CAMERA_FIRST_FRAME_TIMEOUT,
+        )
             .await
         {
             Ok(v) => v,
@@ -461,30 +558,96 @@ pub(crate) async fn start_camera_publish_with_device(
                 return Err(error);
             }
         };
+    Ok(PreparedCameraCapture {
+        capture,
+        status,
+        size: (width, height),
+        latest_frame,
+        frame_ready,
+        telemetry,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+async fn replace_camera_capture(
+    app: &tauri::AppHandle,
+    state: &crate::session::SessionState,
+    preferred_device_id: Option<String>,
+    preferred_mode: Option<PreferredCameraMode>,
+) -> Result<CameraPublishOutcome, String> {
+    stop_camera_publish(app, state).await;
+    start_camera_publish_with_device(app, state, preferred_device_id, preferred_mode).await
+}
+
+/// Camera selection replaces capture, not the room publication. In particular,
+/// an old remote unsubscribe must never be able to retire the replacement feed.
+#[cfg(target_os = "linux")]
+async fn replace_camera_capture(
+    app: &tauri::AppHandle,
+    state: &crate::session::SessionState,
+    preferred_device_id: Option<String>,
+    preferred_mode: Option<PreferredCameraMode>,
+) -> Result<CameraPublishOutcome, String> {
+    let generation = state.current_room_generation();
+    let Some(camera) = state.take_active_camera() else {
+        return start_camera_publish_with_device(
+            app,
+            state,
+            preferred_device_id,
+            preferred_mode,
+        )
+        .await;
+    };
+    let published = retire_camera_capture(camera, true).await;
     if !camera_start_is_current(state, &generation) {
-        drop_camera_capture(capture).await;
+        unpublish_camera_track(published).await;
         return Err("camera start cancelled".to_string());
     }
-
-    // The encoding ceiling scales with the negotiated capture frame rate
-    // (camera_publish_options), so publish with the fps the capture actually
-    // negotiated rather than a hardcoded 30.
-    let (frame_rate_num, frame_rate_den) = capture.frame_rate();
-    let negotiated_frame_rate = frame_rate_num as f64 / frame_rate_den.max(1) as f64;
-    let published = match room_connection
-        .publish_camera(width, height, negotiated_frame_rate, &identity)
-        .await
+    let prepared =
+        match prepare_camera_capture(app, state, &generation, preferred_device_id, preferred_mode).await {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                unpublish_camera_track(published).await;
+                return Err(error);
+            }
+        };
+    if !camera_start_is_current(state, &generation) {
+        drop_camera_capture(prepared.capture).await;
+        unpublish_camera_track(published).await;
+        return Err("camera start cancelled".to_string());
+    }
+    let (frame_rate_num, frame_rate_den) = prepared.capture.frame_rate();
+    let frame_rate = frame_rate_num as f64 / frame_rate_den.max(1) as f64;
+    if let Err(error) =
+        published.update_camera_capture_mode(prepared.size.0, prepared.size.1, frame_rate)
     {
-        Ok(published) => Arc::new(published),
-        Err(error) => {
-            log::warn!("session: start_camera_publish track publish failed: {error}");
-            drop_camera_capture(capture).await;
-            return Err(error.to_string());
-        }
-    };
+        drop_camera_capture(prepared.capture).await;
+        unpublish_camera_track(published).await;
+        return Err(error.to_string());
+    }
+    install_camera_capture(app, state, generation, prepared, published).await
+}
 
-    tokio::time::sleep(CAMERA_SUBSCRIBER_NEGOTIATION_DELAY).await;
-
+async fn install_camera_capture(
+    app: &tauri::AppHandle,
+    state: &crate::session::SessionState,
+    generation: RoomGeneration,
+    prepared: PreparedCameraCapture,
+    published: Arc<PublishedTrack>,
+) -> Result<CameraPublishOutcome, String> {
+    let PreparedCameraCapture {
+        capture,
+        status,
+        size: (width, height),
+        latest_frame,
+        frame_ready,
+        telemetry,
+    } = prepared;
+    if !camera_start_is_current(state, &generation) {
+        drop_camera_capture(capture).await;
+        unpublish_camera_track(published).await;
+        return Err("camera start cancelled".to_string());
+    }
     let pump = start_camera_frame_pump(latest_frame, frame_ready, published.clone(), telemetry);
     let loss_monitor = start_camera_loss_monitor(app.clone(), generation.clone(), status.clone());
     let used_default_fallback = capture.used_default_fallback();
@@ -505,7 +668,11 @@ pub(crate) async fn start_camera_publish_with_device(
     let stored = if !generation.is_current() || state.camera_publishing() {
         false
     } else {
-        state.put_active_camera(&mut camera)
+        #[cfg(target_os = "linux")]
+        let stored = state.put_active_camera(&mut camera, &generation);
+        #[cfg(not(target_os = "linux"))]
+        let stored = state.put_active_camera(&mut camera);
+        stored
     };
     if !stored {
         log::warn!(
@@ -617,7 +784,7 @@ fn start_camera_loss_monitor(
                 break;
             };
             teardown_active_camera(camera, false).await;
-            state.set_camera_intent(false);
+            clear_camera_intent_after_owned_failure(&state);
             emit_camera_intent(&app, false);
             emit_camera_publish_state(&app, false, Some(error));
             break;
@@ -625,8 +792,8 @@ fn start_camera_loss_monitor(
     })
 }
 
-async fn drop_camera_capture(capture: Box<dyn CameraBackend>) {
-    if tokio::task::spawn_blocking(move || drop(capture))
+async fn drop_camera_capture<C: ReleasableCapture>(capture: C) {
+    if tokio::task::spawn_blocking(move || capture.release_blocking())
         .await
         .is_err()
     {
@@ -634,17 +801,27 @@ async fn drop_camera_capture(capture: Box<dyn CameraBackend>) {
     }
 }
 
-/// Tear one active camera down: abort the pump (and optionally the loss
-/// monitor — the loss monitor calls this from inside itself, so it must NOT
-/// abort its own task), release the capture on a blocking thread, unpublish
-/// the track.
-async fn teardown_active_camera(camera: ActiveCamera, abort_loss_monitor: bool) {
+/// Retire the old producer completely before another mode can reach its source.
+async fn retire_camera_capture(
+    camera: ActiveCamera,
+    abort_loss_monitor: bool,
+) -> Arc<PublishedTrack> {
     camera.pump.abort();
+    let _ = camera.pump.await;
     if abort_loss_monitor {
         camera.loss_monitor.abort();
+        let _ = camera.loss_monitor.await;
     }
     drop_camera_capture(camera.capture).await;
-    if let Err(error) = camera.published.unpublish().await {
+    camera.published
+}
+
+async fn teardown_active_camera(camera: ActiveCamera, abort_loss_monitor: bool) {
+    unpublish_camera_track(retire_camera_capture(camera, abort_loss_monitor).await).await;
+}
+
+async fn unpublish_camera_track(published: Arc<PublishedTrack>) {
+    if let Err(error) = published.unpublish().await {
         log::warn!("session: camera unpublish failed (room already closed?): {error}");
     }
 }
@@ -1002,6 +1179,22 @@ fn camera_request_is_unchanged<T: PartialEq>(requested: &T, previously_applied: 
     requested == previously_applied
 }
 
+fn requested_camera_mode(
+    width: Option<u32>,
+    height: Option<u32>,
+    frame_rate: Option<f64>,
+) -> Result<Option<PreferredCameraMode>, String> {
+    match (width, height, frame_rate) {
+        (Some(width), Some(height), Some(frame_rate))
+            if width > 0 && height > 0 && frame_rate.is_finite() && frame_rate > 0.0 =>
+        {
+            Ok(Some(PreferredCameraMode { width, height, frame_rate }))
+        }
+        (None, None, None) => Ok(None),
+        _ => Err("Camera mode requires positive dimensions and a finite positive frame rate".into()),
+    }
+}
+
 /// Apply a user-chosen camera capture mode (Settings resolution/FPS menus).
 /// `None` width/height/frame_rate resets to Auto (best healthy mode). Restarts
 /// the camera when publishing, mirroring [`set_camera_device`].
@@ -1010,29 +1203,23 @@ pub async fn set_camera_prefs(
     app: tauri::AppHandle,
     width: Option<u32>,
     height: Option<u32>,
-    frame_rate: Option<u32>,
+    frame_rate: Option<f64>,
     preferences: tauri::State<'_, CameraDevicePreferences>,
     state: tauri::State<'_, crate::session::SessionState>,
 ) -> Result<crate::transport::camera::AppliedCameraDevice, String> {
     let _camera_transaction = state.lock_camera_control().await;
-    let mode = match (width, height, frame_rate) {
-        (Some(width), Some(height), Some(frame_rate))
-            if width > 0 && height > 0 && frame_rate > 0 =>
-        {
-            Some(PreferredCameraMode {
-                width,
-                height,
-                frame_rate,
-            })
-        }
-        _ => None,
-    };
+    let mode = requested_camera_mode(width, height, frame_rate)?;
     let previous_mode = preferences.preferred_mode();
     preferences.set_preferred_mode(mode);
 
     let in_room = state.is_in_room();
     if !in_room || !state.camera_publishing() {
+        #[cfg(target_os = "linux")]
+        let applied = crate::linux_camera::global_owner().refresh_visible_preview(&app).await?;
+        #[cfg(not(target_os = "linux"))]
+        let applied = false;
         return Ok(crate::transport::camera::AppliedCameraDevice {
+            applied,
             in_room,
             ..Default::default()
         });
@@ -1051,8 +1238,7 @@ pub async fn set_camera_prefs(
         });
     }
 
-    stop_camera_publish(&app, &state).await;
-    match start_camera_publish_with_device(
+    match replace_camera_capture(
         &app,
         &state,
         preferences.preferred_device(),
@@ -1067,7 +1253,7 @@ pub async fn set_camera_prefs(
             error: None,
         }),
         Err(error) => {
-            state.set_camera_intent(false);
+            clear_camera_intent_after_owned_failure(&state);
             emit_camera_intent(&app, false);
             emit_camera_publish_state(&app, false, Some(error.clone()));
             Ok(crate::transport::camera::AppliedCameraDevice {
@@ -1080,16 +1266,20 @@ pub async fn set_camera_prefs(
     }
 }
 
-/// Apply a user-chosen camera device (Settings picker). Restarts the camera
-/// when publishing, mirroring [`set_camera_prefs`].
+/// Apply a user-chosen camera device and its already-normalized capture mode
+/// as one transaction. `None` mode selects Auto on the new device.
 #[tauri::command]
 pub async fn set_camera_device(
     app: tauri::AppHandle,
     device_id: String,
+    width: Option<u32>,
+    height: Option<u32>,
+    frame_rate: Option<f64>,
     preferences: tauri::State<'_, CameraDevicePreferences>,
     state: tauri::State<'_, crate::session::SessionState>,
 ) -> Result<crate::transport::camera::AppliedCameraDevice, String> {
-    apply_camera_device(&app, device_id, preferences.inner(), state.inner()).await
+    let mode = requested_camera_mode(width, height, frame_rate)?;
+    apply_camera_device(&app, device_id, mode, preferences.inner(), state.inner()).await
 }
 
 /// [`set_camera_device`] without the Tauri command envelope, so the #76
@@ -1098,6 +1288,7 @@ pub async fn set_camera_device(
 pub(crate) async fn apply_camera_device(
     app: &tauri::AppHandle,
     device_id: String,
+    mode: Option<PreferredCameraMode>,
     preferences: &CameraDevicePreferences,
     state: &crate::session::SessionState,
 ) -> Result<crate::transport::camera::AppliedCameraDevice, String> {
@@ -1118,22 +1309,29 @@ pub(crate) async fn apply_camera_device(
     }
 
     let previous_device = preferences.preferred_device();
+    let previous_mode = preferences.preferred_mode();
     let requested_device = normalize_device_id(&device_id);
     preferences.set_preferred_device(device_id);
+    preferences.set_preferred_mode(mode);
     let in_room = state.is_in_room();
     if !in_room || !state.camera_publishing() {
+        #[cfg(target_os = "linux")]
+        let applied = crate::linux_camera::global_owner().refresh_visible_preview(app).await?;
+        #[cfg(not(target_os = "linux"))]
+        let applied = false;
         return Ok(crate::transport::camera::AppliedCameraDevice {
+            applied,
             in_room,
             ..Default::default()
         });
     }
 
-    // #842: no-op when the requested device is already the applied one --
-    // see the identical guard in set_camera_prefs above. This is what a
-    // secondary window (network-cockpit, window-picker) re-seeding the same
-    // preference on mount would otherwise turn into an unconditional
-    // stop/restart of a live camera publish.
-    if camera_request_is_unchanged(&requested_device, &previous_device) {
+    // Re-seeding the same device AND mode must not glitch a live publish.
+    // A same-device request that changes mode still needs the restart below.
+    if camera_request_is_unchanged(
+        &(requested_device, mode),
+        &(previous_device, previous_mode),
+    ) {
         return Ok(crate::transport::camera::AppliedCameraDevice {
             applied: true,
             in_room: true,
@@ -1142,8 +1340,7 @@ pub(crate) async fn apply_camera_device(
         });
     }
 
-    stop_camera_publish(app, state).await;
-    match start_camera_publish_with_device(
+    match replace_camera_capture(
         app,
         state,
         preferences.preferred_device(),
@@ -1168,7 +1365,7 @@ pub(crate) async fn apply_camera_device(
                 crate::analytics::DeviceKind::Camera,
                 crate::analytics::DeviceChange::Failed,
             );
-            state.set_camera_intent(false);
+            clear_camera_intent_after_owned_failure(state);
             emit_camera_intent(app, false);
             emit_camera_publish_state(app, false, Some(error.clone()));
             Ok(crate::transport::camera::AppliedCameraDevice {
@@ -1179,6 +1376,15 @@ pub(crate) async fn apply_camera_device(
             })
         }
     }
+}
+
+/// Callers hold camera_control and own the failed start/capture. Linux must
+/// not retire a newer explicit On queued while that old operation settled.
+fn clear_camera_intent_after_owned_failure(state: &crate::session::SessionState) {
+    #[cfg(target_os = "linux")]
+    state.clear_camera_start_failure();
+    #[cfg(not(target_os = "linux"))]
+    state.set_camera_intent(false);
 }
 
 /// Turn ON the native webcam publish — called by the
@@ -1204,7 +1410,13 @@ pub(crate) async fn start_camera_publish_intent(
     preferences: &CameraDevicePreferences,
     state: &crate::session::SessionState,
 ) -> Result<StartCameraPublishResult, String> {
+    #[cfg(target_os = "linux")]
+    let Some(_control) = state.lock_camera_start().await else {
+        return Err("camera start cancelled".to_string());
+    };
+    #[cfg(not(target_os = "linux"))]
     let _control = state.lock_camera_control().await;
+    #[cfg(not(target_os = "linux"))]
     state.set_camera_intent(true);
     // Announce the intent BEFORE acquiring: the Settings window's preview
     // holds the same physical device and has to let go for this to succeed.
@@ -1221,7 +1433,7 @@ pub(crate) async fn start_camera_publish_intent(
         Err(error) if error == "not in room" => {
             // Not retryable — there is no room to publish into. Intent is
             // cleared so a later join doesn't surprise-start the camera.
-            state.set_camera_intent(false);
+            clear_camera_intent_after_owned_failure(state);
             emit_camera_intent(app, false);
             Err(error)
         }
@@ -1238,7 +1450,7 @@ pub(crate) async fn start_camera_publish_intent(
                     || lower.contains("is not available")
                     || lower.contains("camera access or device lost")
                 {
-                    state.set_camera_intent(false);
+                    clear_camera_intent_after_owned_failure(state);
                     emit_camera_intent(app, false);
                     emit_camera_publish_state(app, false, Some(error.clone()));
                     return Err(error);
@@ -1279,7 +1491,12 @@ pub(crate) async fn stop_camera_publish_intent(
     app: &tauri::AppHandle,
     state: &crate::session::SessionState,
 ) {
+    // Linux access may be waiting for consent while holding camera_control.
+    // Retire its permission ownership before waiting for that operation.
+    #[cfg(target_os = "linux")]
+    state.set_camera_intent(false);
     let _control = state.lock_camera_control().await;
+    #[cfg(not(target_os = "linux"))]
     state.set_camera_intent(false);
     stop_camera_publish(app, state).await;
 }
@@ -1334,6 +1551,59 @@ mod tests {
         fn release_blocking(self) {
             self.released.store(true, Ordering::SeqCst);
         }
+    }
+
+    #[tokio::test]
+    async fn a_replacement_frame_from_a_retired_room_releases_capture_before_returning() {
+        let state = crate::session::SessionState::default();
+        state.set_camera_intent(true);
+        let generation = state.begin_room_generation();
+        let released = Arc::new(AtomicBool::new(false));
+        let capture = FakeCapture { released: released.clone() };
+        let (tx, rx) = std::sync::mpsc::channel();
+        // The producer exists before Leave invalidates ownership. Its late
+        // first frame must not survive admission to the retained publication.
+        state.invalidate_room_generation();
+        tx.send((640, 480)).unwrap();
+        let error = await_current_capture_or_release(
+            &state, &generation, capture, rx, Duration::from_secs(1),
+        )
+        .await
+        .err()
+        .expect("a retired room cannot adopt a replacement capture");
+        assert_eq!(error, "camera start cancelled");
+        assert!(released.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_failed_replacement_capture_is_released_before_a_new_attempt() {
+        let state = crate::session::SessionState::default();
+        state.set_camera_intent(true);
+        let generation = state.begin_room_generation();
+        let released = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        let failed = await_current_capture_or_release(
+            &state, &generation, FakeCapture { released: released.clone() },
+            rx, Duration::from_secs(1),
+        )
+        .await;
+        assert!(failed.is_err());
+        assert!(released.load(Ordering::SeqCst));
+
+        let released_retry = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send((640, 480)).unwrap();
+        let (capture, size) = await_current_capture_or_release(
+            &state, &generation, FakeCapture { released: released_retry.clone() },
+            rx, Duration::from_secs(1),
+        )
+        .await
+        .expect("explicit retry with a live producer");
+        assert_eq!(size, (640, 480));
+        assert!(!released_retry.load(Ordering::SeqCst));
+        drop_camera_capture(capture).await;
+        assert!(released_retry.load(Ordering::SeqCst));
     }
 
     /// B2 regression -- drives the REAL bounded first-frame wait used by
@@ -1592,6 +1862,18 @@ mod tests {
     }
 
     #[test]
+    fn camera_preferences_accept_fractional_rates_and_reject_invalid_requests() {
+        assert_eq!(requested_camera_mode(Some(1280), Some(720), Some(7.5)).unwrap(),
+            Some(PreferredCameraMode { width: 1280, height: 720, frame_rate: 7.5 }));
+        assert_eq!(requested_camera_mode(None, None, None).unwrap(), None);
+        for rate in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(requested_camera_mode(Some(1280), Some(720), Some(rate)).is_err());
+        }
+        assert!(requested_camera_mode(Some(1280), None, Some(7.5)).is_err());
+        assert!(requested_camera_mode(Some(0), Some(720), Some(7.5)).is_err());
+    }
+
+    #[test]
     fn camera_publication_waits_for_subscriber_negotiation() {
         assert_eq!(
             CAMERA_SUBSCRIBER_NEGOTIATION_DELAY,
@@ -1714,12 +1996,12 @@ mod tests {
         let mode_a = Some(PreferredCameraMode {
             width: 1280,
             height: 720,
-            frame_rate: 30,
+            frame_rate: 30.0,
         });
         let mode_b = Some(PreferredCameraMode {
             width: 1920,
             height: 1080,
-            frame_rate: 30,
+            frame_rate: 30.0,
         });
         assert!(camera_request_is_unchanged(&mode_a, &mode_a));
         assert!(camera_request_is_unchanged(

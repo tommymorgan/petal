@@ -467,10 +467,158 @@ fn windows_file_format_available() -> bool {
     .any(|format| clipboard_win::is_format_avail(format.get()))
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
 struct SystemClipboardBackend;
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg(target_os = "linux")]
+fn wayland_display_is_set(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+impl SystemClipboardBackend {
+    /// The wl-clipboard tools speak the Wayland data-control protocol; there
+    /// is no X11 fallback on this GNOME Wayland host.
+    fn ensure_wayland() -> Result<(), ClipboardError> {
+        wayland_display_is_set(std::env::var_os("WAYLAND_DISPLAY").as_deref())
+            .then_some(())
+            .ok_or(ClipboardError::Unavailable)
+    }
+
+
+    fn capture(&self, types: &[String]) -> Result<Option<Vec<u8>>, ClipboardError> {
+        // Prefer the exact UTF-8 text flavor; a source offering only another
+        // text flavor still satisfies the plain-text contract.
+        let text_types: Vec<&str> = types
+            .iter()
+            .map(String::as_str)
+            .filter(|candidate| {
+                candidate.starts_with("text/plain")
+                    || *candidate == "UTF8_STRING"
+                    || *candidate == "STRING"
+                    || *candidate == "TEXT"
+            })
+            .collect();
+        let Some(mime) = text_types.first().copied() else {
+            return Ok(None);
+        };
+        let output = std::process::Command::new("wl-paste")
+            // The CLI adds a newline by default; clipboard bytes must remain unchanged.
+            .arg("--no-newline")
+            .arg("--type")
+            .arg(mime)
+            .output()
+            .map_err(|_| ClipboardError::Unavailable)?;
+        if !output.status.success() {
+            return Err(ClipboardError::Unavailable);
+        }
+        Ok(Some(output.stdout))
+    }
+
+    fn offered_types(&self) -> Result<Vec<String>, ClipboardError> {
+        let output = std::process::Command::new("wl-paste")
+            .arg("--list-types")
+            .output()
+            .map_err(|_| ClipboardError::Unavailable)?;
+        if !output.status.success() {
+            return Ok(Vec::new());
+        }
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ClipboardBackend for SystemClipboardBackend {
+    fn read_text(&self) -> Result<Option<String>, ClipboardError> {
+        Self::ensure_wayland()?;
+        let types = self.offered_types()?;
+        let bytes = self.capture(&types)?;
+        match bytes {
+            None => Ok(None),
+            Some(bytes) if bytes.is_empty() => Ok(None),
+            Some(bytes) => String::from_utf8(bytes)
+                .map(Some)
+                .map_err(|_| ClipboardError::InvalidUtf8),
+        }
+    }
+
+    fn write_text(&self, text: &str) -> Result<(), ClipboardError> {
+        Self::ensure_wayland()?;
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut child = std::process::Command::new("wl-copy")
+            .arg("--type")
+            .arg("text/plain;charset=utf-8")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| ClipboardError::Unavailable)?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            // wl-copy reads stdin fully, then forks to serve the offer, so
+            // this write always drains.
+            stdin
+                .write_all(text.as_bytes())
+                .map_err(|_| ClipboardError::WriteFailed)?;
+        }
+        drop(child.stdin.take());
+        let status = child.wait().map_err(|_| ClipboardError::WriteFailed)?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(ClipboardError::WriteFailed)
+        }
+    }
+
+    /// Wayland exposes no monotonic clipboard sequence number. Derive a
+    /// stable value from the current text content so the copy-response
+    /// stale-local-clipboard guard still detects a user copying something
+    /// else while a remote copy was in flight.
+    fn sequence(&self) -> Result<u64, ClipboardError> {
+        Self::ensure_wayland()?;
+        match self.read_text()? {
+            None => Ok(0),
+            Some(text) => Ok(u64::from(crate::remote_control_core::fnv1a32(
+                text.as_bytes(),
+            ))),
+        }
+    }
+
+    fn contents(&self) -> Result<ClipboardContents, ClipboardError> {
+        Self::ensure_wayland()?;
+        let types = self.offered_types()?;
+        let sequence = self.sequence()?;
+        let has_file_transfer = types
+            .iter()
+            .any(|candidate| linux_type_indicates_file_transfer(candidate));
+        let text = if has_file_transfer {
+            None
+        } else {
+            self.capture(&types)?
+        };
+        Ok(ClipboardContents {
+            sequence,
+            has_file_transfer,
+            text,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_type_indicates_file_transfer(mime: &str) -> bool {
+    matches!(mime, "text/uri-list" | "x-special/gnome-copied-files")
+        || mime.starts_with("application/x-kde4")
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+struct SystemClipboardBackend;
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 impl ClipboardBackend for SystemClipboardBackend {
     fn read_text(&self) -> Result<Option<String>, ClipboardError> {
         Err(ClipboardError::Unavailable)
@@ -746,5 +894,30 @@ mod tests {
         backend.write_text("new text").unwrap();
         assert_eq!(backend.read_transfer_text().unwrap(), b"new text");
         assert_eq!(backend.sequence().unwrap(), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_file_transfer_mime_types_block_companion_text() {
+        assert!(linux_type_indicates_file_transfer("text/uri-list"));
+        assert!(linux_type_indicates_file_transfer(
+            "x-special/gnome-copied-files"
+        ));
+        assert!(linux_type_indicates_file_transfer(
+            "application/x-kde4-paste"
+        ));
+        assert!(!linux_type_indicates_file_transfer(
+            "text/plain;charset=utf-8"
+        ));
+        assert!(!linux_type_indicates_file_transfer("image/png"));
+        assert!(!linux_type_indicates_file_transfer("UTF8_STRING"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_backend_guards_on_a_nonempty_wayland_display() {
+        assert!(!wayland_display_is_set(None));
+        assert!(!wayland_display_is_set(Some("".as_ref())));
+        assert!(wayland_display_is_set(Some("wayland-0".as_ref())));
     }
 }

@@ -22,6 +22,7 @@ function request(overrides: Partial<RemoteControlMessage> = {}): RemoteControlMe
     controllerId: CONTROLLER,
     windowId: 42,
     seq: 1,
+    requestId: 'attempt-a',
     ...overrides
   } as RemoteControlMessage;
 }
@@ -71,6 +72,7 @@ test('a control request is answered with an active status carrying a grant token
   assert.equal(decision.status.controllerId, HOST);
   assert.equal(decision.status.targetUserId, CONTROLLER);
   assert.equal(decision.status.windowId, 42);
+  assert.equal(decision.status.requestId, 'attempt-a');
 });
 
 test('an input from a controller holding no grant is not recorded', () => {
@@ -139,6 +141,22 @@ test('release stops the session and later inputs stop being recorded', () => {
   applyHostEmulationDecision(state, stop);
   assert.equal(state.granted, false);
   assert.equal(hostEmulationDecision(state, pointerDown(), HOST, CONTROLLER).action, 'ignore');
+});
+test('Release A cannot retire the grant for a newer attempt B on the same share', () => {
+  const state = granted();
+  const newer = hostEmulationDecision(state, request({ requestId: 'attempt-b' }), HOST, CONTROLLER);
+  applyHostEmulationDecision(state, newer);
+  const token = state.grantToken;
+  const stale = hostEmulationDecision(state, request({ kind: 'release' }), HOST, CONTROLLER);
+  assert.equal(stale.action, 'ignore');
+  applyHostEmulationDecision(state, stale);
+  assert.equal(state.granted, true);
+  assert.equal(state.grantToken, token);
+  assert.equal(state.requestId, 'attempt-b');
+  const fresh = hostEmulationDecision(state, request({ kind: 'release', requestId: 'attempt-b' }), HOST, CONTROLLER);
+  assert.equal(fresh.action, 'stop');
+  applyHostEmulationDecision(state, fresh);
+  assert.equal(state.granted, false);
 });
 
 test('the ledger is bounded and drops the oldest input first', () => {

@@ -190,6 +190,11 @@ pub(crate) struct ControllerGrantEnvelope {
     pub(crate) full_pointer: bool,
     pub(crate) next_input_seq: u64,
 }
+struct ControllerRequestAttempt {
+    id: String,
+    active: bool,
+}
+
 
 /// The one owner of portable authorization, reliability, sequencing, and
 /// held-input state. Platform orchestration reaches these stores only through
@@ -207,11 +212,15 @@ pub(crate) struct RemoteControlEngine {
     replay_epochs: Mutex<HashMap<(u32, String), u64>>,
     pending_requests: Mutex<HashMap<ControlGrantKey, RemoteControlMessage>>,
     controller_grants: Mutex<HashMap<(u32, String), ControllerGrantEnvelope>>,
+    controller_requests: Mutex<HashMap<(u32, String), ControllerRequestAttempt>>,
+    host_requests: Mutex<HashMap<(u32, String), String>>,
 }
 
 impl RemoteControlEngine {
     pub(crate) fn new() -> Self {
         Self {
+            controller_requests: Mutex::new(HashMap::new()),
+            host_requests: Mutex::new(HashMap::new()),
             control_sessions: Mutex::new(HashMap::new()),
             warned_tokenless_inputs: Mutex::new(HashSet::new()),
             hot_path_capable_targets: Mutex::new(HashSet::new()),
@@ -224,6 +233,84 @@ impl RemoteControlEngine {
             replay_epochs: Mutex::new(HashMap::new()),
             pending_requests: Mutex::new(HashMap::new()),
             controller_grants: Mutex::new(HashMap::new()),
+        }
+    }
+    pub(crate) fn begin_controller_request(&self, window_id: u32, owner: &str, request_id: Option<String>) -> String {
+        self.remove_controller_grant(window_id, owner);
+        let id = request_id.filter(|id| !id.is_empty()).unwrap_or_else(|| {
+            let mut bytes = [0u8; 16];
+            getrandom::fill(&mut bytes).expect("OS CSPRNG unavailable for remote-control request ID");
+            format!("{:032x}", u128::from_le_bytes(bytes))
+        });
+        self.controller_requests.lock_unpoisoned().insert(
+            (window_id, owner.to_string()), ControllerRequestAttempt { id: id.clone(), active: false });
+        id
+    }
+
+    pub(crate) fn controller_request_id(&self, window_id: u32, owner: &str) -> Option<String> {
+        self.controller_requests.lock_unpoisoned().get(&(window_id, owner.to_string())).map(|attempt| attempt.id.clone())
+    }
+
+    pub(crate) fn retire_controller_request(&self, window_id: u32, owner: &str) {
+        self.controller_requests.lock_unpoisoned().remove(&(window_id, owner.to_string()));
+    }
+    /// Exact user cancellation; unlike teardown, it cannot adopt or retire a
+    /// later attempt. Grant removal is serialized with the identity check.
+    pub(crate) fn cancel_controller_request(&self, window_id: u32, owner: &str, request_id: &str) -> bool {
+        let mut requests = self.controller_requests.lock_unpoisoned();
+        let key = (window_id, owner.to_string());
+        if request_id.is_empty() || !requests.get(&key).is_some_and(|attempt| attempt.id == request_id) {
+            return false;
+        }
+        requests.remove(&key);
+        self.controller_grants.lock_unpoisoned().remove(&key);
+        true
+    }
+    pub(crate) fn activate_controller_request(&self, message: &RemoteControlMessage) {
+        if let Some(attempt) = self.controller_requests.lock_unpoisoned()
+            .get_mut(&(message.window_id, message.controller_id.clone()))
+        {
+            if message.request_id.as_deref() == Some(attempt.id.as_str()) {
+                attempt.active = true;
+            }
+        }
+    }
+
+    pub(crate) fn retire_pending_controller_request(&self, window_id: u32, owner: &str, request_id: &str) -> bool {
+        let mut requests = self.controller_requests.lock_unpoisoned();
+        let key = (window_id, owner.to_string());
+        if !requests.get(&key).is_some_and(|attempt| attempt.id == request_id && !attempt.active) {
+            return false;
+        }
+        requests.remove(&key);
+        true
+    }
+
+    pub(crate) fn controller_response_matches(&self, message: &RemoteControlMessage) -> bool {
+        message.request_id.as_deref().is_some_and(|id| !id.is_empty()
+            && self.controller_request_id(message.window_id, &message.controller_id).as_deref() == Some(id))
+    }
+
+    pub(crate) fn remember_host_request(&self, message: &RemoteControlMessage) {
+        if let Some(id) = message.request_id.as_ref().filter(|id| !id.is_empty()) {
+            self.host_requests.lock_unpoisoned().insert(
+                (message.window_id, message.controller_id.clone()), id.clone());
+        }
+    }
+
+    pub(crate) fn host_request_id(&self, window_id: u32, controller: &str) -> Option<String> {
+        self.host_requests.lock_unpoisoned().get(&(window_id, controller.to_string())).cloned()
+    }
+    pub(crate) fn host_release_matches(&self, message: &RemoteControlMessage) -> bool {
+        message.request_id.as_deref().is_some_and(|id| !id.is_empty()
+            && self.host_request_id(message.window_id, &message.controller_id).as_deref() == Some(id))
+    }
+
+    pub(crate) fn retire_host_request(&self, window_id: u32, controller: &str, request_id: Option<&str>) {
+        let mut requests = self.host_requests.lock_unpoisoned();
+        let key = (window_id, controller.to_string());
+        if requests.get(&key).map(String::as_str) == request_id {
+            requests.remove(&key);
         }
     }
 
@@ -257,9 +344,14 @@ impl RemoteControlEngine {
         owner_identity: String,
         grant: ControllerGrantEnvelope,
     ) {
+        let key = (window_id, owner_identity);
+        if let Some(attempt) = self.controller_requests.lock_unpoisoned().get_mut(&key)
+        {
+            attempt.active = true;
+        }
         self.controller_grants
             .lock_unpoisoned()
-            .insert((window_id, owner_identity), grant);
+            .insert(key, grant);
     }
 
     pub(crate) fn remove_controller_grant(
@@ -282,6 +374,7 @@ impl RemoteControlEngine {
         self.controller_grants
             .lock_unpoisoned()
             .retain(|(_, stored_owner), _| stored_owner != owner_identity);
+        self.controller_requests.lock_unpoisoned().retain(|(_, stored_owner), _| stored_owner != owner_identity);
     }
 
     pub(crate) fn controller_grant(
@@ -309,26 +402,38 @@ impl RemoteControlEngine {
 
     pub(crate) fn clear_controller_grants(&self) {
         self.controller_grants.lock_unpoisoned().clear();
+        self.controller_requests.lock_unpoisoned().clear();
     }
 
     pub(crate) fn store_pending_request(
         &self,
         key: ControlGrantKey,
         message: RemoteControlMessage,
-    ) {
-        self.pending_requests.lock_unpoisoned().insert(key, message);
+    ) -> bool {
+        let mut pending = self.pending_requests.lock_unpoisoned();
+        if pending.get(&key).is_some_and(|stored| stored.request_id == message.request_id) {
+            return false;
+        }
+        pending.retain(|stored, _| stored.window_id != key.window_id || stored.controller_id != key.controller_id);
+        self.remember_host_request(&message);
+        pending.insert(key, message);
+        true
     }
 
     pub(crate) fn take_pending_request(
         &self,
         window_id: u32,
         controller_id: &str,
+        request_id: Option<&str>,
     ) -> Option<RemoteControlMessage> {
         let mut pending = self.pending_requests.lock_unpoisoned();
         let key = pending
             .keys()
             .find(|key| key.window_id == window_id && key.controller_id == controller_id)
             .cloned()?;
+        if request_id.is_some_and(|id| pending.get(&key).and_then(|m| m.request_id.as_deref()) != Some(id)) {
+            return None;
+        }
         pending.remove(&key)
     }
 
@@ -337,15 +442,19 @@ impl RemoteControlEngine {
     }
 
     /// `seq` of the parked request for this (window, controller), if any.
-    /// The consent timer captures the seq it armed for and only fires when
-    /// the SAME request is still parked -- a re-request replaces the parked
-    /// message and re-arms, so a stale timer must not deny the newer one.
+    /// Sequence metadata for diagnostics and compatibility fixtures. Consent
+    /// timers and answers correlate exclusively through `request_id`.
     pub(crate) fn pending_request_seq(&self, window_id: u32, controller_id: &str) -> Option<u64> {
         self.pending_requests
             .lock_unpoisoned()
             .iter()
             .find(|(key, _)| key.window_id == window_id && key.controller_id == controller_id)
             .map(|(_, message)| message.seq)
+    }
+    pub(crate) fn pending_request_id(&self, window_id: u32, controller: &str) -> Option<String> {
+        self.pending_requests.lock_unpoisoned().iter()
+            .find(|(key, _)| key.window_id == window_id && key.controller_id == controller)
+            .and_then(|(_, message)| message.request_id.clone())
     }
 
     pub(crate) fn has_pending_request(&self, window_id: u32, controller_id: &str) -> bool {
@@ -1130,6 +1239,8 @@ pub struct RemoteControlDraft {
     #[serde(rename = "kind")]
     pub message_type: RemoteControlType,
     #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
     pub action: Option<RemoteControlAction>,
     pub window_id: u32,
     #[serde(default)]
@@ -1233,6 +1344,10 @@ pub struct RemoteControlMessage {
     pub target_user_id: String,
     pub controller_id: String,
     pub window_id: u32,
+    /// Exact explicit request attempt. Required for request/status lifecycle;
+    /// absent legacy replies deserialize but cannot establish controller authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub seq: u64,
     /// Missing means the legacy window target. Unknown future values are
     /// retained as metadata and never guessed as a display.
@@ -1342,47 +1457,45 @@ impl RemoteControlDraft {
         target_user_id: String,
         controller_id: String,
     ) -> RemoteControlMessage {
-        RemoteControlMessage {
-            v: VERSION,
-            message_type: self.message_type,
-            action: self.action,
-            target_user_id,
-            controller_id,
-            window_id: self.window_id,
-            seq: self.seq,
-            target_kind: self.target_kind,
-            share_instance_id: self.share_instance_id,
-            controller_capabilities: self.controller_capabilities,
-            host_capabilities: Vec::new(),
-            reason: None,
-            control_session_id: None,
-            input_id: None,
-            input_seq: None,
-            operation_fingerprint_version: None,
-            operation_fingerprint: None,
-            outcome: None,
-            delivery_route: None,
-            failure_code: None,
-            result_capability: None,
-            x: self.x,
-            y: self.y,
-            button: self.button,
-            buttons: self.buttons,
-            click_count: self.click_count,
-            delta_x: self.delta_x,
-            delta_y: self.delta_y,
-            delta_mode: self.delta_mode,
-            key: self.key,
-            code: self.code,
-            repeat: self.repeat,
-            location: self.location,
-            text: self.text,
-            status: None,
-            message: None,
-            grant_token: self.grant_token,
-            supports_binary_hot_path: false,
-            modifiers: self.modifiers,
-        }
+        RemoteControlMessage { request_id: self.request_id, v: VERSION,
+        message_type: self.message_type,
+        action: self.action,
+        target_user_id,
+        controller_id,
+        window_id: self.window_id,
+        seq: self.seq,
+        target_kind: self.target_kind,
+        share_instance_id: self.share_instance_id,
+        controller_capabilities: self.controller_capabilities,
+        host_capabilities: Vec::new(),
+        reason: None,
+        control_session_id: None,
+        input_id: None,
+        input_seq: None,
+        operation_fingerprint_version: None,
+        operation_fingerprint: None,
+        outcome: None,
+        delivery_route: None,
+        failure_code: None,
+        result_capability: None,
+        x: self.x,
+        y: self.y,
+        button: self.button,
+        buttons: self.buttons,
+        click_count: self.click_count,
+        delta_x: self.delta_x,
+        delta_y: self.delta_y,
+        delta_mode: self.delta_mode,
+        key: self.key,
+        code: self.code,
+        repeat: self.repeat,
+        location: self.location,
+        text: self.text,
+        status: None,
+        message: None,
+        grant_token: self.grant_token,
+        supports_binary_hot_path: false,
+        modifiers: self.modifiers, }
     }
 }
 
@@ -1402,6 +1515,8 @@ pub struct RemoteControlStatus {
     pub window_id: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_identity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub controller_id: String,
     pub status: &'static str,
     pub message: String,
@@ -2229,9 +2344,148 @@ pub(crate) fn drain_expired_pressed(now: Instant) -> Vec<ReplayTask> {
         });
     releases
 }
+/// Fixture builders shared by platform controller tests. Test-only: the
+/// production send path always builds messages from live state.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    fn base_message(
+        window_id: u32,
+        target_user_id: String,
+        controller_id: String,
+        message_type: RemoteControlType,
+    ) -> RemoteControlMessage {
+        RemoteControlMessage { request_id: None, v: VERSION,
+        message_type,
+        action: None,
+        target_user_id,
+        controller_id,
+        window_id,
+        seq: 1,
+        target_kind: None,
+        share_instance_id: None,
+        controller_capabilities: Vec::new(),
+        host_capabilities: Vec::new(),
+        reason: None,
+        control_session_id: None,
+        input_id: None,
+        input_seq: None,
+        operation_fingerprint_version: None,
+        operation_fingerprint: None,
+        outcome: None,
+        delivery_route: None,
+        failure_code: None,
+        result_capability: None,
+        x: None,
+        y: None,
+        button: None,
+        buttons: None,
+        click_count: None,
+        delta_x: None,
+        delta_y: None,
+        delta_mode: None,
+        key: None,
+        code: None,
+        repeat: false,
+        location: None,
+        text: None,
+        status: None,
+        message: None,
+        grant_token: None,
+        supports_binary_hot_path: false,
+        modifiers: RemoteControlModifiers::default(), }
+    }
+
+
+    /// Serializes tests that touch process-global controller/registry state
+    /// (engine controller grants, Linux receive targets) across the modules
+    /// that mutate them.
+    pub(crate) fn state_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+    /// Host→controller Status packet shaped like a capable Windows host's
+    /// accepted grant (negotiated v2 envelope, reliable results, no retry).
+    /// `controller_id` on the wire holds the HOST's identity for status
+    /// kinds; `target_user_id` is the local controller.
+    pub(crate) fn controller_status_packet(
+        window_id: u32,
+        host_identity: &str,
+        status: &str,
+        grant_token: &str,
+        share_instance_id: &str,
+    ) -> RemoteControlMessage {
+        let mut message = base_message(
+            window_id,
+            "local-controller".to_string(),
+            host_identity.to_string(),
+            RemoteControlType::Status,
+        );
+        message.status = Some(status.to_string());
+        message.request_id = remote_control_engine().controller_request_id(window_id, host_identity);
+        message.grant_token = Some(grant_token.to_string());
+        message.target_kind = Some(RemoteControlTargetKind::Window);
+        message.share_instance_id = Some(share_instance_id.to_string());
+        message.control_session_id = Some("control-session".to_string());
+        message.host_capabilities = vec![
+            RemoteControlCapability::DiscretePointerV1,
+            RemoteControlCapability::DiscreteScrollV1,
+            RemoteControlCapability::GlobalKeyboard,
+            RemoteControlCapability::UiaInvoke,
+        ];
+        message.result_capability = Some(RemoteControlResultCapability {
+            version: 2,
+            retry_enabled: false,
+            retry_deadline_ms: 0,
+            dedup_guarantee_window_ms: 0,
+        });
+        message
+    }
+
+    /// Minimal controller→host input message addressed to `host_identity`.
+    pub(crate) fn input_message(
+        window_id: u32,
+        host_identity: &str,
+        message_type: RemoteControlType,
+    ) -> RemoteControlMessage {
+        base_message(
+            window_id,
+            host_identity.to_string(),
+            "local-controller".to_string(),
+            message_type,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn consent_answers_and_releases_are_bound_to_the_exact_host_attempt() {
+        let engine = RemoteControlEngine::new();
+        let mut first = test_support::input_message(17, "host", RemoteControlType::Request);
+        first.request_id = Some("attempt-a".into());
+        let key = ControlGrantKey::for_message(&first).unwrap();
+        engine.remember_host_request(&first);
+        engine.store_pending_request(key.clone(), first.clone());
+        let mut second = first.clone();
+        second.request_id = Some("attempt-b".into());
+        engine.remember_host_request(&second);
+        engine.store_pending_request(key, second.clone());
+        assert!(!engine.host_release_matches(&first), "Release A cannot revoke pending B");
+        assert!(engine.take_pending_request(17, &first.controller_id, Some("attempt-a")).is_none(),
+            "an old Allow/Deny/timeout must leave B parked");
+        let approved = engine.take_pending_request(17, &second.controller_id, Some("attempt-b")).unwrap();
+        assert_eq!(approved.request_id, second.request_id);
+        assert!(!engine.host_release_matches(&first), "Release A cannot revoke approved B");
+        engine.retire_host_request(17, &first.controller_id, first.request_id.as_deref());
+        assert!(engine.host_release_matches(&second), "retiring A must not clear B's binding");
+        engine.retire_host_request(17, &second.controller_id, second.request_id.as_deref());
+        assert!(!engine.host_release_matches(&second));
+    }
 
     #[test]
     fn control_mode_defaults_and_wire_parsing() {
@@ -2710,15 +2964,13 @@ mod tests {
         let surface = FakeSurface::default();
         RemoteControlEngine::new().emit_status(
             &surface,
-            RemoteControlStatus {
-                window_id: 42,
-                owner_identity: Some("native-1".to_string()),
-                controller_id: "web-1".to_string(),
-                status: "active",
-                message: "granted".to_string(),
-                grant_token: Some("grant-a".to_string()),
-                reason: None,
-            },
+            RemoteControlStatus { request_id: None, window_id: 42,
+            owner_identity: Some("native-1".to_string()),
+            controller_id: "web-1".to_string(),
+            status: "active",
+            message: "granted".to_string(),
+            grant_token: Some("grant-a".to_string()),
+            reason: None, },
         );
         assert_eq!(surface.0.lock_unpoisoned().as_slice().len(), 1);
         assert_eq!(surface.0.lock_unpoisoned()[0].status, "active");

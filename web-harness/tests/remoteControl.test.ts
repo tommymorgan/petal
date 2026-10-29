@@ -81,7 +81,9 @@ function remoteControlContext(
         )
       },
       remoteControlSeq: 0,
-      activeRemoteControl: null
+      // Grant-consumer fixtures start with an explicit pending request.
+      activeRemoteControl: { tileId: 'tile-7', targetUserId: 'native', windowId: 7,
+        pointerId: null, grantToken: null, requestId: 'test-attempt' }
     },
     ui: {
       logEvent,
@@ -141,23 +143,19 @@ function activateHarnessV2(
   controlSessionId = 'grant-a',
   dedupGuaranteeWindowMs = 750
 ) {
-  api.handleRemoteControlPayload(encodeJson({
-    v: 1,
-    kind: 'status',
-    targetUserId: 'web',
-    controllerId: 'native',
-    windowId: 7,
-    seq: 1,
-    status: 'active',
-    message: 'granted',
-    controlSessionId,
-    resultCapability: {
-      version: 2,
-      retryEnabled: false,
-      retryDeadlineMs: 0,
-      dedupGuaranteeWindowMs
-    }
-  } satisfies RemoteControlMessage), 'native');
+  api.handleRemoteControlPayload(encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', targetUserId: 'web',
+  controllerId: 'native',
+  windowId: 7,
+  seq: 1,
+  status: 'active',
+  message: 'granted',
+  controlSessionId,
+  resultCapability: {
+    version: 2,
+    retryEnabled: false,
+    retryDeadlineMs: 0,
+    dedupGuaranteeWindowMs
+  } } satisfies RemoteControlMessage), 'native');
 }
 
 function terminalResultFor(
@@ -318,45 +316,34 @@ test('handleRemoteControlPayload rejects a status packet whose LiveKit sender is
       targetUserId: 'native-host',
       windowId: 7,
       pointerId: null,
-      grantToken: 'original-token'
+      grantToken: null,
+      requestId: 'test-attempt'
     };
     const ui = setupRemoteControlUi(ctx);
 
-    const spoofedActive = encodeJson({
-      v: 1,
-      kind: 'status',
-      windowId: 7,
-      targetUserId: 'web',
-      controllerId: 'native-host',
-      status: 'active',
-      grantToken: 'attacker-token'
-    });
+    const spoofedActive = encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', windowId: 7,
+    targetUserId: 'web',
+    controllerId: 'native-host',
+    status: 'active',
+    grantToken: 'attacker-token' });
     ui.handleRemoteControlPayload(spoofedActive, 'attacker-identity');
-    assert.equal(ctx.state.activeRemoteControl?.grantToken, 'original-token');
+    assert.equal(ctx.state.activeRemoteControl?.grantToken, null);
 
-    const spoofedStop = encodeJson({
-      v: 1,
-      kind: 'status',
-      windowId: 7,
-      targetUserId: 'web',
-      controllerId: 'native-host',
-      status: 'stopped'
-    });
+    const spoofedStop = encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', windowId: 7,
+    targetUserId: 'web',
+    controllerId: 'native-host',
+    status: 'stopped' });
     ui.handleRemoteControlPayload(spoofedStop, 'attacker-identity');
     assert.notEqual(ctx.state.activeRemoteControl, null);
 
     // The genuine host sender still updates/tears down the session normally.
     ui.handleRemoteControlPayload(spoofedActive, 'native-host');
     assert.equal(ctx.state.activeRemoteControl?.grantToken, 'attacker-token');
-    const operationFeedback = encodeJson({
-      v: 1,
-      kind: 'status',
-      windowId: 7,
-      targetUserId: 'web',
-      controllerId: 'native-host',
-      status: 'occluded',
-      message: 'Remote input was ignored because the target point is covered.'
-    });
+    const operationFeedback = encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', windowId: 7,
+    targetUserId: 'web',
+    controllerId: 'native-host',
+    status: 'occluded',
+    message: 'Remote input was ignored because the target point is covered.' });
     ui.handleRemoteControlPayload(operationFeedback, 'native-host');
     assert.equal(ctx.state.activeRemoteControl?.grantToken, 'attacker-token');
     ui.handleRemoteControlPayload(spoofedStop, 'native-host');
@@ -611,11 +598,9 @@ test('harness v2 grant attaches one canonical envelope, records terminal result,
     startRemoteControl: () => {},
     stopRemoteControl: () => {}
   });
-  api.handleRemoteControlPayload(encodeJson({
-    v: 1, kind: 'status', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 1,
-    status: 'active', message: 'granted', controlSessionId: 'grant-a',
-    resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 }
-  } satisfies RemoteControlMessage), 'native');
+  api.handleRemoteControlPayload(encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 1,
+  status: 'active', message: 'granted', controlSessionId: 'grant-a',
+  resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 } } satisfies RemoteControlMessage), 'native');
   ctx.hook.remoteControl!.click({ targetUserId: 'native', windowId: 7, x: 0.4, y: 0.6 });
   await publisherCallback.wait();
   assert.equal(published.length, 1);
@@ -903,10 +888,8 @@ test('harness deterministic grant matrix handles malformed envelopes, revoke, re
     publishRemoteControl: async (message) => { published.push(message); publisherCallback?.notify(); },
     startRemoteControl: () => {}, stopRemoteControl: () => {}
   });
-  const status = (status: 'active' | 'stopped', grant?: string) => api.handleRemoteControlPayload(encodeJson({
-    v: 1, kind: 'status', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: published.length + 1,
-    status, message: status, ...(grant ? { controlSessionId: grant, resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 } } : {})
-  } as RemoteControlMessage), 'native');
+  const status = (status: 'active' | 'stopped', grant?: string) => api.handleRemoteControlPayload(encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: published.length + 1,
+  status, message: status, ...(grant ? { controlSessionId: grant, resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 } } : {}) } as RemoteControlMessage), 'native');
   const click = async () => {
     publisherCallback = boundedPublisherCallbackWait();
     ctx.hook.remoteControl!.click({ targetUserId: 'native', windowId: 7, x: .5, y: .5 });
@@ -916,26 +899,21 @@ test('harness deterministic grant matrix handles malformed envelopes, revoke, re
   };
   status('active', 'grant-a');
   assert.equal((await click() as Extract<RemoteControlMessage, { kind: 'pointer' }>).controlSessionId, 'grant-a');
-  api.handleRemoteControlPayload(encodeJson({
-    v: 1, kind: 'status', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 20,
-    status: 'stopped', message: 'partial capable status', targetKind: 'window'
-  }), 'native');
+  api.handleRemoteControlPayload(encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 20,
+  status: 'stopped', message: 'partial capable status', targetKind: 'window' }), 'native');
   assert.equal((await click() as Extract<RemoteControlMessage, { kind: 'pointer' }>).controlSessionId, 'grant-a', 'partial target envelope cannot revoke a grant');
-  api.handleRemoteControlPayload(encodeJson({
-    v: 1, kind: 'status', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 21,
-    status: 'stopped', message: 'future target status', targetKind: 'future-target',
-    shareInstanceId: 'share-a'
-  }), 'native');
+  api.handleRemoteControlPayload(encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 21,
+  status: 'stopped', message: 'future target status', targetKind: 'future-target',
+  shareInstanceId: 'share-a' }), 'native');
   assert.equal((await click() as Extract<RemoteControlMessage, { kind: 'pointer' }>).controlSessionId, 'grant-a', 'unknown target kind cannot revoke a grant');
   status('stopped');
   assert.equal((await click() as Extract<RemoteControlMessage, { kind: 'pointer' }>).controlSessionId, undefined, 'revoked/expired grant falls back to legacy without replay');
-  api.handleRemoteControlPayload(encodeJson({
-    v: 1, kind: 'status', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 22,
-    status: 'active', message: 'capable grant', targetKind: 'display',
-    shareInstanceId: 'share-b', hostCapabilities: ['discretePointerV1'],
-    controlSessionId: 'grant-b',
-    resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 }
-  }), 'native');
+  ctx.state.activeRemoteControl!.requestId = 'successor-attempt';
+  api.handleRemoteControlPayload(encodeJson({ v: 1, kind: 'status', requestId: 'successor-attempt', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: 22,
+  status: 'active', message: 'capable grant', targetKind: 'display',
+  shareInstanceId: 'share-b', hostCapabilities: ['discretePointerV1'],
+  controlSessionId: 'grant-b',
+  resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 } }), 'native');
   assert.equal((await click() as Extract<RemoteControlMessage, { kind: 'pointer' }>).controlSessionId, 'grant-b', 'regrant is a new generation');
   const reload = setupHarnessApi(remoteControlContext(() => Promise.resolve()), {
     nextRemoteControlSeq: () => 1, publishRemoteControl: async () => {}, startRemoteControl: () => {}, stopRemoteControl: () => {}
@@ -952,10 +930,8 @@ test('harness ignores a v2 grant status spoofed by a non-host room peer', async 
     publishRemoteControl: async (message) => { published.push(message); publisherCallback?.notify(); },
     startRemoteControl: () => {}, stopRemoteControl: () => {}
   });
-  const status = (status: 'active' | 'stopped', senderIdentity: string | undefined, grant?: string) => api.handleRemoteControlPayload(encodeJson({
-    v: 1, kind: 'status', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: published.length + 1,
-    status, message: status, ...(grant ? { controlSessionId: grant, resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 } } : {})
-  } as RemoteControlMessage), senderIdentity);
+  const status = (status: 'active' | 'stopped', senderIdentity: string | undefined, grant?: string) => api.handleRemoteControlPayload(encodeJson({ v: 1, kind: 'status', requestId: 'test-attempt', targetUserId: 'web', controllerId: 'native', windowId: 7, seq: published.length + 1,
+  status, message: status, ...(grant ? { controlSessionId: grant, resultCapability: { version: 2, retryEnabled: false, retryDeadlineMs: 0, dedupGuaranteeWindowMs: 750 } } : {}) } as RemoteControlMessage), senderIdentity);
   const click = async () => {
     publisherCallback = boundedPublisherCallbackWait();
     ctx.hook.remoteControl!.click({ targetUserId: 'native', windowId: 7, x: .5, y: .5 });
@@ -1415,6 +1391,7 @@ function harnessGrantContext(published: RemoteControlMessage[]) {
     getElementById: (id: string) => (id === tile.id ? tile : null)
   };
   const ctx = remoteControlContext(() => Promise.resolve());
+  ctx.state.activeRemoteControl = null;
   (ctx.cb as unknown as { shareTileForWindowId: (id: number) => unknown }).shareTileForWindowId = (
     windowId: number
   ) => (windowId === 7 ? tile : null);

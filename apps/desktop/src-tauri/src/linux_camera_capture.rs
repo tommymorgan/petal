@@ -14,9 +14,11 @@ use gstreamer_video as gst_video;
 use tokio::sync::watch;
 
 use crate::sync_ext::MutexExt;
-use crate::transport::camera::{CameraFrame, PreferredCameraMode};
+use crate::transport::camera::{CameraFrame, CameraMode};
+use crate::linux_camera_portal::CAMERA_ACCESS_LOST;
 
 pub(crate) const MIN_GSTREAMER_VERSION: (u32, u32) = (1, 28);
+static NEXT_CAPTURE_STREAM: AtomicU64 = AtomicU64::new(1);
 // The same factories requested by the camera pipeline below. Registry-only
 // inspection of these names must never construct a capture element.
 pub(crate) const REQUIRED_CAMERA_ELEMENTS: &[&str] = &[
@@ -37,6 +39,9 @@ pub(super) struct CameraCaptureStatus {
     /// Bumped when the underlying capture ends for any reason; a lease that
     /// reads it can no longer resurrect tracks or preview surfaces.
     retired: AtomicBool,
+    stream_name: String,
+    /// Completes only after the physical pipeline has entered NULL.
+    stopped: tokio_util::sync::CancellationToken,
 }
 
 impl CameraCaptureStatus {
@@ -45,7 +50,17 @@ impl CameraCaptureStatus {
             terminal: Mutex::new(None),
             frames: AtomicU64::new(0),
             retired: AtomicBool::new(false),
+            stream_name: format!(
+                "petal-camera-{}-{}",
+                std::process::id(),
+                NEXT_CAPTURE_STREAM.fetch_add(1, Ordering::Relaxed)
+            ),
+            stopped: tokio_util::sync::CancellationToken::new(),
         })
+    }
+
+    pub(super) fn stream_name(&self) -> &str {
+        &self.stream_name
     }
 
     pub(super) fn retire(&self, reason: Option<String>) {
@@ -73,6 +88,10 @@ impl CameraCaptureStatus {
     pub(crate) fn frames_delivered(&self) -> u64 {
         self.frames.load(Ordering::SeqCst)
     }
+
+    pub(super) async fn wait_stopped(&self) {
+        self.stopped.cancelled().await;
+    }
 }
 
 /// One bounded GStreamer capture. With a portal remote the capture rides the
@@ -88,6 +107,7 @@ pub(super) struct CameraCapturePipeline {
     samples: watch::Receiver<Option<gst::Sample>>,
     status: Arc<CameraCaptureStatus>,
     sequence: u64,
+    frame_rate: (u32, u32),
     /// Set once the bus carried an Error/EOS: the neutral camera-loss text.
     ended: AtomicBool,
 }
@@ -101,7 +121,7 @@ impl CameraCapturePipeline {
     pub fn open(
         remote: Option<OwnedFd>,
         node: u32,
-        preferred: Option<PreferredCameraMode>,
+        preferred: Option<CameraMode>,
         status: Arc<CameraCaptureStatus>,
     ) -> Result<Self, String> {
         gst::init().map_err(|e| format!("GStreamer capture unavailable: {e}"))?;
@@ -123,7 +143,16 @@ impl CameraCapturePipeline {
         }
         // Node ids address the same registry on both transports.
         source.set_property("path", node.to_string());
-        source.set_property_from_str("on-disconnect", "error");
+        source.set_property(
+            "stream-properties",
+            gst::Structure::builder("props")
+                .field("node.name", status.stream_name())
+                .build(),
+        );
+        // Mode changes rebuild PipeWire buffers without removing the device.
+        // Treating that rebuild as a disconnect retires a healthy replacement.
+        // Registry NodeRemoved/AccessLost and pipeline Error/EOS still fail closed.
+        source.set_property_from_str("on-disconnect", "none");
         source.set_property("always-copy", true);
         let convert = element("videoconvert")?;
         let scale = element("videoscale")?;
@@ -135,9 +164,9 @@ impl CameraCapturePipeline {
         let mut caps = gst::Caps::builder("video/x-raw").field("format", "NV12");
         if let Some(mode) = preferred {
             caps = caps
-                .field("width", mode.width as i32)
-                .field("height", mode.height as i32)
-                .field("framerate", gst::Fraction::new(mode.frame_rate as i32, 1));
+                .field("width", i32::try_from(mode.width).map_err(|_| "Camera width exceeds GStreamer limits")?)
+                .field("height", i32::try_from(mode.height).map_err(|_| "Camera height exceeds GStreamer limits")?)
+                .field("framerate", advertised_frame_rate(mode)?);
         }
         filter.set_property("caps", caps.build());
         let sink = element("appsink")?
@@ -190,6 +219,7 @@ impl CameraCapturePipeline {
             samples,
             status,
             sequence: 0,
+            frame_rate: (30, 1),
             ended: AtomicBool::new(false),
         };
         capture
@@ -204,6 +234,12 @@ impl CameraCapturePipeline {
     /// explicit portal denial there is no honest way to name a finer cause.
     pub async fn next_frame(&mut self) -> Result<CameraFrame, String> {
         loop {
+            if self.status.is_retired() {
+                return Err(self
+                    .status
+                    .terminal_error()
+                    .unwrap_or_else(|| CAMERA_ACCESS_LOST.to_string()));
+            }
             if !self.ended.load(Ordering::SeqCst) {
                 if let Some(message) = self
                     .bus
@@ -216,10 +252,7 @@ impl CameraCapturePipeline {
                         }
                         _ => "Camera capture ended".to_string(),
                     };
-                    self.status.retire(Some(
-                        "Camera access or device lost; turn the camera on again to retry"
-                            .to_string(),
-                    ));
+                    self.status.retire(Some(CAMERA_ACCESS_LOST.to_string()));
                     log::warn!("linux camera capture ended: {reason}");
                     return Err(self.status.terminal_error().unwrap_or(reason));
                 }
@@ -254,6 +287,11 @@ impl CameraCapturePipeline {
         {
             return Err("Camera capture did not negotiate a usable NV12 picture".to_string());
         }
+        let rate = info.fps();
+        if rate.numer() <= 0 || rate.denom() <= 0 {
+            return Err("Camera capture did not negotiate a positive frame rate".to_string());
+        }
+        self.frame_rate = (rate.numer() as u32, rate.denom() as u32);
         let buffer = sample.buffer().ok_or("Camera frame has no buffer")?;
         let frame = gst_video::VideoFrameRef::from_buffer_ref_readable(buffer, &info)
             .map_err(|e| format!("Camera frame is not readable: {e}"))?;
@@ -322,18 +360,71 @@ impl CameraCapturePipeline {
     pub(super) fn status(&self) -> &Arc<CameraCaptureStatus> {
         &self.status
     }
+
+    pub(super) fn frame_rate(&self) -> (u32, u32) {
+        self.frame_rate
+    }
 }
 
 impl Drop for CameraCapturePipeline {
     fn drop(&mut self) {
+        // Intentional teardown must not become a stream-loss error when the
+        // registry later observes this pipeline's input node disappearing.
+        self.status.retire(None);
         let _ = self.pipeline.set_state(gst::State::Null);
+        self.status.stopped.cancel();
     }
+}
+
+/// Preserve the native rational, reducing before converting to GStreamer's
+/// signed representation. This runs only when opening a pipeline.
+fn advertised_frame_rate(mode: CameraMode) -> Result<gst::Fraction, String> {
+    let mut numerator = mode.frame_rate_numerator;
+    let mut denominator = mode.frame_rate_denominator;
+    if numerator == 0 || denominator == 0 {
+        return Err("Camera frame rate must be positive".into());
+    }
+    let (mut a, mut b) = (numerator, denominator);
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    numerator /= a;
+    denominator /= a;
+    Ok(gst::Fraction::new(
+        i32::try_from(numerator).map_err(|_| "Camera frame rate exceeds GStreamer limits")?,
+        i32::try_from(denominator).map_err(|_| "Camera frame rate exceeds GStreamer limits")?,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+
+    #[test]
+    fn advertised_fractional_caps_keep_the_native_ratio() {
+        let mode = CameraMode {
+            width: 1280, height: 720,
+            frame_rate_numerator: 15, frame_rate_denominator: 2,
+        };
+        assert_eq!(advertised_frame_rate(mode).unwrap(), gst::Fraction::new(15, 2));
+        assert_eq!(advertised_frame_rate(CameraMode {
+            frame_rate_numerator: 30, frame_rate_denominator: 4, ..mode
+        }).unwrap(), gst::Fraction::new(15, 2));
+        assert!(advertised_frame_rate(CameraMode {
+            frame_rate_denominator: 0, ..mode
+        }).is_err());
+    }
+
+    #[tokio::test]
+    async fn replacement_waits_for_physical_pipeline_teardown() {
+        let capture = adapter();
+        let status = capture.status().clone();
+        assert!(!status.stopped.is_cancelled());
+        drop(capture);
+        status.wait_stopped().await;
+        assert!(status.stopped.is_cancelled());
+    }
     fn adapter() -> CameraCapturePipeline {
         gst::init().unwrap();
         // No source elements or capture permission: exercise the real native
@@ -348,6 +439,7 @@ mod tests {
             samples,
             status: CameraCaptureStatus::new(),
             sequence: 0,
+            frame_rate: (30, 1),
             ended: AtomicBool::new(false),
         }
     }
@@ -402,6 +494,17 @@ mod tests {
                 "{format} {width}x{height} must not become an NV12 camera frame"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn retired_stream_settles_without_waiting_for_another_frame() {
+        let mut capture = adapter();
+        capture.status.retire(Some(CAMERA_ACCESS_LOST.to_string()));
+        let error = tokio::time::timeout(std::time::Duration::from_secs(1), capture.next_frame())
+            .await
+            .expect("removed capture stream must settle without a sample")
+            .expect_err("retired stream cannot remain live");
+        assert_eq!(error, CAMERA_ACCESS_LOST);
     }
 
     #[tokio::test]

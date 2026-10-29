@@ -130,6 +130,144 @@ workflow. Validate B-local behavior, when needed, by using the target
 application's reachable in-window context menu, toolbar, or dropdown for both
 operations; do not mix that UI Copy with Petal keyboard Paste.
 
+#### Linux ↔ Windows clipboard acceptance, November 3, 2026
+
+The actual Linux ELF joined the owned SFU room on a private headless Mutter
+display, runtime and session bus. The corrected local Windows candidate shared
+an owned WinForms editor in the dedicated test VM. Windows approved the real
+control-consent dialog; Copy and Paste were explicitly invoked separately with
+the current grant. The VM's host clipboard bridge and drag-and-drop stayed
+disabled, and no human clipboard was read, written or connected.
+
+Both directions preserved Unicode, multiline text and existing trailing CRLF.
+Distinct exactly-1,048,576-byte UTF-8 payloads passed Copy and Paste: received
+clipboard hashes matched, and Paste changed the actual Windows editor to the
+expected text. Missing approval, 1 MiB + 1 byte, NUL, a genuinely retired grant,
+file-list MIME and image-only MIME all left both clipboards and the Windows
+editor unchanged. Retired-grant Copy and Paste could publish successfully but
+had no host effect; publication success alone was not counted as acceptance.
+
+The earlier private-renderer blocker was resolved without production changes.
+The installed WebKitGTK 2.54.2 core identified
+`FrameRenderer::graphicsLayerFactory()` during `document.startViewTransition`.
+The private launcher had disabled the DMA-BUF renderer entirely; retaining
+`WEBKIT_DMABUF_RENDERER_FORCE_SHM=1` instead allowed real onboarding, room
+navigation and transport. Private accessibility peers also need consistent PID
+visibility; a bus in a separate PID namespace could not identify the app.
+Clipboard source ownership was verified by reading the private compositor's
+accepted bytes before each transfer, not by trusting `set_content()` alone.
+
+This establishes the controller R04 outline locally, not Task 3.1 delivery,
+Linux clipboard-host support, or delayed-response acceptance across every
+retirement. Owned apps, virtual input, private compositors and scratch files
+were removed; the empty owned SFU room and cleared synthetic guest clipboard
+were observed. The resumed VM remains running with its configuration unchanged.
+
+#### Linux → Windows stale-control retirement, November 3, 2026
+
+The actual Linux GTK/WebKit app and owned Windows native editor used the
+self-hosted SFU. A packet gate inside the Linux app's private user/network
+namespace held genuine encrypted UDP, without rewriting payloads or sender
+identity. It did not change the host firewall or shared networking.
+
+All six endings passed delayed input and delayed approval checks: meeting-wide
+Windows revocation, source Stop, Windows departure, Linux leave, exact owned
+participant removal from the SFU, and share-instance replacement. Every
+accepted row compared automatic-accept counters before and after; the delta
+was zero. Capacity overflow, watchdog expiry and failed harness attempts were
+excluded, not counted as successful replay witnesses.
+
+For revocation, Stop and replacement, Windows logs identify the original
+authenticated Linux sender and reject the old input without changing the
+editor. Departure/disconnection can discard traffic below native admission.
+A once-delivered genuine approval after local cancellation also reached Linux
+native admission and was rejected. Ordered active/stopped statuses are not
+reordered application callbacks: no input authority survives the drained
+retirement batch.
+
+The initial delayed global-revocation witness found that `revoke_all` notified
+only the Windows UI. Linux could briefly send using the late approval until
+Windows refused its first input. The fix sends the existing ordered `stopped`
+status to the controller while preserving admission closure and native release
+ordering. The final temporary PE SHA256 is
+`3A9852B3363BCC2AE7A26260909D6B51CE53C3291585419A3D940D93517EBB85`.
+It passed all twelve delayed-input/approval rows; 137 shared remote-control
+tests pass. An independent source reviewer found no issue in the narrow fix.
+
+Together with the earlier six paired held-key/button releases (14–156 ms,
+under the 600 ms limit and before the 1,200 ms backstop), this establishes R03
+locally. It does not establish R01/R02, request correlation across a fresh
+pending request, Linux host replay, production delivery, or a released Windows
+upgrade. The installed release, VM configuration and human clipboard remain
+unchanged. The session's `petal-r03-wire-acceptance.json` records the accepted
+rows, native diagnostics, excluded attempts and artifact identity.
+
+#### Native request outcomes and window confinement, November 3, 2026
+
+Actual GTK requests and Windows consent exercised R02's existing-request rows over the owned SFU.
+Delayed Deny reported declined. Real GTK cancellation and the actual
+eight-second request timeout rejected once-delivered original-owner approval;
+the independent Windows editor remained unchanged. Before release, timeout
+visibly reported “No answer from the sharer.” A fresh explicit GTK request
+was needed afterward. Holds were 1.99 s, 1.37 s and 8.55 s respectively, with
+zero automatic-accept counter deltas. The expiry-only private namespace gate
+had a ten-second watchdog and held 308 datagrams; it removed its table on exit.
+Those rows left the intervening-request correlation boundary open; the November 4 native proof below closes it.
+
+For R01, a separate owned always-on-top editor covered the authorized window
+and held foreground. Native-controller key/text/wheel traffic stayed in the
+authorized editor; the unshared editor retained its sentinel and received no
+key, button or wheel. Covered clicks were refused. Cursor restoration produced
+hover-only `WM_MOUSEMOVE`, not button delivery. However, one background `KeyZ`
+down/up inserted `zz`, whereas one foreground `KeyQ` pair inserted `q`.
+That run left the duplicate-background-key defect open; the November 4 repair
+below closes it under separate explicit authorization. Its dated receipt is
+`petal-r01-r02-acceptance.json`; the installed release was unchanged.
+The later receipt identifies the corrected temporary artifacts.
+
+#### Approved keyboard and exact-request prerequisites, November 4, 2026
+
+The actual GTK received-share window now sends one background Z pair that
+produces exactly one Windows Down, one `WM_CHAR` and one Up. The owned editor
+inserted one `z`; foreground HWND stayed unchanged. Actual GTK foreground
+typing also inserted one `z`. The real Windows message-loop smoke passed exact
+`bzAé🦀`, Unicode, navigation/modifier behavior, an unrelated sentinel and focus
+preservation. Prior native window/screen pointer, wheel and confinement evidence
+is retained; this closes R01's last observed defect.
+
+For R02's new same-share boundary, real Windows Allow A was held on the incoming
+encrypted UDP path. GTK cancelled A and requested B before release. The 1.612 s
+hold released all 21 datagrams explicitly, with no automatic-accept delta.
+The receiver authenticated A's awaiting/active/stopped responses and rejected
+them as stale. B stayed “Waiting for approval…”; an actual GTK key changed no
+Windows text. B's own real Allow then enabled one background character without
+focus change. Current Windows revoke stopped B, and another key changed nothing.
+No payload rewriting, fake status callback or sender impersonation was used.
+Prior genuine decline/cancel/expiry rows remain evidence for those outcomes.
+
+Exact identity also binds local cancellation, consent answers and timeout work.
+Independent review found stale cancellation A could otherwise borrow B's ID;
+that defect was fixed, behaviorally regression-tested and independently
+re-reviewed with no remaining demonstrated issue in the bounded repair.
+Upgraded controllers fail closed on older uncorrelated approvals.
+
+Checks: 162 Linux remote-control tests; 173 Windows tests passed with two
+native-only smokes ignored by default; the separately run real keyboard smoke
+passed; 57 web lifecycle tests and three desktop behavioral tests passed.
+Desktop typecheck and production frontend build, Linux application build and
+Windows application build passed. Existing warnings remain. The Windows test
+artifact uses the Common Controls v6 manifest documented below.
+Web typecheck, test compilation and production build also passed.
+`petal-approved-prerequisite-acceptance.json` records copied-artifact hashes,
+exact editor observations, wire counters and review provenance.
+
+Owned clients left and quit, the guarded editor and private input session
+closed, the gate/forwarder exited and the owned SFU room has no participants.
+The private compositor was stopped separately. The VM and installed Windows
+release remain unchanged. No push, PR, deployment, shared-service, hardware or
+human keyboard/clipboard change occurred. Physical camera acceptance remains
+blocked; these results do not establish acoustic AEC or delivery.
+
 ### Native Linux launch boundary
 
 Prepare the local executable with Linux tooling only, from the repository root:
@@ -521,9 +659,299 @@ with the in-app Camera button as the consent surface. C01's
 "approve native permission" step therefore has no OS dialog to exercise
 here, and the "changing pixels" clause is proven by SFU layer liveness plus
 rendered tile variance because the camera views a static scene (no physical
-marker was moved). C02's publication-overlap half and C07 both verified
-live; C02's preview-first ordering, C03, C04 and C05 remain open pending
-fixture-level or multi-device evidence.
+marker was moved). C02's preview-first and publication-first overlap and C07
+have live evidence. The later isolated checks below complete C03 and controlled
+multi-device C04, all three C05 failure/recovery rows and C02's attended physical indicator.
+
+After the November 3 physical replug, bounded direct V4L2 capture delivered
+60 frames and three suspended-device reopen cycles delivered 30 frames each;
+a PipeWire capture also delivered 30 frames. A camera-only autosuspend
+auto/on/auto comparison completed nine 30-frame cycles without USB faults and
+restored the original auto/2000 ms policy. This does not establish autosuspend
+as the cause of the earlier failures.
+
+The fresh native app then opened Settings preview before publication and
+published the real C920 at Auto 640×480 to released Windows 0.9.33. The receiver
+reported 640×480 video readyState 4; one owned PipeWire capture served the
+overlapping preview/publication, and publisher health reached captured=4333,
+pushed=4321 at about 24 fps. Selecting the advertised 1280×720 at 10 fps through
+the actual Settings controls failed with "all buffers have been removed".
+Publication and intent became false, Settings displayed the neutral camera-loss
+message, and the Windows videos subsequently had zero dimensions/readyState 0.
+Kernel records then showed USB `1-6.4.1.2` descriptor timeouts (`-110`), address
+failures (`-62`), disconnect and failed re-enumeration. The failure is reproduced,
+but its attribution to capture teardown, driver, firmware or USB hardware is
+unresolved. A camera-only USB reset could not run because the device had already
+disappeared. Cycling only its USB2 port and empty USB3 companion did not recover
+it; both port-disable attributes were verified restored to zero. No whole-hub
+or controller reset, shared-service restart or Windows update was performed.
+
+A separate private PipeWire witness found and fixed an owner race: an older
+selection could cancel the newer serving capture before its late start was
+rejected. Generation/node/requested-mode admission now runs before adoption and
+atomically with capture removal after discovery. Before the fix, B's frames
+stalled at 35; afterward the same B capture survived with real dispatched frames
+increasing 5→14. Controlled source removal also retired all affected leases and
+the view mailbox, preserved a separate B stream, and required explicit restart
+after A returned. These are actual-owner/private-producer checks, not full
+Settings/self-view/SFU or DP-1/microphone acceptance. The integrated 13 focused
+owner tests and desktop build passed; independent review found no issues in the
+narrow fix. It is not established as a repair for the physical C920 USB failure.
+
+#### C920 mode-switch buffer-pool repair, November 4, 2026
+
+Direct connection to USB `1-7` did not eliminate the failure. A capture-only
+Auto 640×480/30 → 1280×720/10 transition reproduced it without Petal, room
+publication or overlapping preview leases, even after releasing the retired
+pipeline objects. Exact source caps did not prevent it either. Fresh 720p
+capture alone delivered 30 frames with both source and output at 1280×720/10.
+
+The PipeWire trace identified a false loss transition: after allocating the
+720p buffers, the source removed the pool, posted "all buffers have been
+removed", immediately allocated replacement buffers and returned to streaming
+before caller cleanup. `on-disconnect=error` made that normal rebuild fatal.
+Changing only that property to `none` passed Auto → 720p → 640×480 twice:
+30 real frames per stage, once with source caps pinned and once with the
+original unpinned chain. All 180 frames were discarded, not saved as images.
+Selected-node removal/core loss and actual pipeline ERROR/EOS remain terminal.
+
+The rebuilt native app then passed the previously failing Settings-preview-first
+flow in an owned room: 1280×720 at 10 fps, a real Settings change to 7.5 fps,
+then 640×480 at 30 fps. SFU camera-track geometry matched each size; native
+capture/push health was 10.0/10.0, approximately 7.5/7.5 and 30.0/30.0 fps.
+The microphone stayed muted. Closing Settings preview left publication live;
+turning publication off with a preview reopened removed only the camera track
+and left the PipeWire source running for preview. Closing that last preview
+released capture. Normal Leave/Quit ended the owned app with exit 0 and left
+the room empty, the camera node suspended and no camera links.
+
+All 34 focused Linux-camera tests passed, and `cargo build --locked --bin desktop`
+succeeded. No new camera USB errors appeared from the successful discriminator
+through native cleanup. This fixes the demonstrated false buffer-pool-loss
+failure; it does not establish the cause or recovery of every earlier USB
+descriptor timeout, full C04 multi-device/latest-selection acceptance, physical
+indicator behavior or all permission-loss rows. No released Windows peer was
+used in this follow-up. No reset, power-policy change, shared-service restart,
+installed-release replacement or repository publication was performed.
+
+#### Controlled-camera C03/C04 acceptance, November 4–5, 2026
+
+C03 and controlled-source C04 are **passed locally**. The combined C04 witness
+uses genuine saved A completion/frame replay through original owner paths;
+it does not claim a naturally late OS open, physical recovery or host activation.
+
+Actual native Settings exposed controlled A1280×720/10 and B640×480/30 through
+a private Camera portal. A fixture-only `pipewiresink use-bufferpool=false`
+change repaired producer starvation. Production selection now normalizes an
+unsupported saved mode for the newly selected device atomically instead of
+turning the camera off. Visible previews retain their own leases.
+
+Two receiver failures were identified and repaired without changing released
+Windows0.9.33 or the server. Removing the camera-only frame-metadata override
+eliminated malformed H.264 STAP-A lengths: a passive receiver observed827 RTP
+packets and no malformed packets. Retaining the Linux publication across
+capture handoffs avoids the released receiver's identity-only old-unsubscribe
+handler clearing a replacement track. Handoffs preserve the publication SID,
+update native-source dimensions and retain the requested SDK encoding limits.
+
+Through actual Settings, A/B selection, explicit modes and rapid A→B→A→B
+selection produced matching native GTK self-view pixels and released Windows
+video. Windows retained SSRC129349529 across640×480/30→1280×720/10→640×480/30;
+NACK/PLI counts remained zero. Native snapshots showed red A and blue B, with
+final B at640×480/30. Removing A stopped publication without silently selecting
+B; explicit B selection and Camera On recovered. Leaving stopped remote video
+while a visible preview retained capture; closing that preview left no links.
+
+The combined witness used one throwaway instrumented native app, actual
+Settings and unchanged Windows0.9.33. A1280×720/10 and B640×480/30 were selected
+through their actual advertised selectors, including rapid A→B→A→B changes.
+After visible B activation, an external marker released a saved genuine
+already-completed A owner record and actual A frame through the original
+`capture_started`/`frame_arrived` paths. Serialized capture opening prevents a
+naturally late A open from overtaking B; no serialization was bypassed.
+The original status gate rejected the old frame and completion returned
+`Camera selection superseded`. B retained the same capture status, publication,
+preview, supported mode and Settings selection with no owner error.
+
+One hundred actual GTK self-view DrawingArea snapshots over14.195s and65
+released-Windows decoded observations over8.092s remained blue across replay
+and30 subsequent B dispatches. Maximum measured gaps were0.202s/0.152s;
+Windows presented frames advanced2690→2933 at640×480. GTK snapshots invoke the
+actual widget renderer at an idle boundary; natural-draw observers timed out,
+so neither compositor scanout nor exhaustive frame-by-frame coverage is claimed.
+No GTK critical/assertion occurred. The actual red A and blue B renders were
+inspected, not inferred from owner state alone.
+
+An early overlapping Settings/capture-validation check exposed a second
+mode-query consumer overwriting the registry's one completion slot. A private
+mutex now serializes the complete mode-query transaction, without blocking
+PipeWire callbacks. Thirty-two real simultaneous-consumer queries returned all
+correct advertised640×480/30 answers; before the fix,28 were superseded.
+The rebuilt native UI also passed Camera On→Settings→explicit A mode with a
+red self-view and active SFU camera. Independent frozen-source review found no
+issue. Contending queries can wait for earlier queries before their own bounded
+remote-answer deadline starts; this is not a five-second end-to-end guarantee.
+
+An SDK integration check pushed real NV12 frames through B→A→fractional-rate B
+and a client-local full reconnect: retained and live limits matched833333bps/10
+for A and832500bps/29.97 for B, with640×480 restored after reconnect.
+The final camera-filtered suite passed107 tests with one ignored SDK integration
+test; that integration test passed separately before the permission follow-up,
+and the final locked desktop build succeeded. Independent narrow-source review
+found no remaining issue after the cancellation cleanup correction below.
+
+C03 used the actual Linux executable and unchanged Windows0.9.33 in an owned
+room. With synthetic nodes present, initial `check_camera` returned
+`not-determined`, not a non-Linux authorized default. Real private portal denial
+showed denied-or-cancelled/camera off. Production Off cancelled an actual pending
+request through `Request.Close`, closed its GTK dialog and showed camera
+cancelled/off. With both sources removed, a request showed no camera available.
+All three rows left intent/publication false, no SFU/Windows video and no capture
+links. The absence row used stored private portal YES; the native permission API
+still cached the earlier Denied result, so that row does not claim it reported
+Authorized. Portal response1 itself means denied **or** cancelled; only explicit
+caller cancellation receives the definite cancellation explanation.
+
+Real pending-publication dialogs now close on actual meeting Leave and the
+production Off command, observed within0.393s and0.192s respectively. Publication
+permission tokens retire on Off/room-generation changes without cancelling
+independent Settings requests. A further real Settings→queued On→Off sequence
+exposed stale start admission: On used to set intent after the newer Off.
+Admission now snapshots retirement and room generation before waiting for camera
+control. Actual queued Off and queued Leave checks preserved the independent
+Settings dialog; after denying that request, intent/publication remained false,
+no second prompt appeared, and Windows had no video.
+
+Owned failure cleanup does not advance explicit retirement: deterministic
+On₁→Off→queued On₂→delayed On₁ cancellation cleanup coverage protects the newer
+On₂. A native Off→explicit On₂ check admitted a fresh real permission request
+with intent true; denying it returned intent/publication to false. This runtime
+check does not establish the exact internal cleanup ordering; the regression
+controls that interleaving.
+
+C05 is **DONE**: permission loss, capture failure and attended physical unplug/replug all passed with other media preserved.
+The earlier private Camera portal/PipeWire/WirePlumber check established real
+node-access-loss retirement and explicit recovery with synthetic blue640×480/30.
+PermissionStore camera NO did not revoke this non-sandboxed native client:
+installed WirePlumber grants access to its empty application ID. No fake sandbox
+identity or permission result was used to manufacture portal-store revocation.
+
+The November 5 attended check used the actual C920, authorized DP-1 share and
+unmuted Volt276 microphone with unchanged released Windows0.9.33. Revoking only
+the owned camera clients' actual source ACL retired camera intent/publication,
+showed the neutral failure and removed its outgoing camera track. Restoring
+access did not auto-enable camera; explicit On recovered it. DP-1 and microphone
+kept their SIDs and states; Windows continued decoding the share and receiving
+microphone audio. This completes the permission-loss row through real node ACL
+loss, not through PermissionStore revocation.
+
+Destroying only the owned camera `Stream/Input/Video` node initially exposed a
+real capture-failure bug: frames stopped but camera intent/publication stayed
+true. Each capture now gives its input node a unique process/counter-qualified
+name and watches that exact node's removal. Retirement settles `next_frame`
+without another sample; intentional teardown retires before NULL, so its later
+node-removal event cannot report a false failure. No stall timeout or retry was
+added, and source buffer rebuilds remain nonterminal.
+
+The repaired actual failure-and-explicit-recovery row passed with all three
+media live: camera retired with an explanation, while the same DP-1/microphone
+tracks and Windows share decoding/audio reception continued. Real Settings
+switches to320×240 and back to640×480 remained healthy with other media preserved.
+Camera tests passed110 with1 ignored; the locked desktop build passed. One
+independent narrow source review found no demonstrated defect; capture/owner
+change attribution used its frozen manifest, while metadata had an exact diff.
+
+The fresh attended physical row passed on November 5 with the actual C920,
+authorized DP-1 share, independent unmuted Volt276 microphone and unchanged
+released Windows0.9.33. A continuous observer was armed before the unplug cue.
+Tommy physically unplugged the C920: camera intent/publication became false,
+Linux explained the failure and the outgoing camera track disappeared. The same
+DP-1/microphone SIDs and states persisted; Windows continued decoding3840×1080
+share frames and receiving microphone audio.
+
+After Tommy replugged the C920, camera stayed off with no outgoing camera track.
+Explicit Camera On recovered640×480 video with advancing Windows decoded
+frames, while DP-1/microphone remained unchanged. This completes the physical
+row; the earlier missed-snapshot and timed-out attempts were not counted as
+passes. Physical-indicator ownership is established separately by the attended
+C02 check below; other expansion gates remain open.
+
+Both owned clients then left and quit normally, the guard stopped, the temporary
+guest helper was removed, the room was empty and no owned camera/voice PipeWire
+clients remained. The Windows VM stayed running with clipboard/drag-and-drop
+disabled; no installed release, shared service or repository publication changed.
+Fresh receipts are under `/tmp/petal-c05-physical-fresh-tsbif4x5`:
+`physical-before.json`, `physical-loss.json`, `physical-replug-no-auto-on.json`,
+`physical-row-complete.json` and `cleanup.json`. The earlier permission-loss,
+repaired capture-failure and mode-switch receipts remain under
+`/tmp/petal-c05-attended-gpswnl7c`.
+
+The earlier private-fixture clients both left and quit normally; its media room was empty.
+Private sources, PipeWire/WirePlumber, portal/bus and14 ownership-verified
+activated children stopped; guest helper, scratch profiles, standalone driver
+binaries and the copied instrumented desktop were removed. Bounded evidence,
+source snapshots, logs and GTK images remain under
+`/tmp/petal-autonomous-acceptance-lw46v89y`; the main receipts are
+`c04-combined-acceptance.json`, `c05-real-access-revocation-partial.json`,
+`mode-query-concurrency-acceptance.json` and `cleanup-final.json`.
+The Windows VM remains running with clipboard/drag-and-drop disabled and its
+installed0.9.33 release unchanged. No physical reconnect, shared-service change,
+installed-release replacement or repository publication was performed.
+
+**November 5 attended C02 indicator acceptance: DONE.** Actual Settings preview
+started before publication. Preview, native self-view and released Windows0.9.33
+camera video at640×480 used the same one running PipeWire input node/link.
+Tommy confirmed the physical C920 light **on**. Stopping publication removed the
+outgoing camera track and Windows camera video while the same visible preview
+and capture remained; Tommy again confirmed **on**. Closing Settings alone left
+the separate native preview window visible. Closing that actual last preview
+removed its capture node/link and all camera surfaces, with no outgoing camera;
+Tommy confirmed **off**.
+
+The first preview-start attempt failed alongside kernel USB firmware-change and
+re-enumeration messages. One normal Settings close/reopen recovered before the
+accepted sequence; no manual device reset or power-policy change was performed.
+This result does not identify the USB failure cause or establish durable hardware
+recovery. Both microphones stayed muted and no screen was shared during C02.
+
+Both owned clients left and quit normally; the bounded guard stopped, guest
+helper was removed, room was empty and no owned camera/voice clients remained.
+The Windows VM stayed running, clipboard/drag-and-drop disabled and release
+unchanged. Receipts under `/tmp/petal-c02-indicator-y4kia9yc` include
+`c02-complete.json`, `human-led-observations.json`, `preview-only.json`,
+`preview-and-publication.json`, `publication-off-preview-retained.json`,
+`last-preview-closed.json` and `cleanup.json`. No publication or deployment.
+
+**November 5 actual Linux-host H01 window check: safety verified, acceptance
+incomplete.** Tommy selected only the task-owned editor in the real native
+chooser. The Linux picture-share record reported one source of kind `window`;
+unchanged released Windows0.9.33 decoded it at736×416, with received frames
+advancing161→269 across control attempts. Both microphones stayed muted and
+no camera or desktop-wide permission was requested.
+
+The actual Windows Control button was disabled and said “Preparing remote
+control… it will enable automatically”, rather than explaining view-only
+operation. Invoking its real `remote_control_set_active` request command
+fulfilled with `false`; this is not evidence of an active grant or an explicit
+host denial. Real Linux global-enable, per-share-enable and answer-consent
+commands each rejected with the explicit Linux-host unsupported error, and
+Linux's actual menu labels request/grant control unsupported.
+
+The header-only D-Bus observer saw zero owned RemoteDesktop/InputCapture calls
+and zero unattributed calls. The editor had zero key/pointer events or text
+changes; the picture kept decoding. These checks establish safe refusal under
+the current global Linux-host block, not the complete window-specific
+view-only feedback contract. H01 stays TODO; the Windows preparing state must
+not be presented as a completed refusal/availability explanation.
+
+The manual chooser prerequisite is now resolved. Both owned clients and editor
+quit normally; the guard, observer and helper were removed, room empty, no owned
+capture clients, VM/release unchanged. Current bounded receipts:
+`/tmp/petal-h01-resume-ri03q_pt/actual-window-boundary-check.json` and
+`cleanup.json`. The earlier chooser-timeout preflight remains historical at
+`/tmp/petal-h01-window-boundary-lox9tjoo`; no product code, shared-service,
+publication or deployment changes were made.
+
 
 Run the native read-only prerequisite diagnostic with an intentionally missing
 capture-plugin search path:
@@ -1522,9 +1950,75 @@ predicate is an assertion about the HARNESS, not the product; when one times
 out, diff it against what `harnessApi.ts` actually publishes before reading it
 as a product failure.
 
+## Windows held-button retirement — authorized Linux-controller prerequisite
+
+The November 3, 2026 repair addresses a released-Windows failure observed during
+Linux controller acceptance: a queued pointer Up lost authority during teardown,
+and its replacement release was cancelled. Keyboard cleanup alone left the
+native mouse button held.
+
+Windows now tracks actual successful mouse-button injection, including a partial
+Click that submitted Down but not Up. Controller, window and global cleanup
+release only recorded ownership through the serialized native input lane, without
+moving the cursor or requiring the retired target/grant. Another controller's
+ownership is retained, failed native releases remain retryable, and normal
+input still requires current target and grant validation. Grant teardown closes
+admission before native cleanup so a late press cannot follow the release.
+
+The current Windows library-test artifact passed 25 platform tests in the
+dedicated Petal Windows Test VM. The separately enabled
+`windows_remote_control::tests::held_button_retirement_native_smoke` also passed:
+an owned, hit-testable native window received Left, Middle and Right Down; each
+was independently observed with `GetAsyncKeyState`, released by production
+controller cleanup without an active grant or queued Up, and observed up again.
+The fixture restores the guest cursor and destroys its own window. It is ignored
+by default because it injects real input; run it only in that unlocked, dedicated
+guest with no mouse button already held.
+
+For a current Windows library-test executable assigned to `$WindowsTestExe`:
+
+```powershell
+& $WindowsTestExe 'windows_remote_control::tests::' --test-threads=1
+& $WindowsTestExe 'windows_remote_control::tests::held_button_retirement_native_smoke' --exact --ignored --nocapture --test-threads=1
+```
+
+The cross-linked test artifact needs a Common Controls v6 activation manifest:
+`/MANIFEST:EMBED` and
+`/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'`.
+Without it the test process failed before entry with `STATUS_ENTRYPOINT_NOT_FOUND`.
+The repair was built using the existing Windows SDK and cross-toolchain.
+
+Post-login paired checks used the actual corrected Windows application,
+native Linux controller and owned Windows editor. Each watcher observed both
+Shift and left-button Down before the real retirement, then observed both
+released within 600 ms, below the 1,200 ms held-input expiry backstop:
+
+| Actual retirement | Slower observed key/button release |
+|---|---:|
+| Windows disables control | 33 ms |
+| Windows stops the source | 27 ms |
+| Windows departs | 25 ms |
+| Linux leaves | 124 ms |
+| Transport disconnects | 156 ms |
+| Share instance is replaced | 14 ms |
+
+The native fixture also recorded matching Up events and no held input.
+Fourteen production Linux admission regressions passed, covering late approval
+after revocation/cancellation, share replacement, retirement and stale request
+tasks. Actual direct input after cancellation was refused without changing the
+Windows editor. The later genuine delayed-wire matrix above supersedes the
+earlier sender-attribution blocker and establishes R03 locally. SFU `SendData`
+cannot impersonate the original sender and was not used as its substitute.
+That earlier artifact lacked exact-attempt correlation. The November 4 approved
+repair and genuine A/B proof above supersede that protocol limitation locally.
+
+The installed released Windows peer was not replaced. These local checks do
+not establish Task 3.1 delivery, camera acceptance, conversation or acoustic AEC.
+
 ## Refs
 
 `docs/TESTING.md` (how to run everything) · `internal/docs/COURSE_CORRECTION.md` (§4b
 controls, §4c experiment choice, amended fast-probes rule) ·
 `internal/docs/COCKPIT_RUNBOOK.md` · `internal/docs/COCKPIT_TEST_MAP.md` · issues #613 #618 #619
 #620 #621 #622 #623 #624 #299 #79.
+

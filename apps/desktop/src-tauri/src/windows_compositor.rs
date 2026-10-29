@@ -2626,8 +2626,10 @@ pub(crate) fn set_remote_control_active(
     let overlay = app
         .get_webview_window(&control_overlay_label(&key))
         .ok_or_else(|| format!("control overlay for window {window_id} is not open"))?;
-    let js =
-        format!("window.__petalPendingRemoteControlActive = {active}; window.__petalRemoteControlSetActive?.({active});");
+    let request_id = crate::remote_control_core::remote_control_engine()
+        .controller_request_id(window_id, &key.0);
+    let request_id_json = serde_json::to_string(&request_id).map_err(|error| error.to_string())?;
+    let js = format!("window.__petalPendingRemoteControlRequestId = {request_id_json}; window.__petalPendingRemoteControlActive = {active}; window.__petalRemoteControlSetActive?.({active}, {request_id_json});");
     overlay
         .eval(&js)
         .map_err(|e| format!("control eval failed: {e}"))?;

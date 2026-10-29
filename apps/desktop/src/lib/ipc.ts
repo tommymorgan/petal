@@ -290,6 +290,7 @@ export const EVENTS = {
   regionViewOptionsChanged: 'region-view-options-changed',
   regionControlStateChanged: 'region-control-state-changed',
   remoteControlStatus: 'remote-control-status',
+  remoteControlRequestStarted: 'remote-control-request-started',
   /** Sharer-side consent prompt. The discriminated payload's `kind` is
    * `control` for a parked control request or `fullControlEscalation` for a
    * Windows mode escalation. Both are rendered by the same non-activating
@@ -1210,6 +1211,7 @@ export type ControlConsentRequestedEvent =
       kind: 'control';
       windowId: number;
       controllerId: string;
+      requestId?: string | null;
       controllerName: string;
       windowTitle?: string;
       timeoutMs: number;
@@ -1218,6 +1220,7 @@ export type ControlConsentRequestedEvent =
       kind: 'fullControlEscalation';
       windowId: number;
       controllerId: string;
+      requestId?: string | null;
       controllerName: string;
       windowTitle?: string;
       timeoutMs: number;
@@ -1227,6 +1230,7 @@ export type ControlConsentRequestedEvent =
 /** Mirrors `remote_control::RemoteControlDraft` (src-tauri/src/remote_control.rs). */
 export interface RemoteControlDraft {
   kind: RemoteControlKind;
+  requestId?: string;
   action?: RemoteControlAction;
   windowId: number;
   targetOwnerId?: string;
@@ -1257,6 +1261,7 @@ export interface RemoteControlStatus {
   windowId: number;
   ownerIdentity?: string | null;
   controllerId: string;
+  requestId?: string | null;
   grantToken?: string | null;
   targetKind?: RemoteControlTargetKind;
   shareInstanceId?: string;
@@ -1728,7 +1733,7 @@ export interface CommandArgs {
     stallCause: 'stream_paused' | 'decode_stale' | 'decode_zero' | 'not_applicable';
   };
   [COMMANDS.remoteControlRevoke]: { windowId: number; controllerId: string };
-  [COMMANDS.remoteControlRequestTimedOut]: { windowId: number; ownerIdentity?: string };
+  [COMMANDS.remoteControlRequestTimedOut]: { windowId: number; ownerIdentity?: string; requestId: string };
   [COMMANDS.remoteClipboardCopy]: { windowId: number; ownerIdentity?: string; grantToken?: string };
   [COMMANDS.remoteClipboardPaste]: { windowId: number; ownerIdentity?: string; grantToken?: string };
   // #905: date range for the export -- omitted/undefined defaults to the
@@ -1736,7 +1741,7 @@ export interface CommandArgs {
   // `logging::export_logs`'s doc comment (apps/desktop/src-tauri).
   [COMMANDS.exportLogs]: { days?: number };
   [COMMANDS.remoteControlSend]: { draft: RemoteControlDraft };
-  [COMMANDS.remoteControlSetActive]: { windowId: number; ownerIdentity?: string; active: boolean };
+  [COMMANDS.remoteControlSetActive]: { windowId: number; ownerIdentity?: string; active: boolean; requestId?: string };
   [COMMANDS.renameRoom]: { idOrCode: string; displayName: string | null };
   [COMMANDS.resetLocalRooms]: Record<string, never>;
   [COMMANDS.resizeMenubarPopover]: { height: number };
@@ -1746,7 +1751,12 @@ export interface CommandArgs {
   };
   [COMMANDS.setAudioDevices]: { recordingId: string | null; playoutId: string | null };
   [COMMANDS.listCameraModes]: { preferredDeviceId: string | null };
-  [COMMANDS.setCameraDevice]: { deviceId: string };
+  [COMMANDS.setCameraDevice]: {
+    deviceId: string;
+    width: number | null;
+    height: number | null;
+    frameRate: number | null;
+  };
   /** Settings' camera-preview edge, written to petal.log so a #76 camera-intent
    *  episode can be labelled contended or not (`camera_session::log_camera_preview_state`). */
   [COMMANDS.logCameraPreviewState]: {
@@ -1766,8 +1776,8 @@ export interface CommandArgs {
   [COMMANDS.setMicMuted]: { muted: boolean };
   [COMMANDS.setRemoteControlAllowed]: { allowed: boolean };
   [COMMANDS.setRemoteControlPolicy]: { policy: RemoteControlPolicy };
-  [COMMANDS.remoteControlAnswerConsent]: { windowId: number; controllerId: string; approve: boolean };
-  [COMMANDS.remoteControlAnswerEscalation]: { windowId: number; controllerId: string; approve: boolean };
+  [COMMANDS.remoteControlAnswerConsent]: { windowId: number; controllerId: string; requestId: string; approve: boolean };
+  [COMMANDS.remoteControlAnswerEscalation]: { windowId: number; controllerId: string; requestId: string; approve: boolean };
   [COMMANDS.setSentryEnabled]: { enabled: boolean };
   [COMMANDS.controlConsentDismiss]: Record<string, never>;
   /** Measured content height, same resize-to-content pattern as shareNoticePresent. */
@@ -2005,6 +2015,7 @@ export interface EventPayloads {
   [EVENTS.regionControlStateChanged]: RegionControlStateChanged;
   [EVENTS.controlConsentRequested]: ControlConsentRequestedEvent;
   [EVENTS.remoteControlStatus]: RemoteControlStatus;
+  [EVENTS.remoteControlRequestStarted]: { windowId: number; ownerIdentity: string; requestId: string };
   [EVENTS.remoteShareStarted]: RemoteShareStartedEvent;
   [EVENTS.resilienceEvent]: ResilienceEvent;
   [EVENTS.roomLeft]: RoomLeftEvent;

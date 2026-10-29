@@ -1196,7 +1196,7 @@ mod tests {
         let preferred = PreferredCameraMode {
             width: mode.width,
             height: mode.height,
-            frame_rate: mode.frame_rate_numerator / mode.frame_rate_denominator.max(1),
+            frame_rate: mode.frame_rate_numerator as f64 / mode.frame_rate_denominator.max(1) as f64,
         };
         let (sender, receiver) = mpsc::sync_channel(4);
         let capture = CameraCapture::start_with_device(None, Some(preferred), move |frame| {

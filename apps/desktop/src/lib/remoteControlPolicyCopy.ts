@@ -1,9 +1,7 @@
 import type { RemoteControlPolicy } from '$lib/ipc';
 
 /**
- * Settings copy for the remote-control consent policy. Kept in one place so
- * the no-truncation fit test (tests/controlConsent.test.ts) measures the
- * exact strings the Settings tile renders in the 400px main window.
+ * Settings copy for the remote-control consent policy.
  */
 export const REMOTE_CONTROL_POLICY_TITLE = 'Remote control of my shared windows';
 export const REMOTE_CONTROL_POLICY_DESCRIPTION =

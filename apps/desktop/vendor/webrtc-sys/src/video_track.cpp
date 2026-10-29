@@ -136,6 +136,12 @@ VideoResolution VideoTrackSource::InternalSource::video_resolution() const {
   return resolution_;
 }
 
+void VideoTrackSource::InternalSource::set_video_resolution(
+    const VideoResolution& resolution) {
+  webrtc::MutexLock lock(&mutex_);
+  resolution_ = resolution;
+}
+
 bool VideoTrackSource::InternalSource::on_captured_frame(
     const webrtc::VideoFrame& frame,
     const FrameMetadata& frame_metadata) {
@@ -209,6 +215,11 @@ VideoTrackSource::VideoTrackSource(const VideoResolution& resolution, bool is_sc
 
 VideoResolution VideoTrackSource::video_resolution() const {
   return source_->video_resolution();
+}
+
+void VideoTrackSource::set_video_resolution(
+    const VideoResolution& resolution) const {
+  source_->set_video_resolution(resolution);
 }
 
 bool VideoTrackSource::on_captured_frame(

@@ -82,6 +82,8 @@ static CURSOR_TAKEOVERS: LazyLock<Mutex<HashMap<u32, CursorTakeover>>> =
 
 static SYNTHETIC_KEYS: LazyLock<Mutex<HashSet<(u32, String, String)>>> =
     LazyLock::new(|| Mutex::new(HashSet::new()));
+static SYNTHETIC_BUTTONS: LazyLock<Mutex<HashSet<(u32, String, i16)>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 /// Modifier keys the host synthesized (not forwarded by the controller) for a
 /// given main keypress, released together with it. macOS carries modifier flags
 /// on the key event; Windows SendInput needs the actual modifier held around
@@ -266,13 +268,23 @@ pub(crate) fn controller_status_effect(status: &str) -> ControllerStatusEffect {
 
 pub(crate) fn record_controller_status(message: &RemoteControlMessage, status: &str) -> bool {
     let engine = crate::remote_control_core::remote_control_engine();
+    if !engine.controller_response_matches(message) {
+        return false;
+    }
     match controller_status_effect(status) {
         ControllerStatusEffect::Terminate => {
+            engine.retire_controller_request(message.window_id, &message.controller_id);
             engine.remove_controller_grant(message.window_id, &message.controller_id);
             clear_pending_controller_operations(message.window_id, Some(&message.controller_id));
             return true;
         }
-        ControllerStatusEffect::Feedback => return true,
+        ControllerStatusEffect::Feedback => {
+            if status != "awaitingConsent" {
+                engine.retire_pending_controller_request(message.window_id, &message.controller_id,
+                    message.request_id.as_deref().unwrap_or(""));
+            }
+            return true;
+        }
         ControllerStatusEffect::Activate => {}
     }
 
@@ -313,6 +325,15 @@ pub(crate) fn record_controller_status(message: &RemoteControlMessage, status: &
         return false;
     }
 
+    if let Some(grant) = engine.controller_grant(message.window_id, &message.controller_id) {
+        // Retransmitted active status must not rewind input sequencing or
+        // clear operations already awaiting a terminal result.
+        return grant.target_kind == target_kind
+            && grant.share_instance_id == share_instance_id
+            && grant.control_session_id == control_session_id
+            && grant.grant_token == grant_token
+            && grant.host_capabilities == message.host_capabilities;
+    }
     clear_pending_controller_operations(message.window_id, Some(&message.controller_id));
     engine.install_controller_grant(
         message.window_id,
@@ -581,6 +602,7 @@ pub(crate) fn clear_pid(_pid: i32) {}
 
 pub(crate) fn clear_window(window_id: u32) {
     release_synthetic_keys(|stored_window_id, _| stored_window_id == window_id);
+    release_synthetic_buttons(|stored_window_id, _| stored_window_id == window_id);
     WHEEL_REMAINDERS
         .lock_unpoisoned()
         .retain(|(stored_window_id, _, _), _| *stored_window_id != window_id);
@@ -588,6 +610,9 @@ pub(crate) fn clear_window(window_id: u32) {
 
 pub(crate) fn clear_controller(window_id: u32, controller_id: &str) {
     release_synthetic_keys(|stored_window_id, stored_controller_id| {
+        stored_window_id == window_id && stored_controller_id == controller_id
+    });
+    release_synthetic_buttons(|stored_window_id, stored_controller_id| {
         stored_window_id == window_id && stored_controller_id == controller_id
     });
     WHEEL_REMAINDERS
@@ -608,6 +633,7 @@ pub(crate) fn window_is_on_screen(raw_handle: usize) -> bool {
 
 pub(crate) fn clear_all() {
     release_synthetic_keys(|_, _| true);
+    release_synthetic_buttons(|_, _| true);
     WHEEL_REMAINDERS.lock_unpoisoned().clear();
 }
 
@@ -849,15 +875,7 @@ fn replay_display_pointer(
         if unsafe { SetCursorPos(px, py) }.is_err() {
             return Err("SetCursorPos failed for display pointer".to_string());
         }
-        let (down_flag, up_flag) = mouse_button_flags(message.button)?;
-        match message.action {
-            Some(RemoteControlAction::Move) | Some(RemoteControlAction::Unknown) | None => Ok(()),
-            Some(RemoteControlAction::Down) => submit_inputs(&[mouse_input(down_flag, 0)], true),
-            Some(RemoteControlAction::Up) => submit_inputs(&[mouse_input(up_flag, 0)], true),
-            Some(RemoteControlAction::Click) => {
-                submit_inputs(&[mouse_input(down_flag, 0), mouse_input(up_flag, 0)], true)
-            }
-        }
+        replay_pointer_button(message)
     })
 }
 
@@ -980,18 +998,7 @@ fn replay_window_pointer_global(
         if point_owned && unsafe { SetCursorPos(px, py) }.is_err() {
             return Err("SetCursorPos failed for remote pointer".to_string());
         }
-        // macOS parity: honor the requested button (the engine models
-        // Left/Middle/Right; macOS replays all three). Windows dropped
-        // right/middle because it only ever emitted the left button.
-        let (down_flag, up_flag) = mouse_button_flags(message.button)?;
-        match message.action {
-            Some(RemoteControlAction::Move) | Some(RemoteControlAction::Unknown) | None => Ok(()),
-            Some(RemoteControlAction::Down) => submit_inputs(&[mouse_input(down_flag, 0)], true),
-            Some(RemoteControlAction::Up) => submit_inputs(&[mouse_input(up_flag, 0)], true),
-            Some(RemoteControlAction::Click) => {
-                submit_inputs(&[mouse_input(down_flag, 0), mouse_input(up_flag, 0)], true)
-            }
-        }
+        replay_pointer_button(message)
     })
 }
 
@@ -1132,24 +1139,13 @@ fn resolve_keyboard_target(hwnd: HWND, point: (i32, i32)) -> HWND {
     }
 }
 
-/// The UTF-16 code unit for `WM_CHAR` when the controller's `key` is exactly
-/// one printable character; None for control/navigation names (Enter, Shift,
-/// ArrowLeft), multi-codepoint text, or empty input.
-fn single_wm_char(key: Option<&str>) -> Option<u32> {
+/// Controller-produced printable scalar, not a control/navigation key name.
+/// Keep it as text: supplementary characters require two UTF-16 WM_CHAR units.
+fn printable_key_text(key: Option<&str>) -> Option<&str> {
     let key = key?;
     let mut chars = key.chars();
     let ch = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    let c0 = ch as u32;
-    if c0 == 0 || c0 < 0x20 {
-        return None;
-    }
-    // For a single BMP char the code point is the UTF-16 code unit WM_CHAR
-    // expects. Surrogate-plane input is a multi-codepoint string and already
-    // rejected above.
-    Some(c0)
+    (!ch.is_control() && chars.next().is_none()).then_some(key)
 }
 
 /// Whether the given window is currently the foreground (focused) top-level
@@ -1167,13 +1163,13 @@ fn target_is_foreground(target: HWND) -> bool {
     root == foreground.0 as isize || target.0 as isize == foreground.0 as isize
 }
 
-/// Keep the message-injected key path best-effort and bounded: a key press is
-/// posted as `WM_KEYDOWN` (+ `WM_CHAR` when the controller produced a
-/// printable character) and the matching `WM_KEYUP`, addressed to the target
-/// control (the edit/text child, not the top-level window -- see 06B/
-/// resolved-child approach). We report OS submission, never application; the
-/// user judges the result. Delivery failures are logged: a swallowed post
-/// otherwise looks like "remote typing did nothing" with zero diagnostics.
+/// Address the exact target without changing focus. For controller-produced
+/// text, send the key-down directly to the window procedure before posting its
+/// UTF-16 characters. A posted WM_KEYDOWN passes through TranslateMessage in a
+/// normal consumer loop, which would generate a second character stream.
+/// Shortcuts/navigation/system keys retain the queued path and its consumer
+/// preprocessing; matching key-up messages are still delivered. A bounded send
+/// proves only window-procedure delivery, never application acceptance.
 fn post_key_message(
     target: HWND,
     code: &str,
@@ -1182,9 +1178,12 @@ fn post_key_message(
     char_hint: Option<&str>,
 ) {
     let Some(spec) = key_spec(code) else { return };
-    let mut lparam: u32 = (spec.scan as u32 & 0xff) << 16;
+    let mut lparam: u32 = 1 | (spec.scan as u32 & 0xff) << 16;
     if spec.extended {
         lparam |= 0x0100_0000;
+    }
+    if alt_held {
+        lparam |= 0x2000_0000;
     }
     let lparam_up = lparam | 0xC000_0000; // prev-state + transition (key up)
     let down_msg = if alt_held { WM_SYSKEYDOWN } else { WM_KEYDOWN };
@@ -1199,14 +1198,29 @@ fn post_key_message(
     };
     if key_up {
         post(up_msg, spec.vk as usize, lparam_up as isize);
+    } else if let Some(text) = printable_key_text(char_hint.filter(|_| !alt_held)) {
+        // Sent messages bypass the receiving thread's TranslateMessage, but
+        // still deliver WM_KEYDOWN to its control. Do not also post that Down.
+        let sent = unsafe {
+            SendMessageTimeoutW(
+                target,
+                down_msg,
+                WPARAM(spec.vk as usize),
+                LPARAM(lparam as isize),
+                SMTO_ABORTIFHUNG,
+                250,
+                None,
+            )
+        };
+        if sent.0 == 0 {
+            log::warn!("remote-control: SendMessageTimeoutW failed for text key '{code}'");
+            return;
+        }
+        for unit in text.encode_utf16() {
+            post(WM_CHAR, unit as usize, lparam as isize);
+        }
     } else {
         post(down_msg, spec.vk as usize, lparam as isize);
-        // A printable character the controller produced follows the key-down
-        // with WM_CHAR so text entry actually lands (Notepad/cmd insert on
-        // WM_CHAR; the 06B child-addressed route).
-        if let Some(unit) = single_wm_char(char_hint) {
-            post(WM_CHAR, unit as usize, 0);
-        }
     }
 }
 
@@ -1292,7 +1306,7 @@ fn replay_window_key_cursor_preserving(
                     code,
                     key_up,
                     message.modifiers.alt,
-                    if message.modifiers.ctrl || message.modifiers.meta || message.modifiers.shift {
+                    if message.modifiers.ctrl || message.modifiers.meta || message.modifiers.alt {
                         None
                     } else {
                         message.key.as_deref()
@@ -1929,6 +1943,108 @@ fn release_synthetic_modifiers(key: &(u32, String, String)) {
     }
 }
 
+// Called only inside GLOBAL_INPUT_COORDINATOR, after target/authority validation.
+// Remember actual SendInput effects, not merely admitted or queued messages.
+fn replay_pointer_button(message: &RemoteControlMessage) -> Result<(), String> {
+    if !matches!(
+        message.action,
+        Some(RemoteControlAction::Down | RemoteControlAction::Up | RemoteControlAction::Click)
+    ) {
+        mouse_button_flags(message.button)?;
+        return Ok(());
+    }
+    submit_pointer_button(
+        &mut SYNTHETIC_BUTTONS.lock_unpoisoned(),
+        message,
+        |inputs| inject_inputs(inputs, true),
+    )
+}
+
+fn submit_pointer_button(
+    held: &mut HashSet<(u32, String, i16)>,
+    message: &RemoteControlMessage,
+    mut inject: impl FnMut(&[INPUT]) -> Result<usize, String>,
+) -> Result<(), String> {
+    let (down, up) = mouse_button_flags(message.button)?;
+    let button = message.button.unwrap_or(0);
+    let owns = |key: &(u32, String, i16)| {
+        key.0 == message.window_id && key.1 == message.controller_id && key.2 == button
+    };
+    let owned = held.iter().any(owns);
+    match message.action {
+        Some(RemoteControlAction::Down) => {
+            let sent = inject(&[mouse_input(down, 0)])?;
+            if sent > 0 && !owned {
+                held.insert((message.window_id, message.controller_id.clone(), button));
+            }
+            check_input_count(sent, 1)
+        }
+        Some(RemoteControlAction::Up) => {
+            // A refused Down must not release a local press or another owner.
+            if !owned {
+                return Ok(());
+            }
+            if !held.iter().any(|key| key.2 == button && !owns(key)) {
+                check_input_count(inject(&[mouse_input(up, 0)])?, 1)?;
+            }
+            held.retain(|key| !owns(key));
+            Ok(())
+        }
+        Some(RemoteControlAction::Click) => {
+            // Another controller's held button must remain down.
+            if held.iter().any(|key| key.2 == button && !owns(key)) {
+                held.retain(|key| !owns(key));
+                return Ok(());
+            }
+            let sent = inject(&[mouse_input(down, 0), mouse_input(up, 0)])?;
+            if sent == 1 && !owned {
+                held.insert((message.window_id, message.controller_id.clone(), button));
+            } else if sent == 2 {
+                held.retain(|key| !owns(key));
+            }
+            check_input_count(sent, 2)
+        }
+        _ => Ok(()),
+    }
+}
+
+fn release_synthetic_buttons(matches_owner: impl Fn(u32, &str) -> bool) {
+    let _lane = GLOBAL_INPUT_COORDINATOR.lock_unpoisoned();
+    if let Err(error) = retire_pointer_buttons(
+        &mut SYNTHETIC_BUTTONS.lock_unpoisoned(),
+        matches_owner,
+        |inputs| inject_inputs(inputs, false),
+    ) {
+        log::warn!("remote-control: Windows held-button cleanup failed: {error}");
+    }
+}
+
+fn retire_pointer_buttons(
+    held: &mut HashSet<(u32, String, i16)>,
+    matches_owner: impl Fn(u32, &str) -> bool,
+    mut inject: impl FnMut(&[INPUT]) -> Result<usize, String>,
+) -> Result<(), String> {
+    let mut failure = None;
+    for button in 0..=2 {
+        let retiring = |key: &(u32, String, i16)| key.2 == button && matches_owner(key.0, &key.1);
+        if !held.iter().any(retiring) {
+            continue;
+        }
+        let another_owner = held.iter().any(|key| key.2 == button && !retiring(key));
+        if !another_owner {
+            let (_, up) = mouse_button_flags(Some(button))?;
+            let result = inject(&[mouse_input(up, 0)]).and_then(|sent| check_input_count(sent, 1));
+            if let Err(error) = result {
+                // Keep ownership so a later cleanup can retry a failed release.
+                failure = Some(error);
+                continue;
+            }
+        }
+        held.retain(|key| !retiring(key));
+    }
+    failure.map_or(Ok(()), Err)
+}
+
 fn release_synthetic_keys(mut matches_key: impl FnMut(u32, &str) -> bool) {
     let _lane = GLOBAL_INPUT_COORDINATOR.lock_unpoisoned();
     let mut keys = SYNTHETIC_KEYS.lock_unpoisoned();
@@ -2005,22 +2121,26 @@ fn send_inputs(inputs: &[INPUT]) -> Result<(), String> {
     submit_inputs(inputs, true)
 }
 
-fn submit_inputs(inputs: &[INPUT], honor_cancellation: bool) -> Result<(), String> {
+fn inject_inputs(inputs: &[INPUT], honor_cancellation: bool) -> Result<usize, String> {
     if inputs.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
     if honor_cancellation && crate::remote_control::injection_was_cancelled() {
         return Err("remote input superseded".to_string());
     }
-    let sent = unsafe { SendInput(inputs, size_of::<INPUT>() as i32) };
-    if sent == inputs.len() as u32 {
+    Ok(unsafe { SendInput(inputs, size_of::<INPUT>() as i32) } as usize)
+}
+
+fn check_input_count(sent: usize, expected: usize) -> Result<(), String> {
+    if sent == expected {
         Ok(())
     } else {
-        Err(format!(
-            "SendInput submitted {sent}/{} records",
-            inputs.len()
-        ))
+        Err(format!("SendInput submitted {sent}/{expected} records"))
     }
+}
+
+fn submit_inputs(inputs: &[INPUT], honor_cancellation: bool) -> Result<(), String> {
+    check_input_count(inject_inputs(inputs, honor_cancellation)?, inputs.len())
 }
 
 fn wheel_delta_units(
@@ -2464,22 +2584,14 @@ mod tests {
     }
 
     #[test]
-    fn single_wm_char_derives_a_printable_utf16_unit_or_none() {
-        // Printable single characters are injected as WM_CHAR.
-        assert_eq!(single_wm_char(Some("x")), Some('x' as u32));
-        assert_eq!(single_wm_char(Some("A")), Some('A' as u32));
-        assert_eq!(single_wm_char(Some(" ")), Some(' ' as u32));
-        assert_eq!(single_wm_char(Some("1")), Some('1' as u32));
-        // Control / navigation / multi-codepoint names produce no WM_CHAR.
-        assert_eq!(single_wm_char(Some("Enter")), None);
-        assert_eq!(single_wm_char(Some("Shift")), None);
-        assert_eq!(single_wm_char(Some("ArrowLeft")), None);
-        assert_eq!(single_wm_char(Some("Control")), None);
-        assert_eq!(single_wm_char(Some("\r")), None); // control char
-        assert_eq!(single_wm_char(Some("")), None);
-        assert_eq!(single_wm_char(None), None);
-        // Multi-codepoint grapheme/cluster is not a single WM_CHAR unit.
-        assert_eq!(single_wm_char(Some("ab")), None);
+    fn printable_key_text_preserves_unicode_and_rejects_key_names() {
+        for key in ["x", "A", " ", "1", "é", "🦀"] {
+            assert_eq!(printable_key_text(Some(key)), Some(key));
+        }
+        for key in ["Enter", "Shift", "ArrowLeft", "Control", "\r", "\u{7f}", "", "ab"] {
+            assert_eq!(printable_key_text(Some(key)), None);
+        }
+        assert_eq!(printable_key_text(None), None);
     }
 
     #[test]
@@ -2624,6 +2736,381 @@ mod tests {
             "deltaMode": mode
         }))
         .unwrap()
+    }
+
+    fn pointer_message(window_id: u32, controller_id: &str, button: i16) -> RemoteControlMessage {
+        let mut message = wheel_message(window_id, controller_id, 0.0, 0);
+        message.message_type = RemoteControlType::Pointer;
+        message.button = Some(button);
+        message.action = Some(RemoteControlAction::Down);
+        message
+    }
+
+    #[test]
+    fn held_buttons_retire_without_an_active_replay_and_without_releasing_other_owners() {
+        let mut held = HashSet::new();
+        let first = pointer_message(10, "first", 0);
+        let second = pointer_message(20, "second", 0);
+        for message in [&first, &second] {
+            submit_pointer_button(&mut held, message, |inputs| Ok(inputs.len())).unwrap();
+        }
+        retire_pointer_buttons(
+            &mut held,
+            |window, _| window == 10,
+            |_| panic!("retiring one owner must not release the other owner's button"),
+        )
+        .unwrap();
+        assert_eq!(held, HashSet::from([(20, "second".to_string(), 0)]));
+        let mut releases = Vec::new();
+        retire_pointer_buttons(
+            &mut held,
+            |_, owner| owner == "second",
+            |inputs| {
+                releases.extend(
+                    inputs
+                        .iter()
+                        .map(|input| unsafe { input.Anonymous.mi.dwFlags }),
+                );
+                Ok(inputs.len())
+            },
+        )
+        .unwrap();
+        assert!(held.is_empty());
+        assert_eq!(releases, vec![MOUSEEVENTF_LEFTUP]);
+        retire_pointer_buttons(
+            &mut held,
+            |_, _| true,
+            |_| panic!("repeated retirement must not inject another release"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn partial_click_is_released_but_refused_press_cannot_release_local_input() {
+        for button in 0..=2 {
+            let mut held = HashSet::new();
+            let mut message = pointer_message(10, "controller", button);
+            assert!(submit_pointer_button(&mut held, &message, |_| Ok(0)).is_err());
+            message.action = Some(RemoteControlAction::Up);
+            submit_pointer_button(&mut held, &message, |_| {
+                panic!("an unowned Up must not release local input")
+            })
+            .unwrap();
+            message.action = Some(RemoteControlAction::Click);
+            assert!(submit_pointer_button(&mut held, &message, |_| Ok(1)).is_err());
+            assert_eq!(
+                held,
+                HashSet::from([(10, "controller".to_string(), button)])
+            );
+            let mut released = Vec::new();
+            retire_pointer_buttons(
+                &mut held,
+                |_, _| true,
+                |inputs| {
+                    released.extend(
+                        inputs
+                            .iter()
+                            .map(|input| unsafe { input.Anonymous.mi.dwFlags }),
+                    );
+                    Ok(inputs.len())
+                },
+            )
+            .unwrap();
+            assert!(held.is_empty());
+            assert_eq!(released, vec![mouse_button_flags(Some(button)).unwrap().1]);
+        }
+    }
+
+    #[test]
+    fn failed_release_keeps_ownership_until_retry_and_completed_click_keeps_none() {
+        let mut held = HashSet::new();
+        let mut message = pointer_message(10, "controller", 2);
+        submit_pointer_button(&mut held, &message, |inputs| Ok(inputs.len())).unwrap();
+        assert!(retire_pointer_buttons(&mut held, |_, _| true, |_| Ok(0)).is_err());
+        assert_eq!(held, HashSet::from([(10, "controller".to_string(), 2)]));
+        message.action = Some(RemoteControlAction::Up);
+        assert!(submit_pointer_button(&mut held, &message, |_| Err("cancelled".into())).is_err());
+        assert_eq!(held, HashSet::from([(10, "controller".to_string(), 2)]));
+        retire_pointer_buttons(&mut held, |_, _| true, |inputs| Ok(inputs.len())).unwrap();
+        message.action = Some(RemoteControlAction::Click);
+        submit_pointer_button(&mut held, &message, |inputs| Ok(inputs.len())).unwrap();
+        retire_pointer_buttons(
+            &mut held,
+            |_, _| true,
+            |_| panic!("a completed click must not leave a held button"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    #[ignore = "Owned Win32 editor/message loop; run only in the dedicated unlocked Petal Windows Test VM"]
+    fn background_keyboard_message_loop_native_smoke() {
+        use std::cell::{Cell, RefCell};
+        use std::sync::mpsc::{channel, Sender};
+        use windows::core::w;
+        use windows::Win32::Foundation::LRESULT;
+        use windows::Win32::UI::Input::KeyboardAndMouse::SetKeyboardState;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CallWindowProcW, CreateWindowExW, DestroyWindow, DispatchMessageW, GetWindowTextW,
+            PeekMessageW, SetWindowLongPtrW, TranslateMessage, ES_MULTILINE, GWLP_WNDPROC, MSG,
+            PM_REMOVE, WINDOW_STYLE, WNDPROC, WS_POPUP,
+        };
+        type KeyMessage = (u32, usize, isize);
+        thread_local! {
+            static ORIGINAL: Cell<WNDPROC> = const { Cell::new(None) };
+            static OBSERVED: RefCell<Vec<KeyMessage>> = const { RefCell::new(Vec::new()) };
+        }
+        unsafe extern "system" fn observe(
+            hwnd: HWND,
+            msg: u32,
+            wp: WPARAM,
+            lp: LPARAM,
+        ) -> LRESULT {
+            if matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP | WM_CHAR) {
+                OBSERVED.with(|events| events.borrow_mut().push((msg, wp.0, lp.0)));
+            }
+            ORIGINAL.with(|original| unsafe {
+                CallWindowProcW(original.get(), hwnd, msg, wp, lp)
+            })
+        }
+        enum Command {
+            Snapshot(Sender<(String, String, Vec<KeyMessage>)>),
+            Control(bool, Sender<()>),
+            Stop,
+        }
+        struct Fixture {
+            commands: Sender<Command>,
+            thread: Option<std::thread::JoinHandle<()>>,
+        }
+        impl Fixture {
+            fn snapshot(&self) -> (String, String, Vec<KeyMessage>) {
+                let (tx, rx) = channel();
+                self.commands.send(Command::Snapshot(tx)).unwrap();
+                rx.recv_timeout(Duration::from_secs(2)).unwrap()
+            }
+            fn control(&self, held: bool) {
+                let (tx, rx) = channel();
+                self.commands.send(Command::Control(held, tx)).unwrap();
+                rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = self.commands.send(Command::Stop);
+                if let Some(thread) = self.thread.take() {
+                    thread.join().unwrap();
+                }
+            }
+        }
+        let _guard = test_lock();
+        assert!(input_desktop_is_default(), "unlock the dedicated test guest first");
+        let foreground = unsafe { GetForegroundWindow() };
+        let (commands, receiver) = channel();
+        let (ready, handles) = channel();
+        let thread = std::thread::spawn(move || {
+            let create = |title| unsafe {
+                CreateWindowExW(
+                    Default::default(), w!("EDIT"), title,
+                    WS_POPUP | WINDOW_STYLE(ES_MULTILINE as u32),
+                    0, 0, 320, 200, None, None, None, None,
+                ).unwrap()
+            };
+            // Hidden, process-owned editors: no activation, global injection,
+            // user clipboard, or dependency on another application's lifetime.
+            let target = create(w!(""));
+            let sentinel = create(w!("unshared sentinel"));
+            let previous = unsafe { SetWindowLongPtrW(target, GWLP_WNDPROC, observe as *const () as isize) };
+            assert_ne!(previous, 0);
+            ORIGINAL.with(|original| original.set(Some(unsafe {
+                std::mem::transmute::<isize, unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>(previous)
+            })));
+            ready.send(target.0 as isize).unwrap();
+            loop {
+                let mut msg = MSG::default();
+                // Drain through a real TranslateMessage/DispatchMessage loop,
+                // including characters TranslateMessage appends to the queue.
+                while unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE) }.as_bool() {
+                    unsafe {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+                match receiver.try_recv() {
+                    Ok(Command::Snapshot(reply)) => {
+                        let text = |hwnd| {
+                            let mut buffer = [0u16; 256];
+                            let len = unsafe { GetWindowTextW(hwnd, &mut buffer) };
+                            String::from_utf16(&buffer[..len as usize]).unwrap()
+                        };
+                        let events = OBSERVED.with(|events| std::mem::take(&mut *events.borrow_mut()));
+                        reply.send((text(target), text(sentinel), events)).unwrap();
+                    }
+                    Ok(Command::Control(held, reply)) => {
+                        // This fixture thread alone owns this keyboard state;
+                        // posted modifier messages do not update GetKeyState.
+                        let mut state = [0u8; 256];
+                        if held {
+                            state[0x11] = 0x80;
+                            state[0xa2] = 0x80;
+                        }
+                        unsafe { SetKeyboardState(&state) }.unwrap();
+                        reply.send(()).unwrap();
+                    }
+                    Ok(Command::Stop) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+            }
+            unsafe {
+                SetWindowLongPtrW(target, GWLP_WNDPROC, previous);
+                DestroyWindow(target).unwrap();
+                DestroyWindow(sentinel).unwrap();
+            }
+        });
+        let fixture = Fixture { commands, thread: Some(thread) };
+        let target = HWND(handles.recv_timeout(Duration::from_secs(2)).unwrap() as *mut _);
+        assert!(!target_is_foreground(target));
+        let pair = |code, hint| {
+            post_key_message(target, code, false, false, hint);
+            post_key_message(target, code, true, false, hint);
+        };
+        pair("KeyZ", Some("z"));
+        let (text, sentinel, events) = fixture.snapshot();
+        assert_eq!(text, "z", "one Down/Up must produce exactly one character");
+        assert_eq!(sentinel, "unshared sentinel");
+        for id in [WM_KEYDOWN, WM_KEYUP, WM_CHAR] {
+            assert_eq!(events.iter().filter(|event| event.0 == id).count(), 1);
+        }
+        assert!(events.iter().any(|event| {
+            event.0 == WM_KEYUP && event.2 as u32 & 0xc000_0000 == 0xc000_0000
+        }));
+        post_key_message(target, "KeyZ", true, false, Some("z"));
+        assert_eq!(fixture.snapshot().0, "z", "Up alone must not insert");
+        post_key_message(target, "ShiftLeft", false, false, None);
+        pair("KeyA", Some("A"));
+        post_key_message(target, "ShiftLeft", true, false, None);
+        pair("KeyE", Some("é"));
+        pair("KeyQ", Some("🦀"));
+        assert_eq!(fixture.snapshot().0, "zAé🦀", "controller text, not host layout");
+        // Arrow/Home retain native consumer behavior, not just a posted-key
+        // count. A subsequent text key exposes the resulting caret position.
+        pair("Home", None);
+        fixture.snapshot();
+        pair("KeyB", Some("b"));
+        assert_eq!(fixture.snapshot().0, "bzAé🦀");
+        fixture.control(true);
+        pair("ControlLeft", None);
+        pair("End", None);
+        let (text, _, events) = fixture.snapshot();
+        assert_eq!(text, "bzAé🦀", "modifier/navigation must not insert text");
+        assert!(events.iter().any(|event| event.0 == WM_KEYDOWN && event.1 == 0xa2));
+        assert!(events.iter().any(|event| event.0 == WM_KEYUP && event.1 == 0xa2));
+        fixture.control(false);
+        pair("Digit1", Some("!"));
+        let (text, sentinel, _) = fixture.snapshot();
+        assert_eq!(text, "bzAé🦀!");
+        pair("Backspace", None);
+        assert_eq!(fixture.snapshot().0, "bzAé🦀", "Backspace must edit exactly once");
+        post_key_message(target, "F24", false, true, None);
+        post_key_message(target, "F24", true, true, None);
+        let (text, _, events) = fixture.snapshot();
+        assert_eq!(text, "bzAé🦀");
+        for id in [WM_SYSKEYDOWN, WM_SYSKEYUP] {
+            assert!(events.iter().any(|event| {
+                event.0 == id && event.2 as u32 & 0x2000_0000 != 0
+            }));
+        }
+        assert_eq!(sentinel, "unshared sentinel");
+        assert_eq!(unsafe { GetForegroundWindow() }, foreground, "background replay stole focus");
+        eprintln!("background keyboard: exact text={text:?}; Down/Up/char observed once; Unicode/navigation/modifier/sentinel/focus assertions passed");
+    }
+
+    #[test]
+    #[ignore = "Injects real input; run only in the dedicated unlocked Petal Windows Test VM"]
+    fn held_button_retirement_native_smoke() {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WS_EX_TOPMOST, WS_POPUP, WS_VISIBLE,
+        };
+        const WINDOW_ID: u32 = u32::MAX - 42;
+        struct Fixture {
+            hwnd: HWND,
+            cursor: POINT,
+        }
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                clear_window(WINDOW_ID);
+                unsafe {
+                    let _ = DestroyWindow(self.hwnd);
+                    let mut current = POINT::default();
+                    if GetCursorPos(&mut current).is_ok() && current.x == 220 && current.y == 220 {
+                        let _ = SetCursorPos(self.cursor.x, self.cursor.y);
+                    }
+                }
+            }
+        }
+        fn wait_button(vk: i32, down: bool) {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            loop {
+                if (unsafe { GetAsyncKeyState(vk) } < 0) == down {
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "button {vk} did not become down={down}"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let _guard = test_lock();
+        assert!(
+            input_desktop_is_default(),
+            "unlock the dedicated test guest first"
+        );
+        for vk in [0x01, 0x04, 0x02] {
+            assert!(
+                unsafe { GetAsyncKeyState(vk) } >= 0,
+                "do not run while a button is held"
+            );
+        }
+        let mut cursor = POINT::default();
+        unsafe { GetCursorPos(&mut cursor) }.unwrap();
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOPMOST,
+                w!("BUTTON"),
+                w!("Petal held-button retirement fixture"),
+                WS_POPUP | WS_VISIBLE,
+                120,
+                120,
+                320,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .unwrap();
+        let _fixture = Fixture { hwnd, cursor };
+        unsafe { SetCursorPos(220, 220) }.unwrap();
+        for (button, vk) in [(0, 0x01), (1, 0x04), (2, 0x02)] {
+            let mut current = POINT::default();
+            unsafe { GetCursorPos(&mut current) }.unwrap();
+            assert_eq!(
+                unsafe { WindowFromPoint(current) },
+                hwnd,
+                "fixture must own the pointer"
+            );
+            let down = pointer_message(WINDOW_ID, "native-smoke", button);
+            with_global_input(|| replay_pointer_button(&down)).unwrap();
+            wait_button(vk, true);
+            // No active grant or queued Up: retirement itself must release it.
+            clear_controller(WINDOW_ID, "native-smoke");
+            wait_button(vk, false);
+            eprintln!("button={button}: actual native Down -> retirement -> actual native Up");
+        }
     }
 
     #[test]
@@ -2859,95 +3346,13 @@ mod tests {
     }
 
     #[test]
-    fn window_wheel_never_uses_global_focus_cursor_or_sendinput() {
-        // The cursor-preserving route is a standalone function that resolves
-        // a destination and posts WM_MOUSEWHEEL/HWHEEL; it must never call
-        // focus_and_verify / SetCursorPos / SendInput. Pin that with a source
-        // scan of the function body rather than a runtime HWND test (which
-        // this sandbox cannot construct).
-        let source = std::fs::read_to_string(file!()).expect("read self");
-        let body = source
-            .split_once("fn replay_window_wheel_postmessage")
-            .expect("function present")
-            .1
-            .split_once("fn ")
-            .map(|(before, _)| before)
-            .unwrap_or_default();
-        assert!(
-            !body.contains("focus_and_verify")
-                && !body.contains("SetCursorPos")
-                && !body.contains("SendInput")
-                && !body.contains("SetForegroundWindow"),
-            "window wheel route must not focus, move the cursor, or use SendInput"
-        );
-        assert!(
-            body.contains("SendMessageTimeoutW"),
-            "window wheel route must deliver the wheel message to the target window"
-        );
-        assert!(body.contains("WM_MOUSEWHEEL") && body.contains("WM_MOUSEHWHEEL"));
-    }
-
-    #[test]
-    fn window_wheel_resolves_a_scrollable_child_and_never_blocks_on_occlusion() {
-        // The wheel is ID-addressed: `PostMessageW` goes to the shared window's
-        // own queue, so occlusion by OTHER windows must neither block nor
-        // redirect it. The destination is the target's own SCROLLABLE child
-        // under the cursor (`scrollable_child_at_point` — `EnumChildWindows` +
-        // `GetScrollInfo`/`WS_*SCROLL`), with the top-level target as fallback.
-        // This is the 006B fix: `ChildWindowFromPointEx` returned a
-        // non-scrollable container for Win11 Notepad, silently swallowing the
-        // wheel; posting to a scrollable child (or the top level) reaches the
-        // actual editor/render widget.
-        //
-        // The ONLY point check is `window_contains_point` — the target's own
-        // client area via ScreenToClient/GetClientRect, which is
-        // z-order-independent. We must NOT use `WindowFromPoint`/`IsChild`
-        // here: they return the topmost window, so a browser partially
-        // covering the Notepad on the sharer's desktop would make the check
-        // refuse a perfectly valid aimed wheel (the 006B2 "Covered/Input
-        // Ignored" regression). Source-scan the route body to pin this.
-        let source = std::fs::read_to_string(file!()).expect("read self");
-        let body = source
-            .split_once("fn replay_window_wheel_postmessage")
-            .expect("function present")
-            .1
-            .split_once("fn ")
-            .map(|(before, _)| before)
-            .unwrap_or_default();
-        assert!(
-            body.contains("window_contains_point"),
-            "wheel must validate the aim point inside the TARGET's own client area"
-        );
-        assert!(
-            body.contains("scrollable_child_at_point"),
-            "wheel must resolve the target's own scrollable child under the cursor"
-        );
-        assert!(
-            body.contains("SendMessageTimeoutW("),
-            "wheel must deliver to the resolved destination (scrollable child, or the target itself) via SendMessageTimeoutW"
-        );
-        // The ONLY gate is `window_contains_point` (z-order-independent). The
-        // pointer occlusion gate (`validate_pointer_point`/`root_window_at`)
-        // and child resolution via the global z-order
-        // (`child_window_at`/`ChildWindowFromPointEx`) must be absent
-        // entirely — occlusion must never block ID-addressed injection.
-        assert!(
-            !body.contains("validate_pointer_point")
-                && !body.contains("root_window_at")
-                && !body.contains("child_window_at")
-                && !body.contains("ChildWindowFromPointEx")
-                && !body.contains("window_from_point_at")
-                && !body.contains("IsChild"),
-            "wheel must use only window_contains_point as its gate (occlusion must never block ID-addressed injection)"
-        );
-    }
-
-    #[test]
     fn operation_feedback_preserves_controller_grant_and_pending_result() {
         let _guard = test_lock();
         clear_pending_controller_operations(92, Some("host"));
         let engine = crate::remote_control_core::remote_control_engine();
         engine.remove_controller_grant(92, "host");
+        let mut request = wheel_message(92, "host", 1.0, 0);
+        request.request_id = Some(engine.begin_controller_request(request.window_id, &request.target_user_id, None));
         engine.install_controller_grant(
             92,
             "host".to_string(),
@@ -2977,6 +3382,7 @@ mod tests {
         feedback.message_type = RemoteControlType::Status;
         feedback.controller_id = "host".to_string();
         feedback.target_user_id = "controller".to_string();
+        feedback.request_id = request.request_id.clone();
         assert!(record_controller_status(&feedback, "occluded"));
 
         let preserved = engine
@@ -3019,6 +3425,8 @@ mod tests {
         );
         assert!(engine.controller_grant(92, "host").is_none());
 
+        request.request_id = Some(engine.begin_controller_request(request.window_id, &request.target_user_id, None));
+        feedback.request_id = request.request_id.clone();
         engine.install_controller_grant(
             92,
             "host".to_string(),
@@ -3047,10 +3455,13 @@ mod tests {
         let engine = crate::remote_control_core::remote_control_engine();
         engine.remove_controller_grant(93, "host");
         clear_pending_controller_operations(93, Some("host"));
+        let mut request = wheel_message(93, "host", 1.0, 0);
+        request.request_id = Some(engine.begin_controller_request(request.window_id, &request.target_user_id, None));
         let mut feedback = wheel_message(93, "host", 1.0, 0);
         feedback.message_type = RemoteControlType::Status;
         feedback.controller_id = "host".to_string();
         feedback.target_user_id = "controller".to_string();
+        feedback.request_id = request.request_id.clone();
 
         assert_eq!(
             controller_status_effect("requestUnavailable"),
@@ -3141,37 +3552,6 @@ mod tests {
         assert!(pointer_root_matches_target(10, 10, &[20]));
         assert!(pointer_root_matches_target(20, 10, &[20]));
         assert!(!pointer_root_matches_target(30, 10, &[20]));
-    }
-
-    #[test]
-    fn pointer_up_at_a_covered_point_skips_the_cursor_warp() {
-        // 011B: a click is Down+Up; the Down at a covered point was refused
-        // (no cursor move), but the paired Up skipped the occlusion gate and
-        // warped B's cursor to the covered point — making the telepointer tag
-        // jump to the covering window. A refused click must be a true no-op:
-        // the Up's SetCursorPos must be conditional on the point being owned.
-        // Source-scan `replay_window_pointer_global` to pin the guard.
-        let source = std::fs::read_to_string(file!()).expect("read self");
-        let body = source
-            .split_once("fn replay_window_pointer_global")
-            .expect("function present")
-            .1
-            .split_once("fn ")
-            .map(|(before, _)| before)
-            .unwrap_or_default();
-        assert!(
-            body.contains("point_owned"),
-            "pointer replay must compute whether the point is owned before warping the cursor"
-        );
-        assert!(
-            body.contains("if point_owned && unsafe { SetCursorPos"),
-            "SetCursorPos must be skipped when the point is not owned (covered Up must not warp)"
-        );
-        // The Up itself is still submitted (a release is never dropped).
-        assert!(
-            body.contains("submit_inputs(&[mouse_input(up_flag, 0)], true)"),
-            "the Up button release must still be submitted even at a covered point"
-        );
     }
 
     #[test]

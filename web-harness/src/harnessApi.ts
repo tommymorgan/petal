@@ -13,7 +13,7 @@ import {
   type RemoteControlMessage,
   type RemoteControlModifiers
 } from './trackNames.ts';
-import { canonicalRemoteControlFingerprint, decodeRemoteControlHotPath, newRemoteControlInputId, parseRemoteControlJson, remoteControlGrantEnvelopeIsValid, remoteControlPublishOptions } from './remoteControl.ts';
+import { canonicalRemoteControlFingerprint, decodeRemoteControlHotPath, newRemoteControlInputId, parseRemoteControlJson, remoteControlGrantEnvelopeIsValid, remoteControlPublishOptions, remoteControlStatusMatchesRequest } from './remoteControl.ts';
 import {
   decodePhotonSentinelFrame,
   matchesExpectedPhotonGeneration,
@@ -157,6 +157,7 @@ export function setupHarnessApi(ctx: HarnessContext, rc: RemoteControlUiPrimitiv
   const resultMetrics: HarnessRemoteControlResultMetric[] = [];
   const grants = new Map<string, {
     controlSessionId: string;
+    requestId: string;
     retryEnabled: boolean;
     dedupGuaranteeWindowMs: number;
     nextInputSeq: number;
@@ -456,7 +457,7 @@ export function setupHarnessApi(ctx: HarnessContext, rc: RemoteControlUiPrimitiv
     message: Extract<RemoteControlMessage, { kind: 'pointer' | 'key' | 'text' }>
   ): Promise<RemoteControlMessage> {
     const grant = grants.get(grantKey(target));
-    if (!grant || grant.retryEnabled) return message;
+    if (!grant || grant.retryEnabled || grant.requestId !== state.activeRemoteControl?.requestId) return message;
     const inputSeq = grant.nextInputSeq++;
     const envelope = { controlSessionId: grant.controlSessionId, inputId: newRemoteControlInputId(), inputSeq };
     const operationFingerprint = await canonicalRemoteControlFingerprint(message, envelope);
@@ -642,7 +643,9 @@ export function setupHarnessApi(ctx: HarnessContext, rc: RemoteControlUiPrimitiv
     ) {
       rc.stopRemoteControl('automation');
     } else {
-      publishHarnessRemoteControl(target, { ...remoteControlBaseForTarget(target), kind: 'release' });
+      publishHarnessRemoteControl(target, { ...remoteControlBaseForTarget(target), kind: 'release',
+        requestId: state.activeRemoteControl?.targetUserId === target.targetUserId &&
+          state.activeRemoteControl.windowId === target.windowId ? state.activeRemoteControl.requestId : undefined });
     }
     return target;
   }
@@ -1129,11 +1132,21 @@ export function setupHarnessApi(ctx: HarnessContext, rc: RemoteControlUiPrimitiv
     // controllerId to poison our controlSessionId or force our grant to
     // appear stopped, defeating #377's per-grant token binding for
     // harness-driven control specifically.
+    const keyForStatus = grantKey({ targetUserId: message.controllerId, windowId: message.windowId });
+    const knownGrant = grants.get(keyForStatus);
+    const matchesLiveRequest = remoteControlStatusMatchesRequest(
+      message, state.activeRemoteControl, state.room?.localParticipant.identity, senderIdentity);
+    // The UI may already have consumed a terminal status and cleared its state.
+    const matchesRetiringGrant = message.status !== 'active' && !state.activeRemoteControl &&
+      !!message.requestId && knownGrant?.requestId === message.requestId &&
+      message.targetUserId === state.room?.localParticipant.identity && senderIdentity === message.controllerId;
+    if (!matchesLiveRequest && !matchesRetiringGrant) return;
     const senderIsHost = senderIdentity === message.controllerId;
     const grantEnvelopeIsValid = remoteControlGrantEnvelopeIsValid(message);
     if (senderIsHost && grantEnvelopeIsValid && message.status === 'active' && message.controlSessionId && message.resultCapability) {
       const key = grantKey({ targetUserId: message.controllerId, windowId: message.windowId });
       const previousGrant = grants.get(key);
+      if (previousGrant?.requestId === message.requestId) return;
       if (previousGrant && previousGrant.controlSessionId !== message.controlSessionId) {
         clearCompletedClickReplayForTarget({
           targetUserId: message.controllerId,
@@ -1142,6 +1155,7 @@ export function setupHarnessApi(ctx: HarnessContext, rc: RemoteControlUiPrimitiv
       }
       grants.set(grantKey({ targetUserId: message.controllerId, windowId: message.windowId }), {
         controlSessionId: message.controlSessionId,
+        requestId: message.requestId!,
         retryEnabled: message.resultCapability.retryEnabled,
         dedupGuaranteeWindowMs: boundedDedupWindowMs(
           message.resultCapability.dedupGuaranteeWindowMs

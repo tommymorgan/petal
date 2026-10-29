@@ -29,6 +29,7 @@
   let speakerNote = $state<string | null>(null);
   let cameraNote = $state<string | null>(null);
   let pendingKind = $state<'microphone' | 'speaker' | 'camera' | null>(null);
+  let cameraSelectionRequest = 0;
   let root = $state<HTMLDivElement>();
 
   const micValue = $derived(
@@ -117,21 +118,23 @@
   }
 
   async function handleCameraSelect(id: string) {
+    const request = ++cameraSelectionRequest;
     selectedCamera = id;
-    updateAudioDevices(undefined, undefined, id);
     cameraNote = null;
     pendingKind = 'camera';
     try {
       const applied = await setCameraDevice(id);
-      cameraNote = noteFor(
+      if (request !== cameraSelectionRequest) return;
+      cameraNote = applied?.error ?? noteFor(
         applied ? { applied: applied.applied, inRoom: applied.inRoom } : null,
         'camera'
       );
     } catch (error) {
+      if (request !== cameraSelectionRequest) return;
       console.error('device picker: camera switch failed', error);
       cameraNote = 'Could not switch camera.';
     } finally {
-      pendingKind = null;
+      if (request === cameraSelectionRequest) pendingKind = null;
     }
   }
 

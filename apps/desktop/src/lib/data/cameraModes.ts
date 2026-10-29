@@ -25,12 +25,45 @@ export const CAMERA_RESOLUTION_PRESETS: CameraResolutionPreset[] = [
 /** The FPS presets offered in Settings. */
 export const CAMERA_FPS_PRESETS: number[] = [15, 30, 60];
 
-/** 29.97-style rates round to the nearest integer preset. */
+/** Preserve the advertised ratio; display formatting must not alter the value. */
 export function cameraModeFps(mode: CameraMode): number {
-  if (mode.frameRateDenominator === 0) return 0;
-  return Math.round(
-    (mode.frameRateNumerator / mode.frameRateDenominator) * 10
-  ) / 10;
+  if (mode.frameRateDenominator <= 0) return 0;
+  return mode.frameRateNumerator / mode.frameRateDenominator;
+}
+
+/** Real device sizes, with Auto retained independently of enumeration. */
+export function cameraResolutionOptions(modes: CameraMode[]): CameraResolutionPreset[] {
+  const sizes = new Map<string, CameraResolutionPreset>();
+  for (const mode of modes) {
+    const fps = cameraModeFps(mode);
+    if (mode.width <= 0 || mode.height <= 0 || !Number.isFinite(fps) || fps <= 0) continue;
+    const id = `${mode.width}x${mode.height}`;
+    sizes.set(id, {
+      id,
+      width: mode.width,
+      height: mode.height,
+      label: `${mode.width} × ${mode.height}`
+    });
+  }
+  return [
+    CAMERA_RESOLUTION_PRESETS[0],
+    ...Array.from(sizes.values()).sort(
+      (a, b) => a.width * a.height - b.width * b.height || a.width - b.width
+    )
+  ];
+}
+
+export function cameraFrameRateOptions(
+  modes: CameraMode[],
+  width: number,
+  height: number
+): number[] {
+  return [...new Set(
+    modes
+      .filter((mode) => mode.width === width && mode.height === height)
+      .map(cameraModeFps)
+      .filter((fps) => Number.isFinite(fps) && fps > 0)
+  )].sort((a, b) => b - a);
 }
 
 /** Whether any enumerated mode matches `width`x`height`. */
@@ -42,7 +75,7 @@ export function cameraSupportsResolution(
   return modes.some((mode) => mode.width === width && mode.height === height);
 }
 
-/** Whether any enumerated mode at `width`x`height` runs at (rounded) `fps`. */
+/** Windows preset matching retains its existing tenth-then-integer rounding. */
 export function cameraSupportsFps(
   modes: CameraMode[],
   width: number,
@@ -53,7 +86,7 @@ export function cameraSupportsFps(
     (mode) =>
       mode.width === width &&
       mode.height === height &&
-      Math.round(cameraModeFps(mode)) === fps
+      Math.round(Math.round(cameraModeFps(mode) * 10) / 10) === fps
   );
 }
 

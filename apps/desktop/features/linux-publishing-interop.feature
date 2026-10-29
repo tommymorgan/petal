@@ -5,8 +5,8 @@ Feature: Native Linux publication and input capability boundaries
     When I inspect its room controls and invoke unfinished commands directly
     Then the monitor Share action is visibly enabled
     And monitor selection without a room reports the missing room before requesting permission
-    And camera controls are enabled while region and input controls remain unavailable with Linux explanations
-    And unfinished region, audio and input commands report unsupported while the camera command reports the missing room, and raw window IDs require native consent
+    And camera controls are enabled while region and host-input controls remain unavailable with Linux explanations
+    And region, audio and host-input commands report unsupported while camera and controller commands report their missing authority gate, and raw window IDs require native consent
     And no room, picture or camera publication is created
     And room-entry and microphone controls remain available
     And repeated unfinished actions leave the native app without publication or input effects
@@ -25,5 +25,5 @@ Feature: Native Linux publication and input capability boundaries
     Given this implementation unit's Linux executable is running
     When I inspect each publication and input action and invoke its direct command
     Then completed capabilities use their real native path with explicit per-operation permission state
-    And incomplete camera or input capabilities remain unavailable without effects
+    And incomplete host-input capabilities remain unavailable without effects
     And missing permission or service is reported as a visible failure rather than success

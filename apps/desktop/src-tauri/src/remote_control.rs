@@ -16,6 +16,7 @@
 
 use crate::sync_ext::MutexExt;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -98,8 +99,8 @@ fn remote_window_exists(owner_identity: &str, window_id: u32) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn remote_window_exists(_owner_identity: &str, _window_id: u32) -> bool {
-    false
+fn remote_window_exists(owner_identity: &str, window_id: u32) -> bool {
+    crate::linux_remote_control::receive_target(window_id, Some(owner_identity)).is_some()
 }
 
 #[cfg(target_os = "macos")]
@@ -114,8 +115,9 @@ fn remote_window_owner(window_id: u32, owner_identity: Option<&str>) -> Option<S
 }
 
 #[cfg(target_os = "linux")]
-fn remote_window_owner(_window_id: u32, _owner_identity: Option<&str>) -> Option<String> {
-    None
+fn remote_window_owner(window_id: u32, owner_identity: Option<&str>) -> Option<String> {
+    let hint = owner_identity.filter(|owner| !owner.is_empty());
+    crate::linux_remote_control::receive_target(window_id, hint).map(|target| target.owner_identity)
 }
 
 #[cfg(target_os = "macos")]
@@ -141,11 +143,20 @@ fn set_remote_window_control_active(
 #[cfg(target_os = "linux")]
 fn set_remote_window_control_active(
     _app: &AppHandle,
-    _window_id: u32,
-    _owner_identity: Option<&str>,
-    _active: bool,
+    window_id: u32,
+    owner_identity: Option<&str>,
+    active: bool,
 ) -> Result<(), String> {
-    Err("Remote control is unsupported on Linux".to_string())
+    let hint = owner_identity.filter(|owner| !owner.is_empty());
+    let Some(owner) = crate::linux_remote_control::receive_target(window_id, hint)
+        .map(|target| target.owner_identity)
+        .or_else(|| hint.map(str::to_string))
+    else {
+        // The share window is already gone; there is nothing to flip.
+        return Ok(());
+    };
+    crate::linux_compositor::queue_controller_set_active(&owner, window_id, active);
+    Ok(())
 }
 
 struct TauriControlSurface<'a> {
@@ -336,52 +347,50 @@ fn message_from_binary(
         );
         return None;
     }
-    Some(RemoteControlMessage {
-        v: payload[1],
-        message_type: kind,
-        action,
-        target_user_id: target_user_id.to_string(),
-        controller_id: controller_id.to_string(),
-        window_id,
-        seq: u32::from_le_bytes(payload[4..8].try_into().ok()?) as u64,
-        target_kind: None,
-        share_instance_id: None,
-        controller_capabilities: Vec::new(),
-        host_capabilities: Vec::new(),
-        reason: None,
-        control_session_id: None,
-        input_id: None,
-        input_seq: None,
-        operation_fingerprint_version: None,
-        operation_fingerprint: None,
-        outcome: None,
-        delivery_route: None,
-        failure_code: None,
-        result_capability: None,
-        x: Some(read_u16(12) as f64 / u16::MAX as f64),
-        y: Some(read_u16(14) as f64 / u16::MAX as f64),
-        button: None,
-        buttons: Some(payload[16] as u16),
-        click_count: None,
-        delta_x: Some(read_i16(18) as f64),
-        delta_y: Some(read_i16(20) as f64),
-        delta_mode: Some(payload[22]),
-        key: None,
-        code: None,
-        repeat: false,
-        location: None,
-        text: None,
-        status: None,
-        message: None,
-        grant_token: Some(active_token),
-        supports_binary_hot_path: false,
-        modifiers: RemoteControlModifiers {
-            alt: modifiers & 1 != 0,
-            ctrl: modifiers & 2 != 0,
-            meta: modifiers & 4 != 0,
-            shift: modifiers & 8 != 0,
-        },
-    })
+    Some(RemoteControlMessage { request_id: None, v: payload[1],
+    message_type: kind,
+    action,
+    target_user_id: target_user_id.to_string(),
+    controller_id: controller_id.to_string(),
+    window_id,
+    seq: u32::from_le_bytes(payload[4..8].try_into().ok()?) as u64,
+    target_kind: None,
+    share_instance_id: None,
+    controller_capabilities: Vec::new(),
+    host_capabilities: Vec::new(),
+    reason: None,
+    control_session_id: None,
+    input_id: None,
+    input_seq: None,
+    operation_fingerprint_version: None,
+    operation_fingerprint: None,
+    outcome: None,
+    delivery_route: None,
+    failure_code: None,
+    result_capability: None,
+    x: Some(read_u16(12) as f64 / u16::MAX as f64),
+    y: Some(read_u16(14) as f64 / u16::MAX as f64),
+    button: None,
+    buttons: Some(payload[16] as u16),
+    click_count: None,
+    delta_x: Some(read_i16(18) as f64),
+    delta_y: Some(read_i16(20) as f64),
+    delta_mode: Some(payload[22]),
+    key: None,
+    code: None,
+    repeat: false,
+    location: None,
+    text: None,
+    status: None,
+    message: None,
+    grant_token: Some(active_token),
+    supports_binary_hot_path: false,
+    modifiers: RemoteControlModifiers {
+        alt: modifiers & 1 != 0,
+        ctrl: modifiers & 2 != 0,
+        meta: modifiers & 4 != 0,
+        shift: modifiers & 8 != 0,
+    }, })
 }
 
 type ResolveQueuePush = BoundedQueuePush<ResolveTask>;
@@ -523,7 +532,7 @@ pub(crate) const MAX_REPLAY_TEXT_CHARS: usize = 1000;
 const MAX_REPLAY_TEXT_SLICE_CHARS: usize = 32;
 const ACTIVATION_PUBLISH_ATTEMPTS: usize = 5;
 const ACTIVATION_RETRY_DELAY: Duration = Duration::from_millis(120);
-const CONTROLLER_REQUEST_TIMEOUT_MS: u64 = 8_000;
+pub(crate) const CONTROLLER_REQUEST_TIMEOUT_MS: u64 = 8_000;
 const CONTROLLER_REQUEST_TIMEOUT_MESSAGE: &str =
     "Remote control request timed out. Check Accessibility on the shared Mac, then try again.";
 // #372: cap injection-failure status packets to ~1/sec per (window,
@@ -1144,12 +1153,15 @@ fn emit_and_send_operation_feedback(
     state: &SessionState,
     local_identity: &str,
     _message: &RemoteControlMessage,
-    status: RemoteControlStatus,
+    mut status: RemoteControlStatus,
 ) {
+    let current_token = active_grant_token(_message.window_id, &_message.controller_id);
+    if current_token.is_none() || current_token.as_deref() != _message.grant_token.as_deref() {
+        return;
+    }
     #[cfg(target_os = "windows")]
     {
-        if active_grant_token(_message.window_id, &_message.controller_id).is_none()
-            || !should_notify_replay_failure_status(_message)
+        if !should_notify_replay_failure_status(_message)
             || !should_emit_replay_failure_status(
                 _message.window_id,
                 &_message.controller_id,
@@ -1159,6 +1171,7 @@ fn emit_and_send_operation_feedback(
             return;
         }
     }
+    status.request_id = remote_control_engine().host_request_id(status.window_id, &status.controller_id);
     emit_and_send_status(app, state, local_identity, status);
 }
 
@@ -1174,7 +1187,8 @@ fn notify_replay_failure(message: &RemoteControlMessage, error: &str) {
     // "Needs access"/"Unavailable") AFTER its own terminal "stopped" status,
     // and clobber `last_emitted_statuses` for a controller no longer holding
     // a grant at all. Only nack a controller that currently holds one.
-    if active_grant_token(message.window_id, &message.controller_id).is_none() {
+    let current_token = active_grant_token(message.window_id, &message.controller_id);
+    if current_token.is_none() || current_token.as_deref() != message.grant_token.as_deref() {
         return;
     }
     if !should_emit_replay_failure_status(message.window_id, &message.controller_id, Instant::now())
@@ -1192,15 +1206,12 @@ fn notify_replay_failure(message: &RemoteControlMessage, error: &str) {
         &app,
         state.inner(),
         &local_identity,
-        RemoteControlStatus {
-            window_id: message.window_id,
-            owner_identity: None,
-            controller_id: message.controller_id.clone(),
-            status,
-            message: status_message,
-            grant_token: None,
-            reason: None,
-        },
+        RemoteControlStatus { request_id: remote_control_engine().host_request_id(message.window_id, &message.controller_id), window_id: message.window_id, owner_identity: None,
+        controller_id: message.controller_id.clone(),
+        status,
+        message: status_message,
+        grant_token: None,
+        reason: None, },
     );
 }
 
@@ -1476,15 +1487,10 @@ fn active_status_for_session(
     controller_id: String,
     grant_token: String,
 ) -> RemoteControlStatus {
-    RemoteControlStatus {
-        window_id,
-        owner_identity: None,
-        controller_id,
-        status: "active",
-        message: "Remote control active for shared window".to_string(),
-        grant_token: Some(grant_token),
-        reason: None,
-    }
+    RemoteControlStatus { request_id: remote_control_engine().host_request_id(window_id, &controller_id), window_id, owner_identity: None, controller_id, status: "active",
+    message: "Remote control active for shared window".to_string(),
+    grant_token: Some(grant_token),
+    reason: None, }
 }
 
 /// Reconfirm grants after LiveKit reconnects without changing authorization.
@@ -1561,11 +1567,6 @@ fn revoke(window_id: u32, controller_id: &str) {
     clear_escalations_where(|pending_window, pending_controller| {
         pending_window == window_id && pending_controller == controller_id
     });
-    // #374: clear only THIS controller's parked AX gesture, never a
-    // concurrent controller's — gesture state is keyed per (window,
-    // controller) precisely so one controller revoking/disconnecting can't
-    // clobber another still-active controller's in-progress drag anchor.
-    platform_control().clear_controller_gestures(window_id, controller_id);
     // Refs #288: same insert-only leak class #410 fixed for the other
     // per-(window, controller) maps -- see `clear_discrete_admissions`.
     clear_discrete_admissions(|w, c| !(w == window_id && c == controller_id));
@@ -1575,6 +1576,13 @@ fn revoke(window_id: u32, controller_id: &str) {
     grants.retain(|key, _| key.window_id != window_id || key.controller_id != controller_id);
     let removed = grants.len() != before;
     drop(grants);
+    // Remove authority before native cleanup waits for in-flight injection.
+    // No new press may be admitted after the held inputs have been released.
+    // #374: clear only THIS controller's parked AX gesture, never a
+    // concurrent controller's — gesture state is keyed per (window,
+    // controller) precisely so one controller revoking/disconnecting can't
+    // clobber another still-active controller's in-progress drag anchor.
+    platform_control().clear_controller_gestures(window_id, controller_id);
     warned_tokenless_inputs()
         .lock_unpoisoned()
         .remove(&(window_id, controller_id.to_string()));
@@ -1616,6 +1624,16 @@ fn drain_window_control_releasing(
 ) -> (Vec<String>, Vec<ReplayTask>) {
     #[cfg(target_os = "windows")]
     clear_escalations_where(|pending_window, _| pending_window == window_id);
+    // Retire authority before native release; preserve release-before-cache-clear below.
+    let mut active = Vec::new();
+    sessions().lock_unpoisoned().retain(|key, _| {
+        if key.window_id == window_id {
+            active.push(key.controller_id.clone());
+            false
+        } else {
+            true
+        }
+    });
     // #446 A7: this MUST run before `clear_control_caches_for_window`, which
     // reaches `clear_ax_gesture_for_window` and keeps only an opted-in
     // SlDrag -- dropping a session-tap gesture. A dropped record cannot be
@@ -1632,15 +1650,6 @@ fn drain_window_control_releasing(
         .lock_unpoisoned()
         .retain(|(stored_window_id, _, _), _| *stored_window_id != window_id);
     let releases = drain_pressed_for_window(window_id);
-    let mut active = Vec::new();
-    sessions().lock_unpoisoned().retain(|key, _| {
-        if key.window_id == window_id {
-            active.push(key.controller_id.clone());
-            false
-        } else {
-            true
-        }
-    });
     // Fable review fix (#372), round 2: this is a genuine grant-teardown path
     // (sharing ended) that was missing the same per-departed-controller
     // cleanup `revoke()`/`revoke_controller()` already do -- window IDs are
@@ -1703,15 +1712,10 @@ pub(crate) fn revoke_window(app: &AppHandle, window_id: u32, reason: &'static st
     for controller_id in active {
         emit_status(
             app,
-            RemoteControlStatus {
-                window_id,
-                owner_identity: None,
-                controller_id,
-                status: "stopped",
-                message: "Remote control stopped because sharing ended.".to_string(),
-                grant_token: None,
-                reason: None,
-            },
+            RemoteControlStatus { request_id: remote_control_engine().host_request_id(window_id, &controller_id), window_id, owner_identity: None, controller_id, status: "stopped",
+            message: "Remote control stopped because sharing ended.".to_string(),
+            grant_token: None,
+            reason: None, },
         );
     }
 }
@@ -1728,10 +1732,7 @@ pub(crate) fn revoke_all(app: &AppHandle) {
     remote_control_engine().clear_controller_grants();
     #[cfg(target_os = "windows")]
     crate::windows_remote_control::clear_all_pending_controller_operations();
-    clear_all_control_caches();
-    bump_all_replay_epochs("all control revoked");
-    let releases = drain_all_pressed();
-    enqueue_synthetic_releases(releases, "all control revoked");
+    // Close admission before synchronizing with native held-input cleanup.
     let active: Vec<(u32, String)> = {
         let mut guard = sessions().lock_unpoisoned();
         guard
@@ -1739,6 +1740,10 @@ pub(crate) fn revoke_all(app: &AppHandle) {
             .map(|(key, _)| (key.window_id, key.controller_id))
             .collect()
     };
+    clear_all_control_caches();
+    bump_all_replay_epochs("all control revoked");
+    let releases = drain_all_pressed();
+    enqueue_synthetic_releases(releases, "all control revoked");
     warned_tokenless_inputs().lock_unpoisoned().clear();
     last_unreliable_seqs().lock_unpoisoned().clear();
     // Fable review fix (#372): same insert-only leak class as
@@ -1752,19 +1757,22 @@ pub(crate) fn revoke_all(app: &AppHandle) {
     warned_controller_id_mismatches().lock_unpoisoned().clear();
     // Refs #288: same insert-only leak class as the maps above.
     *discrete_admissions().lock_unpoisoned() = DiscreteAdmissionState::default();
+    let state = app.try_state::<SessionState>();
+    let local_identity = state
+        .as_ref()
+        .and_then(|state| state.control_channel_snapshot().map(|(_, identity)| identity));
     for (window_id, controller_id) in active {
-        emit_status(
-            app,
-            RemoteControlStatus {
-                window_id,
-                owner_identity: None,
-                controller_id,
-                status: "stopped",
-                message: "Remote control disabled for this meeting".to_string(),
-                grant_token: None,
-                reason: None,
-            },
-        );
+        let status = RemoteControlStatus { request_id: remote_control_engine().host_request_id(window_id, &controller_id), window_id, owner_identity: None, controller_id, status: "stopped",
+        message: "Remote control disabled for this meeting".to_string(),
+        grant_token: None,
+        reason: None, };
+        // Retire the controller's grant even if its approval is still in flight.
+        // Local-only notification leaves that approval able to enable sending.
+        if let Some((state, local_identity)) = state.as_ref().zip(local_identity.as_ref()) {
+            emit_and_send_status_forced(app, state, local_identity, status);
+        } else {
+            emit_status(app, status);
+        }
     }
 }
 
@@ -1841,15 +1849,10 @@ pub(crate) fn revoke_controller(app: &AppHandle, controller_id: &str, reason: &'
     for window_id in active {
         emit_status(
             app,
-            RemoteControlStatus {
-                window_id,
-                owner_identity: None,
-                controller_id: controller_id.to_string(),
-                status: "stopped",
-                message: "Remote control stopped because the controller disconnected.".to_string(),
-                grant_token: None,
-                reason: None,
-            },
+            RemoteControlStatus { request_id: remote_control_engine().host_request_id(window_id, &controller_id.to_string()), window_id, owner_identity: None, controller_id: controller_id.to_string(), status: "stopped",
+            message: "Remote control stopped because the controller disconnected.".to_string(),
+            grant_token: None,
+            reason: None, },
         );
     }
 }
@@ -2246,6 +2249,10 @@ fn apply_request_gate_for_message(
         revoke(message.window_id, &message.controller_id);
         return None;
     }
+    if remote_control_engine().host_request_id(message.window_id, &message.controller_id) != message.request_id {
+        revoke(message.window_id, &message.controller_id);
+    }
+    remote_control_engine().remember_host_request(message);
     ControlGrantKey::for_message(message).map(authorize_shared_key)
 }
 
@@ -2284,6 +2291,7 @@ pub(crate) struct ControlConsentRequestedPayload {
     pub kind: ControlConsentPromptKind,
     pub window_id: u32,
     pub controller_id: String,
+    pub request_id: Option<String>,
     pub controller_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_title: Option<String>,
@@ -2437,7 +2445,6 @@ fn park_consent_request(
     let window_id = message.window_id;
     let controller_id = message.controller_id.clone();
     let engine = remote_control_engine();
-    let already_pending = engine.has_pending_request(window_id, &controller_id);
     let Some(key) = ControlGrantKey::for_message(&message) else {
         log::warn!(
             "remote-control: cannot park consent request from '{controller_id}' for window {window_id}: no grant key"
@@ -2445,14 +2452,10 @@ fn park_consent_request(
         return;
     };
     let seq = message.seq;
-    // A repeat request while parked must NOT replace the stored message:
-    // the deny timer armed below is keyed to the ORIGINAL seq, so replacing
-    // it would make that timer see a newer seq and exit without denying --
-    // an orphaned entry with no timer, no re-prompt, and no `denied`
-    // (adversarial review P1). Keep the original; only re-emit the status.
-    if !already_pending {
-        engine.store_pending_request(key, message);
-    }
+    // Publication retries retain the exact attempt and original timer. A NEW
+    // explicit request replaces the parked attempt and gets its own deadline.
+    let request_id = message.request_id.clone();
+    let already_pending = !engine.store_pending_request(key, message);
     log::info!(
         "remote-control: consent {} for '{controller_id}' on shared window {window_id} (policy=ask, seq={})",
         if already_pending { "re-requested, still pending (original timer kept)" } else { "requested" },
@@ -2466,15 +2469,13 @@ fn park_consent_request(
         app,
         state,
         local_identity,
-        RemoteControlStatus {
-            window_id,
-            owner_identity: None,
-            controller_id: controller_id.clone(),
-            status: "awaitingConsent",
-            message: "Waiting for the sharer to approve remote control.".to_string(),
-            grant_token: None,
-            reason: None,
-        },
+        RemoteControlStatus { request_id: request_id.clone(), window_id,
+        owner_identity: None,
+        controller_id: controller_id.clone(),
+        status: "awaitingConsent",
+        message: "Waiting for the sharer to approve remote control.".to_string(),
+        grant_token: None,
+        reason: None, },
     );
     if already_pending {
         return;
@@ -2483,6 +2484,7 @@ fn park_consent_request(
         kind: ControlConsentPromptKind::Control,
         window_id,
         controller_id: controller_id.clone(),
+        request_id: request_id.clone(),
         controller_name: controller_display_name(state, &controller_id),
         window_title: state.active_share_source_title(window_id),
         timeout_ms: CONSENT_TIMEOUT.as_millis() as u64,
@@ -2491,10 +2493,9 @@ fn park_consent_request(
     let app_for_timer = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(CONSENT_TIMEOUT).await;
-        // Only deny the SAME parked request this timer was armed for: a
-        // repeat keeps the original sequence, while a resolved request is
-        // gone.
-        if remote_control_engine().pending_request_seq(window_id, &controller_id) != Some(seq) {
+        // Retries retain the original timer; a different explicit attempt
+        // replaces it. The atomic answer also rechecks this exact identity.
+        if remote_control_engine().pending_request_id(window_id, &controller_id) != request_id {
             return;
         }
         log::info!(
@@ -2505,6 +2506,7 @@ fn park_consent_request(
             &app_for_timer,
             window_id,
             &controller_id,
+            request_id.as_deref().unwrap_or(""),
             false,
             RemoteControlReason::ConsentTimedOut,
         );
@@ -2519,10 +2521,11 @@ pub(crate) fn answer_consent(
     app: &AppHandle,
     window_id: u32,
     controller_id: &str,
+    request_id: &str,
     approve: bool,
     reason: RemoteControlReason,
 ) -> bool {
-    let Some(message) = remote_control_engine().take_pending_request(window_id, controller_id)
+    let Some(message) = remote_control_engine().take_pending_request(window_id, controller_id, Some(request_id))
     else {
         log::info!(
             "remote-control: consent answer ({}) for '{controller_id}' on window {window_id} had nothing pending",
@@ -2546,20 +2549,18 @@ pub(crate) fn answer_consent(
             app,
             state,
             &local_identity,
-            RemoteControlStatus {
-                window_id,
-                owner_identity: None,
-                controller_id: controller_id.to_string(),
-                status: "denied",
-                message: match reason {
-                    RemoteControlReason::ConsentTimedOut => {
-                        "The sharer did not respond to the control request.".to_string()
-                    }
-                    _ => "The sharer declined remote control.".to_string(),
-                },
-                grant_token: None,
-                reason: Some(reason),
+            RemoteControlStatus { request_id: message.request_id.clone(), window_id,
+            owner_identity: None,
+            controller_id: controller_id.to_string(),
+            status: "denied",
+            message: match reason {
+                RemoteControlReason::ConsentTimedOut => {
+                    "The sharer did not respond to the control request.".to_string()
+                }
+                _ => "The sharer declined remote control.".to_string(),
             },
+            grant_token: None,
+            reason: Some(reason), },
         );
         return true;
     }
@@ -2594,15 +2595,13 @@ pub(crate) fn answer_consent(
             app,
             state,
             &local_identity,
-            RemoteControlStatus {
-                window_id,
-                owner_identity: None,
-                controller_id: controller_id.to_string(),
-                status,
-                message: status_message,
-                grant_token: None,
-                reason: None,
-            },
+            RemoteControlStatus { request_id: message.request_id.clone(), window_id,
+            owner_identity: None,
+            controller_id: controller_id.to_string(),
+            status,
+            message: status_message,
+            grant_token: None,
+            reason: None, },
         );
         return true;
     };
@@ -2629,15 +2628,12 @@ fn deny_pending_requests_where(
         .try_state::<SessionState>()
         .and_then(|state| state.inner().control_channel_snapshot().map(|(_, id)| id));
     for pending in taken {
-        let status = RemoteControlStatus {
-            window_id: pending.window_id,
-            owner_identity: None,
-            controller_id: pending.controller_id.clone(),
-            status: "denied",
-            message: message.to_string(),
-            grant_token: None,
-            reason: Some(RemoteControlReason::ConsentDenied),
-        };
+        let status = RemoteControlStatus { request_id: pending.request_id.clone(), window_id: pending.window_id, owner_identity: None,
+        controller_id: pending.controller_id.clone(),
+        status: "denied",
+        message: message.to_string(),
+        grant_token: None,
+        reason: Some(RemoteControlReason::ConsentDenied), };
         match (&local_identity, app.try_state::<SessionState>()) {
             (Some(local_identity), Some(state)) => {
                 emit_and_send_status(app, state.inner(), local_identity, status)
@@ -2710,15 +2706,12 @@ fn complete_granted_request(
                 .await;
             }
         });
-        RemoteControlStatus {
-            window_id: message.window_id,
-            owner_identity: None,
-            controller_id: message.controller_id,
-            status: "active",
-            message: "Remote control active for shared window".to_string(),
-            grant_token: Some(grant_token),
-            reason: None,
-        }
+        RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+        controller_id: message.controller_id,
+        status: "active",
+        message: "Remote control active for shared window".to_string(),
+        grant_token: Some(grant_token),
+        reason: None, }
     } else {
         log::warn!(
             "remote-control: accessibility denial for request from '{}' on window {} accessibility_trusted=false",
@@ -2726,15 +2719,12 @@ fn complete_granted_request(
             message.window_id
         );
         platform_control().prompt_accessibility();
-        RemoteControlStatus {
-            window_id: message.window_id,
-            owner_identity: None,
-            controller_id: message.controller_id,
-            status: "accessibilityDenied",
-            message: "Petal needs Accessibility permission to let someone control your shared window. Grant Petal in System Settings > Privacy & Security > Accessibility, then try again.".to_string(),
-            grant_token: None,
-            reason: None,
-        }
+        RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+        controller_id: message.controller_id,
+        status: "accessibilityDenied",
+        message: "Petal needs Accessibility permission to let someone control your shared window. Grant Petal in System Settings > Privacy & Security > Accessibility, then try again.".to_string(),
+        grant_token: None,
+        reason: None, }
     };
     if accessibility_granted {
         emit_and_send_status_forced(app, state, local_identity, status);
@@ -3541,6 +3531,10 @@ fn emit_and_send_status_unchecked(
     log_status_emitted("local+controller", &status);
     crate::region_window::emit_region_control_state_for_status(app, &status);
     send_status_to_controller(state, local_identity, &status);
+    if matches!(status.status, "stopped" | "disabled" | "denied" | "requestUnavailable" | "requestFailed") {
+        remote_control_engine().retire_host_request(
+            status.window_id, &status.controller_id, status.request_id.as_deref());
+    }
     let _ = app.emit("remote-control-status", status);
 }
 
@@ -3697,67 +3691,65 @@ fn status_packet_for(status: &RemoteControlStatus, local_identity: &str) -> Remo
     // v2 grant key ever exists. Empty is the honest answer, NOT the #802 bug.
     #[cfg(not(target_os = "windows"))]
     let host_capabilities = Vec::new();
-    RemoteControlMessage {
-        v: VERSION,
-        message_type: RemoteControlType::Status,
-        action: None,
-        target_user_id: status.controller_id.clone(),
-        controller_id: local_identity.to_string(),
-        window_id: status.window_id,
-        seq: now_ms(),
-        target_kind,
-        share_instance_id,
-        controller_capabilities: Vec::new(),
-        host_capabilities,
-        reason: status.reason,
-        // #802: a LEGACY grant must not advertise a v2 control session. These
-        // two fields are what make the controller's gate demand the rest of the
-        // capable envelope (`targetKind`, `shareInstanceId`, a non-empty
-        // `hostCapabilities`) -- which a legacy grant has none of, by design.
-        // Emitting them anyway made every macOS grant self-contradictory: the
-        // controller saw a v2 session with no v2 envelope, refused the whole
-        // status, and dropped the grant token on the floor with no error on
-        // either side. `has_grant` alone is NOT the condition; the grant key
-        // must actually be the v2-scoped one. Measured live: 30/30 cases failed
-        // with `grantToken: null` while the token was demonstrably on the wire.
-        control_session_id: has_capable_grant
-            .then(|| status.grant_token.clone())
-            .flatten(),
-        input_id: None,
-        input_seq: None,
-        operation_fingerprint_version: None,
-        operation_fingerprint: None,
-        outcome: None,
-        delivery_route: None,
-        failure_code: None,
-        result_capability: has_capable_grant.then(result_capability),
-        x: None,
-        y: None,
-        button: None,
-        buttons: None,
-        click_count: None,
-        delta_x: None,
-        delta_y: None,
-        delta_mode: None,
-        key: None,
-        code: None,
-        repeat: false,
-        location: None,
-        text: None,
-        status: Some(status.status.to_string()),
-        message: Some(status.message.clone()),
-        grant_token: status.grant_token.clone(),
-        // #370 corrective pass: unconditionally true on an "active" status --
-        // its presence is the whole capability signal. Only a host running
-        // this corrective-pass code path ever reaches this line at all, so
-        // there is no version check to make: an old host's status packet
-        // just never sets the field, which decodes as `false` by default.
-        // Must be true on Windows too -- the host_capabilities/grant above
-        // are negotiated regardless of platform, and the controller relies
-        // on this flag to switch pointer/wheel sends to the binary encoding.
-        supports_binary_hot_path: status.status == "active",
-        modifiers: RemoteControlModifiers::default(),
-    }
+    RemoteControlMessage { request_id: status.request_id.clone(), v: VERSION,
+    message_type: RemoteControlType::Status,
+    action: None,
+    target_user_id: status.controller_id.clone(),
+    controller_id: local_identity.to_string(),
+    window_id: status.window_id,
+    seq: now_ms(),
+    target_kind,
+    share_instance_id,
+    controller_capabilities: Vec::new(),
+    host_capabilities,
+    reason: status.reason,
+    // #802: a LEGACY grant must not advertise a v2 control session. These
+    // two fields are what make the controller's gate demand the rest of the
+    // capable envelope (`targetKind`, `shareInstanceId`, a non-empty
+    // `hostCapabilities`) -- which a legacy grant has none of, by design.
+    // Emitting them anyway made every macOS grant self-contradictory: the
+    // controller saw a v2 session with no v2 envelope, refused the whole
+    // status, and dropped the grant token on the floor with no error on
+    // either side. `has_grant` alone is NOT the condition; the grant key
+    // must actually be the v2-scoped one. Measured live: 30/30 cases failed
+    // with `grantToken: null` while the token was demonstrably on the wire.
+    control_session_id: has_capable_grant
+        .then(|| status.grant_token.clone())
+        .flatten(),
+    input_id: None,
+    input_seq: None,
+    operation_fingerprint_version: None,
+    operation_fingerprint: None,
+    outcome: None,
+    delivery_route: None,
+    failure_code: None,
+    result_capability: has_capable_grant.then(result_capability),
+    x: None,
+    y: None,
+    button: None,
+    buttons: None,
+    click_count: None,
+    delta_x: None,
+    delta_y: None,
+    delta_mode: None,
+    key: None,
+    code: None,
+    repeat: false,
+    location: None,
+    text: None,
+    status: Some(status.status.to_string()),
+    message: Some(status.message.clone()),
+    grant_token: status.grant_token.clone(),
+    // #370 corrective pass: unconditionally true on an "active" status --
+    // its presence is the whole capability signal. Only a host running
+    // this corrective-pass code path ever reaches this line at all, so
+    // there is no version check to make: an old host's status packet
+    // just never sets the field, which decodes as `false` by default.
+    // Must be true on Windows too -- the host_capabilities/grant above
+    // are negotiated regardless of platform, and the controller relies
+    // on this flag to switch pointer/wheel sends to the binary encoding.
+    supports_binary_hot_path: status.status == "active",
+    modifiers: RemoteControlModifiers::default(), }
 }
 
 fn discrete_result_packet(
@@ -3765,47 +3757,45 @@ fn discrete_result_packet(
     admission: &DiscreteAdmission,
     disposition: TerminalDisposition,
 ) -> RemoteControlMessage {
-    RemoteControlMessage {
-        v: VERSION,
-        message_type: RemoteControlType::Result,
-        action: None,
-        target_user_id: admission.controller_id.clone(),
-        controller_id: local_identity.to_string(),
-        window_id: admission.window_id,
-        seq: now_ms(),
-        target_kind: admission.target_kind,
-        share_instance_id: admission.share_instance_id.clone(),
-        controller_capabilities: Vec::new(),
-        host_capabilities: Vec::new(),
-        reason: None,
-        control_session_id: Some(admission.control_session_id.clone()),
-        input_id: Some(admission.input_id.clone()),
-        input_seq: Some(admission.input_seq),
-        operation_fingerprint_version: Some(1),
-        operation_fingerprint: Some(admission.operation_fingerprint.clone()),
-        outcome: Some(disposition.outcome.to_string()),
-        delivery_route: Some(disposition.delivery_route),
-        failure_code: disposition.failure_code,
-        result_capability: None,
-        x: None,
-        y: None,
-        button: None,
-        buttons: None,
-        click_count: None,
-        delta_x: None,
-        delta_y: None,
-        delta_mode: None,
-        key: None,
-        code: None,
-        repeat: false,
-        location: None,
-        text: None,
-        status: None,
-        message: None,
-        grant_token: None,
-        supports_binary_hot_path: false,
-        modifiers: RemoteControlModifiers::default(),
-    }
+    RemoteControlMessage { request_id: None, v: VERSION,
+    message_type: RemoteControlType::Result,
+    action: None,
+    target_user_id: admission.controller_id.clone(),
+    controller_id: local_identity.to_string(),
+    window_id: admission.window_id,
+    seq: now_ms(),
+    target_kind: admission.target_kind,
+    share_instance_id: admission.share_instance_id.clone(),
+    controller_capabilities: Vec::new(),
+    host_capabilities: Vec::new(),
+    reason: None,
+    control_session_id: Some(admission.control_session_id.clone()),
+    input_id: Some(admission.input_id.clone()),
+    input_seq: Some(admission.input_seq),
+    operation_fingerprint_version: Some(1),
+    operation_fingerprint: Some(admission.operation_fingerprint.clone()),
+    outcome: Some(disposition.outcome.to_string()),
+    delivery_route: Some(disposition.delivery_route),
+    failure_code: disposition.failure_code,
+    result_capability: None,
+    x: None,
+    y: None,
+    button: None,
+    buttons: None,
+    click_count: None,
+    delta_x: None,
+    delta_y: None,
+    delta_mode: None,
+    key: None,
+    code: None,
+    repeat: false,
+    location: None,
+    text: None,
+    status: None,
+    message: None,
+    grant_token: None,
+    supports_binary_hot_path: false,
+    modifiers: RemoteControlModifiers::default(), }
 }
 
 fn send_discrete_result(
@@ -4060,15 +4050,12 @@ fn resolve_one_task(app: &AppHandle, task: ResolveTask) {
                 state,
                 &local_identity,
                 &message,
-                RemoteControlStatus {
-                    window_id: message.window_id,
-                    owner_identity: None,
-                    controller_id: message.controller_id.clone(),
-                    status: "targetPaused",
-                    message: "Remote input was ignored because the shared window is minimized or off screen.".to_string(),
-                    grant_token: None,
-                    reason: None,
-                },
+                RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                controller_id: message.controller_id.clone(),
+                status: "targetPaused",
+                message: "Remote input was ignored because the shared window is minimized or off screen.".to_string(),
+                grant_token: None,
+                reason: None, },
             );
             log_input_drop(
                 &message,
@@ -4101,17 +4088,14 @@ fn resolve_one_task(app: &AppHandle, task: ResolveTask) {
                 state,
                 &local_identity,
                 &message,
-                RemoteControlStatus {
-                    window_id: message.window_id,
-                    owner_identity: None,
-                    controller_id: message.controller_id.clone(),
-                    status: "targetUnavailable",
-                    message:
-                        "Remote input was ignored because the shared window is no longer available."
-                            .to_string(),
-                    grant_token: None,
-                    reason: None,
-                },
+                RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                controller_id: message.controller_id.clone(),
+                status: "targetUnavailable",
+                message:
+                    "Remote input was ignored because the shared window is no longer available."
+                        .to_string(),
+                grant_token: None,
+                reason: None, },
             );
             log_input_drop(
                 &message,
@@ -4134,15 +4118,12 @@ fn resolve_one_task(app: &AppHandle, task: ResolveTask) {
                 app,
                 state,
                 &local_identity,
-                RemoteControlStatus {
-                    window_id: message.window_id,
-                    owner_identity: None,
-                    controller_id: message.controller_id.clone(),
-                    status: "stopped",
-                    message: "Remote control stopped because sharing ended.".to_string(),
-                    grant_token: None,
-                    reason: None,
-                },
+                RemoteControlStatus { request_id: remote_control_engine().host_request_id(message.window_id, &message.controller_id), window_id: message.window_id, owner_identity: None,
+                controller_id: message.controller_id.clone(),
+                status: "stopped",
+                message: "Remote control stopped because sharing ended.".to_string(),
+                grant_token: None,
+                reason: None, },
             );
             log_input_drop(
                 &message,
@@ -4174,16 +4155,13 @@ fn resolve_one_task(app: &AppHandle, task: ResolveTask) {
             state,
             &local_identity,
             &message,
-            RemoteControlStatus {
-                window_id: message.window_id,
-                owner_identity: None,
-                controller_id: message.controller_id.clone(),
-                status: "targetUnavailable",
-                message: "Remote input was ignored because the target app could not be resolved."
-                    .to_string(),
-                grant_token: None,
-                reason: None,
-            },
+            RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+            controller_id: message.controller_id.clone(),
+            status: "targetUnavailable",
+            message: "Remote input was ignored because the target app could not be resolved."
+                .to_string(),
+            grant_token: None,
+            reason: None, },
         );
         log_input_drop(
             &message,
@@ -4214,31 +4192,25 @@ fn resolve_one_task(app: &AppHandle, task: ResolveTask) {
             app,
             state,
             &local_identity,
-            RemoteControlStatus {
-                window_id: message.window_id,
-                owner_identity: None,
-                controller_id: message.controller_id.clone(),
-                status: "textTruncated",
-                message: format!(
-                    "Remote paste was limited to {capped_chars} characters; {dropped} characters were not inserted.",
-                    dropped = original_chars.saturating_sub(capped_chars)
-                ),
-                grant_token: None,
-                reason: None,
-            },
+            RemoteControlStatus { request_id: remote_control_engine().host_request_id(message.window_id, &message.controller_id), window_id: message.window_id, owner_identity: None,
+            controller_id: message.controller_id.clone(),
+            status: "textTruncated",
+            message: format!(
+                "Remote paste was limited to {capped_chars} characters; {dropped} characters were not inserted.",
+                dropped = original_chars.saturating_sub(capped_chars)
+            ),
+            grant_token: None,
+            reason: None, },
         );
     }
     emit_status(
         app,
-        RemoteControlStatus {
-            window_id: message.window_id,
-            owner_identity: None,
-            controller_id: message.controller_id.clone(),
-            status: "active",
-            message: "Remote control active for shared window".to_string(),
-            grant_token: active_grant_token(message.window_id, &message.controller_id),
-            reason: None,
-        },
+        RemoteControlStatus { request_id: remote_control_engine().host_request_id(message.window_id, &message.controller_id), window_id: message.window_id, owner_identity: None,
+        controller_id: message.controller_id.clone(),
+        status: "active",
+        message: "Remote control active for shared window".to_string(),
+        grant_token: active_grant_token(message.window_id, &message.controller_id),
+        reason: None, },
     );
     // Option A trusts meeting peers and keeps replay non-focus-stealing:
     // AX-first replay plus pid-targeted fallbacks never raise the shared window.
@@ -4355,12 +4327,24 @@ fn handle_message(
     message: RemoteControlMessage,
 ) {
     #[cfg(target_os = "linux")]
-    if let Err(error) = crate::linux_capabilities::require_remote_input() {
-        log::warn!("{error}");
-        return;
-    }
-    if message.v != VERSION {
-        log::debug!("remote-control: dropping unsupported version {}", message.v);
+    if matches!(
+        message.message_type,
+        RemoteControlType::Request
+            | RemoteControlType::Release
+            | RemoteControlType::Pointer
+            | RemoteControlType::Wheel
+            | RemoteControlType::Key
+            | RemoteControlType::Text
+    ) {
+        // Linux never acts as the remote-control host: requests to control a
+        // local share, release handling and input replay stay refused until
+        // Task 4.1 owns that path. Controller-role packets (Status, Result)
+        // continue below.
+        log::debug!(
+            "remote-control: refusing host-role {:?} packet from '{}' on Linux",
+            message.message_type,
+            message.controller_id
+        );
         return;
     }
     if message.target_user_id != local_identity {
@@ -4410,6 +4394,10 @@ fn handle_message(
                 );
                 return;
             };
+            if !remote_control_engine().controller_response_matches(&message) {
+                log::warn!("remote-control: dropping stale or uncorrelated status for window {}", message.window_id);
+                return;
+            }
             if matches!(status, "stopped" | "disabled") {
                 remote_clipboard::clear_pending_copy_for(
                     message.window_id,
@@ -4435,10 +4423,38 @@ fn handle_message(
                 );
                 return;
             }
+            #[cfg(target_os = "linux")]
+            if !crate::linux_remote_control::record_controller_status(&message, status) {
+                log::warn!(
+                    "remote-control: dropping status '{}' for window {} from '{}' because its negotiated grant does not match the live share",
+                    status,
+                    message.window_id,
+                    message.controller_id
+                );
+                return;
+            }
+            if status == "active" {
+                remote_control_engine().activate_controller_request(&message);
+            }
+            #[cfg(not(target_os = "linux"))]
+            if matches!(status, "stopped" | "disabled") {
+                remote_control_engine().retire_controller_request(message.window_id, &message.controller_id);
+            } else if status != "active" && status != "awaitingConsent" {
+                remote_control_engine().retire_pending_controller_request(message.window_id, &message.controller_id,
+                    message.request_id.as_deref().unwrap_or(""));
+            }
             let status_message = message
                 .message
                 .clone()
                 .unwrap_or_else(|| "Remote control status changed".to_string());
+            #[cfg(target_os = "linux")]
+            crate::linux_compositor::queue_controller_status(
+                &message.controller_id,
+                message.window_id,
+                message.request_id.as_deref().unwrap_or(""),
+                status,
+                &status_message,
+            );
             log::info!(
                 "remote-control: host '{}' reported status '{}' for window {}: {}",
                 message.controller_id,
@@ -4453,7 +4469,9 @@ fn handle_message(
                     crate::windows_remote_control::ControllerStatusEffect::Terminate => Some(false),
                     crate::windows_remote_control::ControllerStatusEffect::Feedback => None,
                 };
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(target_os = "linux")]
+            let overlay_active: Option<bool> = None; // Full GTK status command carries exact attempt identity.
+            #[cfg(not(any(target_os = "windows", target_os = "linux")))]
             let overlay_active = Some(status == "active");
             if let Some(active) = overlay_active {
                 if let Err(e) = set_remote_window_control_active(
@@ -4492,18 +4510,29 @@ fn handle_message(
             }
             emit_status(
                 app,
-                RemoteControlStatus {
-                    window_id: message.window_id,
-                    owner_identity: Some(message.controller_id.clone()),
-                    controller_id: message.controller_id,
-                    status,
-                    message: status_message,
-                    grant_token: message.grant_token,
-                    reason: None,
-                },
+                RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: Some(message.controller_id.clone()),
+                controller_id: message.controller_id,
+                status,
+                message: status_message,
+                grant_token: message.grant_token,
+                reason: None, },
             );
         }
         RemoteControlType::Request => {
+            if message.request_id.as_deref().is_none_or(str::is_empty) {
+                log::warn!("remote-control: refusing request without exact attempt identity");
+                emit_and_send_status(app, state, local_identity, RemoteControlStatus {
+                    request_id: None,
+                    window_id: message.window_id,
+                    owner_identity: None,
+                    controller_id: message.controller_id.clone(),
+                    status: "requestUnavailable",
+                    message: "Remote control requires a peer with request-attempt correlation support.".to_string(),
+                    grant_token: None,
+                    reason: Some(RemoteControlReason::ControllerUpgradeRequired),
+                });
+                return;
+            }
             log::info!(
                 "remote-control: request received from '{}' for shared window {}",
                 message.controller_id,
@@ -4519,15 +4548,12 @@ fn handle_message(
                     app,
                     state,
                     local_identity,
-                    RemoteControlStatus {
-                        window_id: message.window_id,
-                        owner_identity: None,
-                        controller_id: message.controller_id,
-                        status: "requestUnavailable",
-                        message: "Remote control is not available because this window is not being shared.".to_string(),
-                        grant_token: None,
-                        reason: None,
-                    },
+                    RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                    controller_id: message.controller_id,
+                    status: "requestUnavailable",
+                    message: "Remote control is not available because this window is not being shared.".to_string(),
+                    grant_token: None,
+                    reason: None, },
                 );
                 return;
             }
@@ -4543,15 +4569,12 @@ fn handle_message(
                     app,
                     state,
                     local_identity,
-                    RemoteControlStatus {
-                        window_id: message.window_id,
-                        owner_identity: None,
-                        controller_id: message.controller_id.clone(),
-                        status: "requestUnavailable",
-                        message: "Remote control is unavailable for this share.".to_string(),
-                        grant_token: None,
-                        reason: None,
-                    },
+                    RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                    controller_id: message.controller_id.clone(),
+                    status: "requestUnavailable",
+                    message: "Remote control is unavailable for this share.".to_string(),
+                    grant_token: None,
+                    reason: None, },
                 );
                 return;
             }
@@ -4560,6 +4583,7 @@ fn handle_message(
             // same non-activating consent panel as ordinary control requests;
             // the mode flips ONLY after an explicit, revalidated approval.
             if message.reason == Some(RemoteControlReason::RequestEscalation) {
+                if !remote_control_engine().host_release_matches(&message) { return; }
                 log::info!(
                     "remote-control: escalation requested by '{}' for shared window {}",
                     message.controller_id,
@@ -4577,6 +4601,7 @@ fn handle_message(
                             kind: ControlConsentPromptKind::FullControlEscalation,
                             window_id: message.window_id,
                             controller_id: message.controller_id.clone(),
+                            request_id: message.request_id.clone(),
                             controller_name: controller_display_name(state, &message.controller_id),
                             window_title: state.active_share_source_title(message.window_id),
                             timeout_ms: ESCALATION_TIMEOUT.as_millis() as u64,
@@ -4653,21 +4678,23 @@ fn handle_message(
                     app,
                     state,
                     local_identity,
-                    RemoteControlStatus {
-                        window_id: message.window_id,
-                        owner_identity: None,
-                        controller_id: message.controller_id,
-                        status,
-                        message: status_message,
-                        grant_token: None,
-                        reason: None,
-                    },
+                    RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                    controller_id: message.controller_id,
+                    status,
+                    message: status_message,
+                    grant_token: None,
+                    reason: None, },
                 );
                 return;
             };
             complete_granted_request(app, state, local_identity, message, grant_token);
         }
         RemoteControlType::Release => {
+            if !remote_control_engine().host_release_matches(&message) {
+                return;
+            }
+            remote_control_engine().take_pending_request(
+                message.window_id, &message.controller_id, message.request_id.as_deref());
             revoke(message.window_id, &message.controller_id);
             log::info!(
                 "remote-control: '{}' released control of local shared window {}",
@@ -4690,15 +4717,12 @@ fn handle_message(
                 app,
                 state,
                 local_identity,
-                RemoteControlStatus {
-                    window_id: message.window_id,
-                    owner_identity: None,
-                    controller_id: message.controller_id,
-                    status: "stopped",
-                    message: "Remote control stopped".to_string(),
-                    grant_token: None,
-                    reason: None,
-                },
+                RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                controller_id: message.controller_id,
+                status: "stopped",
+                message: "Remote control stopped".to_string(),
+                grant_token: None,
+                reason: None, },
             );
         }
         // Result packets are controller-directed. Capable native controllers
@@ -4726,15 +4750,12 @@ fn handle_message(
             };
             emit_status(
                 app,
-                RemoteControlStatus {
-                    window_id: message.window_id,
-                    owner_identity: Some(message.controller_id.clone()),
-                    controller_id: message.controller_id,
-                    status,
-                    message: feedback.to_string(),
-                    grant_token: None,
-                    reason: None,
-                },
+                RemoteControlStatus { request_id: remote_control_engine().controller_request_id(message.window_id, &message.controller_id), window_id: message.window_id, owner_identity: Some(message.controller_id.clone()),
+                controller_id: message.controller_id,
+                status,
+                message: feedback.to_string(),
+                grant_token: None,
+                reason: None, },
             );
         }
         RemoteControlType::Pointer
@@ -4811,15 +4832,12 @@ fn handle_message(
                             app,
                             state,
                             local_identity,
-                            RemoteControlStatus {
-                                window_id: message.window_id,
-                                owner_identity: None,
-                                controller_id: message.controller_id.clone(),
-                                status: "disabled",
-                                message: "Remote control is disabled for this meeting".to_string(),
-                                grant_token: None,
-                                reason: None,
-                            },
+                            RemoteControlStatus { request_id: remote_control_engine().host_request_id(message.window_id, &message.controller_id), window_id: message.window_id, owner_identity: None,
+                            controller_id: message.controller_id.clone(),
+                            status: "disabled",
+                            message: "Remote control is disabled for this meeting".to_string(),
+                            grant_token: None,
+                            reason: None, },
                         ),
                         Some(InputDispatchStatus::AccessibilityDenied) if emit_drop => {
                             emit_and_send_operation_feedback(
@@ -4827,16 +4845,13 @@ fn handle_message(
                                 state,
                                 local_identity,
                                 &message,
-                                RemoteControlStatus {
-                                    window_id: message.window_id,
-                                    owner_identity: None,
-                                    controller_id: message.controller_id.clone(),
-                                    status: "accessibilityDenied",
-                                    message: "Remote input was ignored because Petal needs Accessibility permission."
-                                        .to_string(),
-                                    grant_token: None,
-                                    reason: None,
-                                },
+                                RemoteControlStatus { request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                                controller_id: message.controller_id.clone(),
+                                status: "accessibilityDenied",
+                                message: "Remote input was ignored because Petal needs Accessibility permission."
+                                    .to_string(),
+                                grant_token: None,
+                                reason: None, },
                             );
                         }
                         Some(InputDispatchStatus::AccessibilityDenied) | None => {}
@@ -4970,6 +4985,13 @@ fn clipboard_copy_message_if_authorized(
     trusted_sender: &str,
     request: &RemoteClipboardCopyRequest,
 ) -> Option<RemoteControlMessage> {
+    #[cfg(target_os = "linux")]
+    {
+        // Linux is not a remote-clipboard host (Task 4.1): copy requests
+        // addressed to a local share never authorize.
+        let _ = (state, local_identity, trusted_sender, request);
+        return None;
+    }
     if request.target_user_id != local_identity
         || request.controller_id != trusted_sender
         || !remote_clipboard::operation_id_is_valid(&request.operation_id)
@@ -5122,6 +5144,20 @@ fn apply_clipboard_paste(
     body: Vec<u8>,
     generation: &RoomGeneration,
 ) {
+    #[cfg(target_os = "linux")]
+    {
+        // Linux is not a remote-clipboard host (Task 4.1): incoming paste
+        // streams never write the local clipboard.
+        let _ = (
+            app,
+            local_identity,
+            sender_identity,
+            &metadata,
+            body,
+            generation,
+        );
+        return;
+    }
     if !generation.is_current() {
         return;
     }
@@ -5301,12 +5337,10 @@ pub fn start_receiver_for_room(
     generation: RoomGeneration,
 ) {
     #[cfg(target_os = "linux")]
-    if let Err(error) = crate::linux_capabilities::require_remote_input() {
-        // Refuse before subscribing, starting workers, or admitting clipboard
-        // streams as well as ordinary and binary remote-input packets.
-        log::warn!("{error}");
-        return;
-    }
+    log::info!(
+        "remote-control: receiver starting for identity '{}' in controller-only role (host-side input stays refused)",
+        crate::logging::log_safe_quoted(&local_identity)
+    );
     ensure_pressed_ttl_sweeper();
     set_replay_status_context(app.clone(), local_identity.clone());
     log::info!(
@@ -5543,11 +5577,45 @@ async fn publish_message_with_retry(
     attempts: usize,
     retry_delay: Duration,
 ) -> Result<usize, String> {
+    publish_message_with_retry_guarded(room_connection, message, attempts, retry_delay, || true)
+        .await
+}
+
+async fn publish_message_with_retry_guarded(
+    room_connection: Arc<RoomConnection>,
+    message: RemoteControlMessage,
+    attempts: usize,
+    retry_delay: Duration,
+    should_publish: impl Fn() -> bool,
+) -> Result<usize, String> {
+    retry_control_publication(
+        attempts,
+        retry_delay,
+        &message_summary(&message),
+        should_publish,
+        || publish_message(room_connection.clone(), message.clone()),
+    )
+    .await
+}
+
+async fn retry_control_publication<F, P>(
+    attempts: usize,
+    retry_delay: Duration,
+    summary: &str,
+    should_publish: impl Fn() -> bool,
+    mut publish: P,
+) -> Result<usize, String>
+where
+    F: Future<Output = Result<(), String>>,
+    P: FnMut() -> F,
+{
     let attempts = attempts.max(1);
-    let summary = message_summary(&message);
     let mut last_error = None;
     for attempt in 1..=attempts {
-        match publish_message(room_connection.clone(), message.clone()).await {
+        if !should_publish() {
+            return Err("remote control request was cancelled or superseded".to_string());
+        }
+        match publish().await {
             Ok(()) => {
                 if attempt > 1 {
                     log::info!(
@@ -5568,6 +5636,86 @@ async fn publish_message_with_retry(
         }
     }
     Err(last_error.unwrap_or_else(|| "publish remote-control data failed".to_string()))
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxControllerPublish {
+    publisher: Arc<RoomConnection>,
+    message: RemoteControlMessage,
+    reservation: Option<crate::linux_remote_control::ControlRequestReservation>,
+    completion: Option<tokio::sync::oneshot::Sender<Result<(), String>>>,
+}
+
+#[cfg(target_os = "linux")]
+fn enqueue_linux_controller_publish(job: LinuxControllerPublish) -> Result<(), String> {
+    static QUEUE: std::sync::LazyLock<tokio::sync::mpsc::UnboundedSender<LinuxControllerPublish>> =
+        std::sync::LazyLock::new(|| {
+            let (sender, mut receiver) =
+                tokio::sync::mpsc::unbounded_channel::<LinuxControllerPublish>();
+            tauri::async_runtime::spawn(async move {
+                while let Some(job) = receiver.recv().await {
+                    let allowed = job.reservation.is_none_or(|reservation| {
+                        crate::linux_remote_control::control_request_can_publish(
+                            &job.message.target_user_id,
+                            job.message.window_id,
+                            reservation,
+                        )
+                    });
+                    let result = if allowed {
+                        publish_message(job.publisher, job.message).await
+                    } else {
+                        Err("remote control request was cancelled or superseded".to_string())
+                    };
+                    if let Some(completion) = job.completion {
+                        let _ = completion.send(result);
+                    } else if let Err(error) = result {
+                        log::warn!("linux controller: ordered input publish failed: {error}");
+                    }
+                }
+            });
+            sender
+        });
+    QUEUE
+        .send(job)
+        .map_err(|_| "Linux controller publish worker stopped".to_string())
+}
+
+#[cfg(target_os = "linux")]
+async fn publish_linux_controller_ordered(
+    publisher: Arc<RoomConnection>,
+    message: RemoteControlMessage,
+    reservation: Option<crate::linux_remote_control::ControlRequestReservation>,
+) -> Result<(), String> {
+    let (completion, result) = tokio::sync::oneshot::channel();
+    enqueue_linux_controller_publish(LinuxControllerPublish {
+        publisher,
+        message,
+        reservation,
+        completion: Some(completion),
+    })?;
+    result
+        .await
+        .map_err(|_| "Linux controller publish worker stopped".to_string())?
+}
+
+#[cfg(target_os = "linux")]
+async fn publish_linux_control_request(
+    publisher: Arc<RoomConnection>,
+    message: RemoteControlMessage,
+    reservation: crate::linux_remote_control::ControlRequestReservation,
+) -> Result<usize, String> {
+    let owner = message.target_user_id.clone();
+    let window_id = message.window_id;
+    // Recheck after every retry sleep. An already in-flight network publish
+    // cannot be recalled; this is local task ordering, not wire correlation.
+    retry_control_publication(
+        ACTIVATION_PUBLISH_ATTEMPTS,
+        ACTIVATION_RETRY_DELAY,
+        &message_summary(&message),
+        || crate::linux_remote_control::control_request_can_publish(&owner, window_id, reservation),
+        || publish_linux_controller_ordered(publisher.clone(), message.clone(), Some(reservation)),
+    )
+    .await
 }
 
 fn viewer_channel(
@@ -5671,7 +5819,16 @@ async fn controller_clipboard_target(
         }
         return Ok((RemoteControlTargetKind::Window, target.share_instance_id));
     }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    {
+        let target = crate::linux_remote_control::receive_target(window_id, Some(owner_identity))
+            .ok_or_else(|| format!("remote window {window_id} is not open"))?;
+        if target.target_kind != RemoteControlTargetKind::Window {
+            return Err("remote clipboard requires an application-window share".to_string());
+        }
+        return Ok((target.target_kind, target.share_instance_id));
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = (window_id, owner_identity);
         Err("remote clipboard is unavailable on this platform".to_string())
@@ -5705,47 +5862,45 @@ fn clipboard_key_message(
     };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let modifiers = RemoteControlModifiers::default();
-    RemoteControlMessage {
-        v: VERSION,
-        message_type: RemoteControlType::Key,
-        action: Some(action),
-        target_user_id: target_user_id.to_string(),
-        controller_id: controller_id.to_string(),
-        window_id,
-        seq,
-        target_kind,
-        share_instance_id,
-        controller_capabilities: Vec::new(),
-        host_capabilities: Vec::new(),
-        reason: None,
-        control_session_id: None,
-        input_id: None,
-        input_seq: None,
-        operation_fingerprint_version: None,
-        operation_fingerprint: None,
-        outcome: None,
-        delivery_route: None,
-        failure_code: None,
-        result_capability: None,
-        x: None,
-        y: None,
-        button: None,
-        buttons: None,
-        click_count: None,
-        delta_x: None,
-        delta_y: None,
-        delta_mode: None,
-        key: Some(key.to_string()),
-        code: Some(code.to_string()),
-        repeat: false,
-        location: Some(0),
-        text: None,
-        status: None,
-        message: None,
-        grant_token: Some(grant_token.to_string()),
-        supports_binary_hot_path: false,
-        modifiers,
-    }
+    RemoteControlMessage { request_id: None, v: VERSION,
+    message_type: RemoteControlType::Key,
+    action: Some(action),
+    target_user_id: target_user_id.to_string(),
+    controller_id: controller_id.to_string(),
+    window_id,
+    seq,
+    target_kind,
+    share_instance_id,
+    controller_capabilities: Vec::new(),
+    host_capabilities: Vec::new(),
+    reason: None,
+    control_session_id: None,
+    input_id: None,
+    input_seq: None,
+    operation_fingerprint_version: None,
+    operation_fingerprint: None,
+    outcome: None,
+    delivery_route: None,
+    failure_code: None,
+    result_capability: None,
+    x: None,
+    y: None,
+    button: None,
+    buttons: None,
+    click_count: None,
+    delta_x: None,
+    delta_y: None,
+    delta_mode: None,
+    key: Some(key.to_string()),
+    code: Some(code.to_string()),
+    repeat: false,
+    location: Some(0),
+    text: None,
+    status: None,
+    message: None,
+    grant_token: Some(grant_token.to_string()),
+    supports_binary_hot_path: false,
+    modifiers, }
 }
 
 fn clipboard_replay_message(
@@ -5821,15 +5976,13 @@ fn run_clipboard_shortcut(
 }
 
 fn controller_timeout_status(window_id: u32, target_user_id: String) -> RemoteControlStatus {
-    RemoteControlStatus {
-        window_id,
-        owner_identity: Some(target_user_id.clone()),
-        controller_id: target_user_id,
-        status: "requestFailed",
-        message: CONTROLLER_REQUEST_TIMEOUT_MESSAGE.to_string(),
-        grant_token: None,
-        reason: None,
-    }
+    RemoteControlStatus { request_id: None, window_id,
+    owner_identity: Some(target_user_id.clone()),
+    controller_id: target_user_id,
+    status: "requestFailed",
+    message: CONTROLLER_REQUEST_TIMEOUT_MESSAGE.to_string(),
+    grant_token: None,
+    reason: None, }
 }
 
 #[cfg(target_os = "macos")]
@@ -5962,9 +6115,58 @@ pub async fn remote_clipboard_paste(
     .await
 }
 
+/// Shared command-bound release transition. Identity must be captured by the
+/// caller; missing/stale cancellation never borrows the current attempt.
+fn prepare_controller_release(message: &mut RemoteControlMessage, request_id: Option<String>) -> bool {
+    message.request_id = request_id;
+    if message.message_type != RemoteControlType::Release { return false; }
+    let Some(request_id) = message.request_id.as_deref().filter(|id| !id.is_empty()) else { return false; };
+    #[cfg(target_os = "linux")]
+    return crate::linux_remote_control::cancel_control_request_for_attempt(
+        &message.target_user_id, message.window_id, request_id);
+    #[cfg(not(target_os = "linux"))]
+    return remote_control_engine().cancel_controller_request(
+        message.window_id, &message.target_user_id, request_id);
+}
+
+/// Admit GTK edges synchronously, before local cancellation can remove their
+/// grant, then publish them in order. Synthetic Ups precede Release; queued
+/// packets retain the original grant rather than borrowing a later approval.
+#[cfg(target_os = "linux")]
+pub(crate) fn linux_queue_controller_input(
+    app: AppHandle,
+    draft: RemoteControlDraft,
+) -> Result<(), String> {
+    let (publisher, controller_id, target_user_id) =
+        viewer_channel(&app, draft.window_id, draft.target_owner_id.as_deref())?;
+    let mut message = draft.into_message(target_user_id, controller_id);
+    if message.message_type == RemoteControlType::Release {
+        message.seq = now_ms();
+        let request_id = message.request_id.take();
+        if !prepare_controller_release(&mut message, request_id) { return Ok(()); }
+        crate::linux_compositor::queue_controller_status(
+            &message.target_user_id, message.window_id, message.request_id.as_deref().unwrap(),
+            "stopped", "Remote control stopped");
+        remote_clipboard::clear_pending_copy_for(message.window_id, Some(&message.target_user_id));
+    } else if !crate::linux_remote_control::prepare_outbound_input(&mut message)? {
+        return Err("operation is unsupported by the active Windows control grant".to_string());
+    }
+    enqueue_linux_controller_publish(LinuxControllerPublish {
+        publisher,
+        message,
+        reservation: None,
+        completion: None,
+    })
+}
+
 #[tauri::command]
 #[allow(unused_mut)]
 pub async fn remote_control_send(app: AppHandle, draft: RemoteControlDraft) -> Result<(), String> {
+    if matches!(draft.message_type, RemoteControlType::Request | RemoteControlType::Release) {
+        let active = draft.message_type == RemoteControlType::Request;
+        return remote_control_set_active(app, draft.window_id, draft.target_owner_id, active, draft.request_id)
+            .await.map(|_| ());
+    }
     let (publisher, controller_id, target_user_id) =
         viewer_channel(&app, draft.window_id, draft.target_owner_id.as_deref())?;
     let mut message = draft.into_message(target_user_id, controller_id);
@@ -6004,6 +6206,12 @@ pub async fn remote_control_send(app: AppHandle, draft: RemoteControlDraft) -> R
                         "operation is unsupported by the active Windows control grant".to_string(),
                     );
                 }
+                #[cfg(target_os = "linux")]
+                if !crate::linux_remote_control::prepare_outbound_input(&mut chunk_message)? {
+                    return Err(
+                        "operation is unsupported by the active Windows control grant".to_string(),
+                    );
+                }
                 let summary = message_summary(&chunk_message);
                 if let Err(e) = publish_message(publisher.clone(), chunk_message).await {
                     log::warn!("remote-control: chunked text publish failed for {summary}: {e}");
@@ -6018,6 +6226,15 @@ pub async fn remote_control_send(app: AppHandle, draft: RemoteControlDraft) -> R
         // Silent-swallow guard: the controller page catches this error, so
         // without this line an unusable grant looks like "input did
         // nothing" with zero diagnostics (018B: terminals never published).
+        log::warn!(
+            "remote-control: controller input dropped -- no usable Windows control grant for window {} ({:?})",
+            message.window_id,
+            message.message_type
+        );
+        return Err("operation is unsupported by the active Windows control grant".to_string());
+    }
+    #[cfg(target_os = "linux")]
+    if !crate::linux_remote_control::prepare_outbound_input(&mut message)? {
         log::warn!(
             "remote-control: controller input dropped -- no usable Windows control grant for window {} ({:?})",
             message.window_id,
@@ -6042,66 +6259,145 @@ pub async fn remote_control_set_active(
     window_id: u32,
     owner_identity: Option<String>,
     active: bool,
+    request_id: Option<String>,
+) -> Result<bool, String> {
+    #[cfg(target_os = "linux")]
+    {
+        if active {
+            let target =
+                crate::linux_remote_control::receive_target(window_id, owner_identity.as_deref())
+                    .ok_or_else(|| format!("remote window {window_id} is not open"))?;
+            let reservation = crate::linux_remote_control::reserve_control_request(
+                &target.owner_identity, window_id, request_id.clone())?;
+            return linux_remote_control_request(
+                app,
+                window_id,
+                target.owner_identity,
+                reservation,
+                request_id,
+            )
+            .await;
+        }
+        return remote_control_set_active_impl(app, window_id, owner_identity, false, request_id, None).await;
+    }
+    #[cfg(not(target_os = "linux"))]
+    remote_control_set_active_impl(app, window_id, owner_identity, active, request_id).await
+}
+
+/// GTK reserves before spawning this future; never reserve again on poll.
+#[cfg(target_os = "linux")]
+pub(crate) async fn linux_remote_control_request(
+    app: AppHandle,
+    window_id: u32,
+    owner_identity: String,
+    reservation: crate::linux_remote_control::ControlRequestReservation,
+    request_id: Option<String>,
+) -> Result<bool, String> {
+    let result = remote_control_set_active_impl(
+        app,
+        window_id,
+        Some(owner_identity.clone()),
+        true,
+        request_id,
+        Some(reservation),
+    )
+    .await;
+    if let Err(error) = &result {
+        if crate::linux_remote_control::fail_control_request(
+            &owner_identity,
+            window_id,
+            reservation,
+        ) {
+            crate::linux_compositor::queue_controller_request_failed(
+                &owner_identity,
+                window_id,
+                reservation,
+                error,
+            );
+        }
+    }
+    result
+}
+
+#[allow(unused_mut)]
+async fn remote_control_set_active_impl(
+    app: AppHandle,
+    window_id: u32,
+    owner_identity: Option<String>,
+    active: bool,
+    mut request_id: Option<String>,
+    #[cfg(target_os = "linux")] reservation: Option<
+        crate::linux_remote_control::ControlRequestReservation,
+    >,
 ) -> Result<bool, String> {
     let (publisher, controller_id, target_user_id) =
         viewer_channel(&app, window_id, owner_identity.as_deref())?;
-    let mut message = RemoteControlMessage {
-        v: VERSION,
-        message_type: if active {
-            RemoteControlType::Request
-        } else {
-            RemoteControlType::Release
-        },
-        action: None,
-        target_user_id,
-        controller_id: controller_id.clone(),
-        window_id,
-        seq: now_ms(),
-        target_kind: None,
-        share_instance_id: None,
-        controller_capabilities: Vec::new(),
-        host_capabilities: Vec::new(),
-        reason: None,
-        control_session_id: None,
-        input_id: None,
-        input_seq: None,
-        operation_fingerprint_version: None,
-        operation_fingerprint: None,
-        outcome: None,
-        delivery_route: None,
-        failure_code: None,
-        result_capability: None,
-        x: None,
-        y: None,
-        button: None,
-        buttons: None,
-        click_count: None,
-        delta_x: None,
-        delta_y: None,
-        delta_mode: None,
-        key: None,
-        code: None,
-        repeat: false,
-        location: None,
-        text: None,
-        status: None,
-        message: None,
-        grant_token: None,
-        supports_binary_hot_path: false,
-        modifiers: RemoteControlModifiers::default(),
-    };
+    let mut message = RemoteControlMessage { request_id: None, v: VERSION,
+    message_type: if active {
+        RemoteControlType::Request
+    } else {
+        RemoteControlType::Release
+    },
+    action: None,
+    target_user_id: target_user_id.clone(),
+    controller_id: controller_id.clone(),
+    window_id,
+    seq: now_ms(),
+    target_kind: None,
+    share_instance_id: None,
+    controller_capabilities: Vec::new(),
+    host_capabilities: Vec::new(),
+    reason: None,
+    control_session_id: None,
+    input_id: None,
+    input_seq: None,
+    operation_fingerprint_version: None,
+    operation_fingerprint: None,
+    outcome: None,
+    delivery_route: None,
+    failure_code: None,
+    result_capability: None,
+    x: None,
+    y: None,
+    button: None,
+    buttons: None,
+    click_count: None,
+    delta_x: None,
+    delta_y: None,
+    delta_mode: None,
+    key: None,
+    code: None,
+    repeat: false,
+    location: None,
+    text: None,
+    status: None,
+    message: None,
+    grant_token: None,
+    supports_binary_hot_path: false,
+    modifiers: RemoteControlModifiers::default(), };
+    if !active {
+        if !prepare_controller_release(&mut message, request_id.take()) { return Ok(false); }
+        #[cfg(target_os = "linux")]
+        crate::linux_compositor::queue_controller_status(
+            &message.target_user_id, window_id, message.request_id.as_deref().unwrap(),
+            "stopped", "Remote control stopped");
+    }
     #[cfg(target_os = "windows")]
     {
         let request_owner = owner_identity
             .clone()
             .unwrap_or_else(|| message.target_user_id.clone());
         if active {
-            crate::windows_remote_control::prepare_control_request(
+            message.request_id = Some(remote_control_engine().begin_controller_request(message.window_id, &message.target_user_id, request_id));
+            if let Err(error) = crate::windows_remote_control::prepare_control_request(
                 &mut message,
                 window_id,
                 request_owner.as_str(),
-            )
-            .await?;
+            ).await {
+                remote_control_engine().retire_pending_controller_request(
+                    window_id, &message.target_user_id, message.request_id.as_deref().unwrap_or(""));
+                return Err(error);
+            }
         }
     }
     #[cfg(target_os = "macos")]
@@ -6111,6 +6407,31 @@ pub async fn remote_control_set_active(
             .unwrap_or(message.target_user_id.as_str())
             .to_owned();
         prepare_macos_controller_request_for_capable_host(&mut message, window_id, &request_owner);
+        message.request_id = Some(remote_control_engine().begin_controller_request(message.window_id, &message.target_user_id, request_id));
+    }
+    #[cfg(target_os = "linux")]
+    if active {
+        let request_owner = owner_identity
+            .clone()
+            .filter(|owner| !owner.is_empty())
+            .unwrap_or_else(|| message.target_user_id.clone());
+        crate::linux_remote_control::prepare_control_request(
+            &mut message,
+            window_id,
+            request_owner.as_str(),
+            reservation.ok_or_else(|| "remote control request has no reservation".to_string())?,
+            request_id,
+        )?;
+    }
+    if active {
+        if remote_control_engine().controller_request_id(window_id, &message.target_user_id) != message.request_id {
+            return Err("remote control request was superseded".to_string());
+        }
+        let _ = app.emit("remote-control-request-started", serde_json::json!({
+            "windowId": window_id,
+            "ownerIdentity": &message.target_user_id,
+            "requestId": message.request_id.as_deref(),
+        }));
     }
     log::info!(
         "remote-control: {} requested for window {window_id}: {}",
@@ -6123,27 +6444,39 @@ pub async fn remote_control_set_active(
     cockpit_ledger::record_publish(&message);
     if active {
         let summary = message_summary(&message);
-        if let Err(e) = publish_message_with_retry(
+        #[cfg(not(target_os = "linux"))]
+        let failed_request_id = message.request_id.clone();
+        #[cfg(target_os = "linux")]
+        let publication = {
+            let reservation = reservation
+                .ok_or_else(|| "remote control request has no reservation".to_string())?;
+            publish_linux_control_request(publisher, message, reservation).await
+        };
+        #[cfg(not(target_os = "linux"))]
+        let publication = publish_message_with_retry(
             publisher,
             message,
             ACTIVATION_PUBLISH_ATTEMPTS,
             ACTIVATION_RETRY_DELAY,
         )
-        .await
-        {
+        .await;
+        if let Err(e) = publication {
             log::warn!("remote-control: activation publish failed for {summary}: {e}");
-            emit_status(
-                &app,
-                RemoteControlStatus {
-                    window_id,
-                    owner_identity: owner_identity.clone().filter(|owner| !owner.is_empty()),
+            #[cfg(not(target_os = "linux"))]
+            if remote_control_engine().retire_pending_controller_request(
+                window_id, &target_user_id, failed_request_id.as_deref().unwrap_or(""))
+            {
+                emit_status(
+                    &app,
+                    RemoteControlStatus { request_id: failed_request_id, window_id,
+                    owner_identity: Some(target_user_id.clone()),
                     controller_id,
                     status: "requestFailed",
                     message: format!("Remote control request could not be sent: {e}"),
                     grant_token: None,
-                    reason: None,
-                },
-            );
+                    reason: None, },
+                );
+            }
             return Err(e);
         }
         log::info!(
@@ -6151,16 +6484,27 @@ pub async fn remote_control_set_active(
         );
     } else {
         remote_clipboard::clear_pending_copy_for(window_id, Some(&message.target_user_id));
+        #[cfg(not(target_os = "linux"))]
         set_remote_window_control_active(&app, window_id, owner_identity.as_deref(), false)?;
         let summary = message_summary(&message);
-        if let Err(e) = publish_message_with_retry(
+        #[cfg(target_os = "linux")]
+        let publication = retry_control_publication(
+            ACTIVATION_PUBLISH_ATTEMPTS,
+            ACTIVATION_RETRY_DELAY,
+            &summary,
+            || true,
+            || publish_linux_controller_ordered(publisher.clone(), message.clone(), None),
+        )
+        .await;
+        #[cfg(not(target_os = "linux"))]
+        let publication = publish_message_with_retry(
             publisher,
             message,
             ACTIVATION_PUBLISH_ATTEMPTS,
             ACTIVATION_RETRY_DELAY,
         )
-        .await
-        {
+        .await;
+        if let Err(e) = publication {
             log::warn!("remote-control: deactivation publish failed for {summary}: {e}");
             return Err(e);
         }
@@ -6182,47 +6526,46 @@ pub async fn remote_control_request_escalation(
 ) -> Result<(), String> {
     let (publisher, controller_id, target_user_id) =
         viewer_channel(&app, window_id, owner_identity.as_deref())?;
-    let mut message = RemoteControlMessage {
-        v: VERSION,
-        message_type: RemoteControlType::Request,
-        action: None,
-        target_user_id,
-        controller_id: controller_id.clone(),
-        window_id,
-        seq: now_ms(),
-        target_kind: None,
-        share_instance_id: None,
-        controller_capabilities: Vec::new(),
-        host_capabilities: Vec::new(),
-        reason: Some(RemoteControlReason::RequestEscalation),
-        control_session_id: None,
-        input_id: None,
-        input_seq: None,
-        operation_fingerprint_version: None,
-        operation_fingerprint: None,
-        outcome: None,
-        delivery_route: None,
-        failure_code: None,
-        result_capability: None,
-        x: None,
-        y: None,
-        button: None,
-        buttons: None,
-        click_count: None,
-        delta_x: None,
-        delta_y: None,
-        delta_mode: None,
-        key: None,
-        code: None,
-        repeat: false,
-        location: None,
-        text: None,
-        status: None,
-        message: None,
-        grant_token: None,
-        supports_binary_hot_path: false,
-        modifiers: RemoteControlModifiers::default(),
-    };
+    let mut message = RemoteControlMessage { request_id: None, v: VERSION,
+    message_type: RemoteControlType::Request,
+    action: None,
+    target_user_id,
+    controller_id: controller_id.clone(),
+    window_id,
+    seq: now_ms(),
+    target_kind: None,
+    share_instance_id: None,
+    controller_capabilities: Vec::new(),
+    host_capabilities: Vec::new(),
+    reason: Some(RemoteControlReason::RequestEscalation),
+    control_session_id: None,
+    input_id: None,
+    input_seq: None,
+    operation_fingerprint_version: None,
+    operation_fingerprint: None,
+    outcome: None,
+    delivery_route: None,
+    failure_code: None,
+    result_capability: None,
+    x: None,
+    y: None,
+    button: None,
+    buttons: None,
+    click_count: None,
+    delta_x: None,
+    delta_y: None,
+    delta_mode: None,
+    key: None,
+    code: None,
+    repeat: false,
+    location: None,
+    text: None,
+    status: None,
+    message: None,
+    grant_token: None,
+    supports_binary_hot_path: false,
+    modifiers: RemoteControlModifiers::default(), };
+    message.request_id = remote_control_engine().controller_request_id(window_id, &message.target_user_id);
     #[cfg(target_os = "windows")]
     {
         let request_owner = owner_identity
@@ -6255,14 +6598,23 @@ pub fn remote_control_request_timed_out(
     app: AppHandle,
     window_id: u32,
     owner_identity: Option<String>,
+    request_id: String,
 ) -> Result<(), String> {
     let (_publisher, controller_id, target_user_id) =
         viewer_channel(&app, window_id, owner_identity.as_deref())?;
+    #[cfg(target_os = "linux")]
+    let retired = crate::linux_remote_control::time_out_control_request(&target_user_id, window_id, &request_id);
+    #[cfg(not(target_os = "linux"))]
+    let retired = remote_control_engine().retire_pending_controller_request(window_id, &target_user_id, &request_id);
+    if !retired { return Ok(()); }
     log::warn!(
         "remote-control: controller timeout waiting for active status for window {window_id} controller='{controller_id}' target='{target_user_id}' (controller-side request budget elapsed; {CONTROLLER_REQUEST_TIMEOUT_MS}ms without consent, longer while awaitingConsent)"
     );
+    #[cfg(not(target_os = "linux"))]
     set_remote_window_control_active(&app, window_id, owner_identity.as_deref(), false)?;
-    emit_status(&app, controller_timeout_status(window_id, target_user_id));
+    let mut status = controller_timeout_status(window_id, target_user_id);
+    status.request_id = Some(request_id);
+    emit_status(&app, status);
     Ok(())
 }
 
@@ -6274,12 +6626,14 @@ pub fn remote_control_answer_consent(
     app: AppHandle,
     window_id: u32,
     controller_id: String,
+    request_id: String,
     approve: bool,
 ) -> bool {
     answer_consent(
         &app,
         window_id,
         &controller_id,
+        &request_id,
         approve,
         RemoteControlReason::ConsentDenied,
     )
@@ -6296,8 +6650,12 @@ pub async fn remote_control_answer_escalation(
     app: AppHandle,
     window_id: u32,
     controller_id: String,
+    request_id: String,
     approve: bool,
 ) -> bool {
+    if remote_control_engine().host_request_id(window_id, &controller_id).as_deref() != Some(request_id.as_str()) {
+        return false;
+    }
     if !take_escalation(window_id, &controller_id) {
         log::info!(
             "remote-control: escalation answer for '{controller_id}' on window {window_id} was stale"
@@ -6355,15 +6713,10 @@ pub fn remote_control_revoke(app: AppHandle, window_id: u32, controller_id: Stri
     log::info!("remote-control: host stopped '{controller_id}' for shared window {window_id}");
     emit_status(
         &app,
-        RemoteControlStatus {
-            window_id,
-            owner_identity: None,
-            controller_id,
-            status: "stopped",
-            message: "Remote control stopped".to_string(),
-            grant_token: None,
-            reason: None,
-        },
+        RemoteControlStatus { request_id: remote_control_engine().host_request_id(window_id, &controller_id), window_id, owner_identity: None, controller_id, status: "stopped",
+        message: "Remote control stopped".to_string(),
+        grant_token: None,
+        reason: None, },
     );
 }
 
@@ -13563,47 +13916,45 @@ pub(crate) mod input {
         }
 
         fn base_message(message_type: RemoteControlType) -> RemoteControlMessage {
-            RemoteControlMessage {
-                v: VERSION,
-                message_type,
-                action: None,
-                target_user_id: "host".to_string(),
-                controller_id: "viewer".to_string(),
-                window_id: 42,
-                seq: 1,
-                target_kind: None,
-                share_instance_id: None,
-                controller_capabilities: Vec::new(),
-                host_capabilities: Vec::new(),
-                reason: None,
-                control_session_id: None,
-                input_id: None,
-                input_seq: None,
-                operation_fingerprint_version: None,
-                operation_fingerprint: None,
-                outcome: None,
-                delivery_route: None,
-                failure_code: None,
-                result_capability: None,
-                x: None,
-                y: None,
-                button: None,
-                buttons: None,
-                click_count: None,
-                delta_x: None,
-                delta_y: None,
-                delta_mode: None,
-                key: None,
-                code: None,
-                repeat: false,
-                location: None,
-                text: None,
-                status: None,
-                message: None,
-                grant_token: None,
-                supports_binary_hot_path: false,
-                modifiers: RemoteControlModifiers::default(),
-            }
+            RemoteControlMessage { request_id: None, v: VERSION,
+            message_type,
+            action: None,
+            target_user_id: "host".to_string(),
+            controller_id: "viewer".to_string(),
+            window_id: 42,
+            seq: 1,
+            target_kind: None,
+            share_instance_id: None,
+            controller_capabilities: Vec::new(),
+            host_capabilities: Vec::new(),
+            reason: None,
+            control_session_id: None,
+            input_id: None,
+            input_seq: None,
+            operation_fingerprint_version: None,
+            operation_fingerprint: None,
+            outcome: None,
+            delivery_route: None,
+            failure_code: None,
+            result_capability: None,
+            x: None,
+            y: None,
+            button: None,
+            buttons: None,
+            click_count: None,
+            delta_x: None,
+            delta_y: None,
+            delta_mode: None,
+            key: None,
+            code: None,
+            repeat: false,
+            location: None,
+            text: None,
+            status: None,
+            message: None,
+            grant_token: None,
+            supports_binary_hot_path: false,
+            modifiers: RemoteControlModifiers::default(), }
         }
 
         fn key_message(
@@ -18155,6 +18506,142 @@ pub(crate) mod input {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_cancel_command_cannot_retire_or_release_a_newer_attempt() {
+        use crate::linux_remote_control::*;
+        use crate::remote_control_core::test_support::{
+            controller_status_packet, input_message, state_test_lock,
+        };
+        use crate::remote_control_core::{remote_control_engine, RemoteControlTargetKind, RemoteControlType};
+        let _guard = state_test_lock();
+        let owner = "cancel-command-host";
+        let window_id = 0x4100_0040;
+        upsert_receive_target(ReceiveTargetInfo {
+            owner_identity: owner.into(), window_id,
+            target_kind: RemoteControlTargetKind::Window,
+            share_instance_id: Some("same-live-share".into()),
+        });
+        let a = reserve_control_request(owner, window_id, Some("attempt-a".into())).unwrap();
+        let mut release_a = input_message(window_id, owner, RemoteControlType::Release);
+        assert!(super::prepare_controller_release(&mut release_a, Some("attempt-a".into())));
+        let mut request_a = input_message(window_id, owner, RemoteControlType::Request);
+        assert!(prepare_control_request(&mut request_a, window_id, owner, a, None).is_err());
+
+        let b = reserve_control_request(owner, window_id, Some("attempt-b".into())).unwrap();
+        let mut request_b = input_message(window_id, owner, RemoteControlType::Request);
+        prepare_control_request(&mut request_b, window_id, owner, b, None).unwrap();
+        // The transition used by both the public false command and GTK queue.
+        // Even a reusable draft carrying B must bind the original command A,
+        // rather than look up and release the currently live attempt B.
+        release_a.request_id = Some("attempt-b".into());
+        assert!(!super::prepare_controller_release(&mut release_a, Some("attempt-a".into())));
+        assert_eq!(release_a.request_id.as_deref(), Some("attempt-a"));
+        assert!(control_request_can_publish(owner, window_id, b));
+        assert!(controller_status_is_current(owner, window_id, "attempt-b"));
+        assert_eq!(remote_control_engine().controller_request_id(window_id, owner).as_deref(), Some("attempt-b"));
+
+        let active_b = controller_status_packet(window_id, owner, "active", "grant-b", "same-live-share");
+        assert!(record_controller_status(&active_b, "active"));
+        let mut input = input_message(window_id, owner, RemoteControlType::Wheel);
+        assert_eq!(prepare_outbound_input(&mut input), Ok(true));
+        assert_eq!(input.input_seq, Some(1));
+        assert!(!super::prepare_controller_release(&mut release_a, Some("attempt-a".into())));
+        assert!(controller_is_active(owner, window_id));
+        assert_eq!(active_grant_token(window_id, owner).as_deref(), Some("grant-b"));
+        assert_eq!(prepare_outbound_input(&mut input), Ok(true));
+        assert_eq!(input.input_seq, Some(2));
+
+        let mut release_b = input_message(window_id, owner, RemoteControlType::Release);
+        assert!(!super::prepare_controller_release(&mut release_b, None), "missing cancellation identity fails closed");
+        assert!(super::prepare_controller_release(&mut release_b, Some("attempt-b".into())));
+        assert_eq!(release_b.request_id.as_deref(), Some("attempt-b"));
+        assert!(!controller_is_active(owner, window_id));
+        assert_eq!(prepare_outbound_input(&mut input), Ok(false));
+        assert_eq!(remote_control_engine().controller_request_id(window_id, owner), None);
+        retire_controller_for(owner, window_id);
+    }
+
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_cancelled_reservations_never_reach_publication_or_retry() {
+        use crate::linux_remote_control::{
+            cancel_control_request, control_request_can_publish, fail_control_request,
+            prepare_control_request, reserve_control_request, retire_controller_for,
+            upsert_receive_target, ReceiveTargetInfo,
+        };
+        use crate::remote_control_core::test_support::{input_message, state_test_lock};
+        use crate::remote_control_core::{RemoteControlTargetKind, RemoteControlType};
+        use std::cell::Cell;
+        let _guard = state_test_lock();
+        let owner = "publication-order-host";
+        let window_id = 0x4100_0032;
+        upsert_receive_target(ReceiveTargetInfo {
+            owner_identity: owner.into(),
+            window_id,
+            target_kind: RemoteControlTargetKind::Window,
+            share_instance_id: Some("publication-instance".into()),
+        });
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let delayed = reserve_control_request(owner, window_id, None).unwrap();
+        cancel_control_request(owner, window_id);
+        let calls = Cell::new(0);
+        // Poll the same guarded publication loop production uses only AFTER
+        // cancel, exactly like a GTK spawn that did not run before the click.
+        let result = runtime.block_on(super::retry_control_publication(
+            3,
+            std::time::Duration::ZERO,
+            "delayed request",
+            || control_request_can_publish(owner, window_id, delayed),
+            || {
+                calls.set(calls.get() + 1);
+                std::future::ready(Ok(()))
+            },
+        ));
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 0);
+
+        let old = reserve_control_request(owner, window_id, None).unwrap();
+        let mut message = input_message(window_id, owner, RemoteControlType::Request);
+        prepare_control_request(&mut message, window_id, owner, old, None).unwrap();
+        let fresh = Cell::new(None);
+        let result = runtime.block_on(super::retry_control_publication(
+            3,
+            std::time::Duration::ZERO,
+            "retry request",
+            || control_request_can_publish(owner, window_id, old),
+            || {
+                calls.set(calls.get() + 1);
+                cancel_control_request(owner, window_id);
+                let reservation = reserve_control_request(owner, window_id, None).unwrap();
+                prepare_control_request(&mut message, window_id, owner, reservation, None).unwrap();
+                fresh.set(Some(reservation));
+                std::future::ready(Err("first publish failed".to_string()))
+            },
+        ));
+        assert!(result.is_err());
+        assert_eq!(calls.get(), 1, "cancel must prevent the old task's retry");
+        assert!(!fail_control_request(owner, window_id, old));
+        let fresh = fresh.get().unwrap();
+        assert!(control_request_can_publish(owner, window_id, fresh));
+        let result = runtime.block_on(super::retry_control_publication(
+            3,
+            std::time::Duration::ZERO,
+            "fresh request",
+            || control_request_can_publish(owner, window_id, fresh),
+            || {
+                calls.set(calls.get() + 1);
+                std::future::ready(Ok(()))
+            },
+        ));
+        assert_eq!(result, Ok(1));
+        assert_eq!(calls.get(), 2);
+        retire_controller_for(owner, window_id);
+    }
 
     /// Source-level, and deliberately so: the guarantee is that all THREE
     /// authorization points consult the per-share lock, which is a
@@ -18409,47 +18896,45 @@ mod tests {
         window_id: u32,
         controller_id: String,
     ) -> RemoteControlMessage {
-        RemoteControlMessage {
-            v: VERSION,
-            message_type,
-            action,
-            target_user_id: "native-a".to_string(),
-            controller_id,
-            window_id,
-            seq,
-            target_kind: None,
-            share_instance_id: None,
-            controller_capabilities: Vec::new(),
-            host_capabilities: Vec::new(),
-            reason: None,
-            control_session_id: None,
-            input_id: None,
-            input_seq: None,
-            operation_fingerprint_version: None,
-            operation_fingerprint: None,
-            outcome: None,
-            delivery_route: None,
-            failure_code: None,
-            result_capability: None,
-            x: None,
-            y: None,
-            button: None,
-            buttons: None,
-            click_count: None,
-            delta_x: None,
-            delta_y: None,
-            delta_mode: None,
-            key: None,
-            code: None,
-            repeat: false,
-            location: None,
-            text: None,
-            status: None,
-            message: None,
-            grant_token: None,
-            supports_binary_hot_path: false,
-            modifiers: RemoteControlModifiers::default(),
-        }
+        RemoteControlMessage { request_id: None, v: VERSION,
+        message_type,
+        action,
+        target_user_id: "native-a".to_string(),
+        controller_id,
+        window_id,
+        seq,
+        target_kind: None,
+        share_instance_id: None,
+        controller_capabilities: Vec::new(),
+        host_capabilities: Vec::new(),
+        reason: None,
+        control_session_id: None,
+        input_id: None,
+        input_seq: None,
+        operation_fingerprint_version: None,
+        operation_fingerprint: None,
+        outcome: None,
+        delivery_route: None,
+        failure_code: None,
+        result_capability: None,
+        x: None,
+        y: None,
+        button: None,
+        buttons: None,
+        click_count: None,
+        delta_x: None,
+        delta_y: None,
+        delta_mode: None,
+        key: None,
+        code: None,
+        repeat: false,
+        location: None,
+        text: None,
+        status: None,
+        message: None,
+        grant_token: None,
+        supports_binary_hot_path: false,
+        modifiers: RemoteControlModifiers::default(), }
     }
 
     fn discrete_admission_test_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -19045,15 +19530,13 @@ mod tests {
             remote_control_test_ids("a_legacy_grant_carries_its_token_but_claims_no_v2_session");
         let grant = authorize_shared(ids.window_id, &ids.controller_id);
         let packet = status_packet_for(
-            &RemoteControlStatus {
-                window_id: ids.window_id,
-                owner_identity: None,
-                controller_id: ids.controller_id.clone(),
-                status: "active",
-                message: "active".to_string(),
-                grant_token: Some(grant.clone()),
-                reason: None,
-            },
+            &RemoteControlStatus { request_id: None, window_id: ids.window_id,
+            owner_identity: None,
+            controller_id: ids.controller_id.clone(),
+            status: "active",
+            message: "active".to_string(),
+            grant_token: Some(grant.clone()),
+            reason: None, },
             "host",
         );
 
@@ -19095,15 +19578,13 @@ mod tests {
             share_instance_id: Some("share-instance-802".to_string()),
         });
         let packet = status_packet_for(
-            &RemoteControlStatus {
-                window_id: ids.window_id,
-                owner_identity: None,
-                controller_id: ids.controller_id.clone(),
-                status: "active",
-                message: "active".to_string(),
-                grant_token: Some(grant.clone()),
-                reason: None,
-            },
+            &RemoteControlStatus { request_id: None, window_id: ids.window_id,
+            owner_identity: None,
+            controller_id: ids.controller_id.clone(),
+            status: "active",
+            message: "active".to_string(),
+            grant_token: Some(grant.clone()),
+            reason: None, },
             "host",
         );
 
@@ -19134,15 +19615,13 @@ mod tests {
             share_instance_id: Some("share-instance-v2-capability".to_string()),
         });
         let packet = status_packet_for(
-            &RemoteControlStatus {
-                window_id: ids.window_id,
-                owner_identity: None,
-                controller_id: ids.controller_id,
-                status: "active",
-                message: "active".to_string(),
-                grant_token: Some(grant.clone()),
-                reason: None,
-            },
+            &RemoteControlStatus { request_id: None, window_id: ids.window_id,
+            owner_identity: None,
+            controller_id: ids.controller_id,
+            status: "active",
+            message: "active".to_string(),
+            grant_token: Some(grant.clone()),
+            reason: None, },
             "host",
         );
         assert_eq!(packet.control_session_id.as_deref(), Some(grant.as_str()));
@@ -19341,47 +19820,45 @@ mod tests {
 
     #[test]
     fn request_message_uses_stable_camel_case_shape() {
-        let msg = RemoteControlMessage {
-            v: VERSION,
-            message_type: RemoteControlType::Request,
-            action: None,
-            target_user_id: "native-a".to_string(),
-            controller_id: "web-b".to_string(),
-            window_id: 42,
-            seq: 7,
-            target_kind: None,
-            share_instance_id: None,
-            controller_capabilities: Vec::new(),
-            host_capabilities: Vec::new(),
-            reason: None,
-            control_session_id: None,
-            input_id: None,
-            input_seq: None,
-            operation_fingerprint_version: None,
-            operation_fingerprint: None,
-            outcome: None,
-            delivery_route: None,
-            failure_code: None,
-            result_capability: None,
-            x: None,
-            y: None,
-            button: None,
-            buttons: None,
-            click_count: None,
-            delta_x: None,
-            delta_y: None,
-            delta_mode: None,
-            key: None,
-            code: None,
-            repeat: false,
-            location: None,
-            text: None,
-            status: None,
-            message: None,
-            grant_token: None,
-            supports_binary_hot_path: false,
-            modifiers: RemoteControlModifiers::default(),
-        };
+        let msg = RemoteControlMessage { request_id: None, v: VERSION,
+        message_type: RemoteControlType::Request,
+        action: None,
+        target_user_id: "native-a".to_string(),
+        controller_id: "web-b".to_string(),
+        window_id: 42,
+        seq: 7,
+        target_kind: None,
+        share_instance_id: None,
+        controller_capabilities: Vec::new(),
+        host_capabilities: Vec::new(),
+        reason: None,
+        control_session_id: None,
+        input_id: None,
+        input_seq: None,
+        operation_fingerprint_version: None,
+        operation_fingerprint: None,
+        outcome: None,
+        delivery_route: None,
+        failure_code: None,
+        result_capability: None,
+        x: None,
+        y: None,
+        button: None,
+        buttons: None,
+        click_count: None,
+        delta_x: None,
+        delta_y: None,
+        delta_mode: None,
+        key: None,
+        code: None,
+        repeat: false,
+        location: None,
+        text: None,
+        status: None,
+        message: None,
+        grant_token: None,
+        supports_binary_hot_path: false,
+        modifiers: RemoteControlModifiers::default(), };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"v\":1"));
         assert!(json.contains("\"kind\":\"request\""));
@@ -19568,52 +20045,50 @@ mod tests {
     #[test]
     fn pointer_message_fields_match_shared_contract_fixture() {
         let fixture = contract_fixture();
-        let msg = RemoteControlMessage {
-            v: VERSION,
-            message_type: RemoteControlType::Pointer,
-            action: Some(RemoteControlAction::Down),
-            target_user_id: "native-a".to_string(),
-            controller_id: "web-b".to_string(),
-            window_id: 42,
-            seq: 7,
-            target_kind: None,
-            share_instance_id: None,
-            controller_capabilities: Vec::new(),
-            host_capabilities: Vec::new(),
-            reason: None,
-            control_session_id: None,
-            input_id: None,
-            input_seq: None,
-            operation_fingerprint_version: None,
-            operation_fingerprint: None,
-            outcome: None,
-            delivery_route: None,
-            failure_code: None,
-            result_capability: None,
-            x: Some(0.5),
-            y: Some(0.25),
-            button: Some(0),
-            buttons: Some(1),
-            click_count: None,
-            delta_x: None,
-            delta_y: None,
-            delta_mode: None,
-            key: None,
-            code: None,
-            repeat: false,
-            location: None,
-            text: None,
-            status: None,
-            message: None,
-            grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
-            supports_binary_hot_path: false,
-            modifiers: RemoteControlModifiers {
-                alt: false,
-                ctrl: false,
-                meta: false,
-                shift: true,
-            },
-        };
+        let msg = RemoteControlMessage { request_id: None, v: VERSION,
+        message_type: RemoteControlType::Pointer,
+        action: Some(RemoteControlAction::Down),
+        target_user_id: "native-a".to_string(),
+        controller_id: "web-b".to_string(),
+        window_id: 42,
+        seq: 7,
+        target_kind: None,
+        share_instance_id: None,
+        controller_capabilities: Vec::new(),
+        host_capabilities: Vec::new(),
+        reason: None,
+        control_session_id: None,
+        input_id: None,
+        input_seq: None,
+        operation_fingerprint_version: None,
+        operation_fingerprint: None,
+        outcome: None,
+        delivery_route: None,
+        failure_code: None,
+        result_capability: None,
+        x: Some(0.5),
+        y: Some(0.25),
+        button: Some(0),
+        buttons: Some(1),
+        click_count: None,
+        delta_x: None,
+        delta_y: None,
+        delta_mode: None,
+        key: None,
+        code: None,
+        repeat: false,
+        location: None,
+        text: None,
+        status: None,
+        message: None,
+        grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
+        supports_binary_hot_path: false,
+        modifiers: RemoteControlModifiers {
+            alt: false,
+            ctrl: false,
+            meta: false,
+            shift: true,
+        }, };
         let value = serde_json::to_value(msg).unwrap();
         let mut fields = value
             .as_object()
@@ -19642,47 +20117,45 @@ mod tests {
             .find(|message| message.name == "pointer-double-click")
             .map(|message| message.fields.clone())
             .expect("remote-control contract must include a pointer-double-click fixture");
-        let msg = RemoteControlMessage {
-            v: VERSION,
-            message_type: RemoteControlType::Pointer,
-            action: Some(RemoteControlAction::Down),
-            target_user_id: "native-a".to_string(),
-            controller_id: "web-b".to_string(),
-            window_id: 42,
-            seq: 16,
-            target_kind: None,
-            share_instance_id: None,
-            controller_capabilities: Vec::new(),
-            host_capabilities: Vec::new(),
-            reason: None,
-            control_session_id: None,
-            input_id: None,
-            input_seq: None,
-            operation_fingerprint_version: None,
-            operation_fingerprint: None,
-            outcome: None,
-            delivery_route: None,
-            failure_code: None,
-            result_capability: None,
-            x: Some(0.5),
-            y: Some(0.25),
-            button: Some(0),
-            buttons: Some(1),
-            click_count: Some(2),
-            delta_x: None,
-            delta_y: None,
-            delta_mode: None,
-            key: None,
-            code: None,
-            repeat: false,
-            location: None,
-            text: None,
-            status: None,
-            message: None,
-            grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
-            supports_binary_hot_path: false,
-            modifiers: RemoteControlModifiers::default(),
-        };
+        let msg = RemoteControlMessage { request_id: None, v: VERSION,
+        message_type: RemoteControlType::Pointer,
+        action: Some(RemoteControlAction::Down),
+        target_user_id: "native-a".to_string(),
+        controller_id: "web-b".to_string(),
+        window_id: 42,
+        seq: 16,
+        target_kind: None,
+        share_instance_id: None,
+        controller_capabilities: Vec::new(),
+        host_capabilities: Vec::new(),
+        reason: None,
+        control_session_id: None,
+        input_id: None,
+        input_seq: None,
+        operation_fingerprint_version: None,
+        operation_fingerprint: None,
+        outcome: None,
+        delivery_route: None,
+        failure_code: None,
+        result_capability: None,
+        x: Some(0.5),
+        y: Some(0.25),
+        button: Some(0),
+        buttons: Some(1),
+        click_count: Some(2),
+        delta_x: None,
+        delta_y: None,
+        delta_mode: None,
+        key: None,
+        code: None,
+        repeat: false,
+        location: None,
+        text: None,
+        status: None,
+        message: None,
+        grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
+        supports_binary_hot_path: false,
+        modifiers: RemoteControlModifiers::default(), };
         let value = serde_json::to_value(msg).unwrap();
         let mut fields = value
             .as_object()
@@ -19698,31 +20171,29 @@ mod tests {
 
     #[test]
     fn draft_command_payload_is_promoted_to_wire_message() {
-        let draft = RemoteControlDraft {
-            message_type: RemoteControlType::Pointer,
-            action: Some(RemoteControlAction::Down),
-            window_id: 9,
-            target_owner_id: Some("owner".to_string()),
-            seq: 12,
-            target_kind: None,
-            share_instance_id: None,
-            controller_capabilities: Vec::new(),
-            grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
-            x: Some(0.1),
-            y: Some(0.9),
-            button: Some(0),
-            buttons: Some(1),
-            click_count: Some(2),
-            delta_x: None,
-            delta_y: None,
-            delta_mode: None,
-            key: None,
-            code: None,
-            repeat: false,
-            location: None,
-            text: None,
-            modifiers: RemoteControlModifiers::default(),
-        };
+        let draft = RemoteControlDraft { request_id: None, message_type: RemoteControlType::Pointer,
+        action: Some(RemoteControlAction::Down),
+        window_id: 9,
+        target_owner_id: Some("owner".to_string()),
+        seq: 12,
+        target_kind: None,
+        share_instance_id: None,
+        controller_capabilities: Vec::new(),
+        grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
+        x: Some(0.1),
+        y: Some(0.9),
+        button: Some(0),
+        buttons: Some(1),
+        click_count: Some(2),
+        delta_x: None,
+        delta_y: None,
+        delta_mode: None,
+        key: None,
+        code: None,
+        repeat: false,
+        location: None,
+        text: None,
+        modifiers: RemoteControlModifiers::default(), };
         let msg = draft.into_message("owner".to_string(), "controller".to_string());
         assert_eq!(msg.v, VERSION);
         assert_eq!(msg.target_user_id, "owner");
@@ -21657,7 +22128,7 @@ mod tests {
         );
         assert!(!resolve_task_still_authorized(&later_input));
         assert!(remote_control_engine()
-            .take_pending_request(ids.window_id, &ids.controller_id)
+            .take_pending_request(ids.window_id, &ids.controller_id, None)
             .is_some());
     }
 
@@ -21676,8 +22147,7 @@ mod tests {
         remote_control_engine().store_pending_request(key, request);
         // This is exactly what `answer_consent(approve = true)` does once it
         // has re-checked the gate: take the parked message and authorize it.
-        let parked = remote_control_engine()
-            .take_pending_request(ids.window_id, &ids.controller_id)
+        let parked = remote_control_engine().take_pending_request(ids.window_id, &ids.controller_id, None)
             .expect("parked request");
         assert!(matches!(
             apply_request_gate_for_message(&parked, RequestGate::Allowed),
@@ -21692,67 +22162,68 @@ mod tests {
     fn deny_and_timeout_leave_no_authorization() {
         let ids = remote_control_test_ids("deny_and_timeout_leave_no_authorization");
         revoke(ids.window_id, &ids.controller_id);
-        let request = test_message(
+        let mut request = test_message(
             RemoteControlType::Request,
             None,
             21,
             ids.window_id,
             ids.controller_id.clone(),
         );
+        request.request_id = Some("denied-attempt".to_string());
         let key = ControlGrantKey::for_message(&request).expect("grant key");
         remote_control_engine().store_pending_request(key, request);
         // Deny = take the parked request and mint nothing.
         assert!(remote_control_engine()
-            .take_pending_request(ids.window_id, &ids.controller_id)
+            .take_pending_request(ids.window_id, &ids.controller_id, Some("denied-attempt"))
             .is_some());
         assert!(!is_authorized(ids.window_id, &ids.controller_id));
-        // Timeout: the timer only fires for the seq it armed for. After the
-        // request is gone (or replaced by a newer seq) it must be a no-op.
+        // Timeout extraction must be exact even after another request replaces it.
         assert_eq!(
             remote_control_engine().pending_request_seq(ids.window_id, &ids.controller_id),
             None
         );
-        let newer = test_message(
+        let mut newer = test_message(
             RemoteControlType::Request,
             None,
             22,
             ids.window_id,
             ids.controller_id.clone(),
         );
+        newer.request_id = Some("newer-attempt".to_string());
         let key = ControlGrantKey::for_message(&newer).expect("grant key");
         remote_control_engine().store_pending_request(key, newer);
-        assert_ne!(
-            remote_control_engine().pending_request_seq(ids.window_id, &ids.controller_id),
-            Some(21),
-            "a stale timer (seq 21) must not match the re-armed request (seq 22)"
-        );
+        assert!(remote_control_engine().take_pending_request(
+            ids.window_id, &ids.controller_id, Some("denied-attempt")).is_none());
+        assert_eq!(remote_control_engine().pending_request_id(ids.window_id, &ids.controller_id).as_deref(),
+            Some("newer-attempt"));
         assert!(!is_authorized(ids.window_id, &ids.controller_id));
-        remote_control_engine().take_pending_request(ids.window_id, &ids.controller_id);
+        remote_control_engine().take_pending_request(ids.window_id, &ids.controller_id, None);
     }
 
     #[test]
     fn repeat_request_while_pending_does_not_duplicate() {
         let ids = remote_control_test_ids("repeat_request_while_pending_does_not_duplicate");
-        let first = test_message(
+        let mut first = test_message(
             RemoteControlType::Request,
             None,
             31,
             ids.window_id,
             ids.controller_id.clone(),
         );
-        let second = test_message(
+        first.request_id = Some("first-explicit-attempt".to_string());
+        let mut second = test_message(
             RemoteControlType::Request,
             None,
             32,
             ids.window_id,
             ids.controller_id.clone(),
         );
+        second.request_id = Some("second-explicit-attempt".to_string());
         let engine = remote_control_engine();
         engine.store_pending_request(ControlGrantKey::for_message(&first).unwrap(), first);
         assert!(engine.has_pending_request(ids.window_id, &ids.controller_id));
-        // `park_consent_request` keys its prompt on this flag: a second
-        // request replaces the parked message (one key) and re-emits
-        // awaitingConsent, but never prompts the sharer twice.
+        // A distinct explicit attempt replaces the single parked entry and
+        // receives its own prompt/deadline, unlike a publication retry.
         engine.store_pending_request(ControlGrantKey::for_message(&second).unwrap(), second);
         let mine = engine
             .pending_request_keys()
@@ -21764,7 +22235,7 @@ mod tests {
             engine.pending_request_seq(ids.window_id, &ids.controller_id),
             Some(32)
         );
-        engine.take_pending_request(ids.window_id, &ids.controller_id);
+        engine.take_pending_request(ids.window_id, &ids.controller_id, None);
     }
 
     #[test]
@@ -21772,40 +22243,32 @@ mod tests {
         let ids =
             remote_control_test_ids("repeat_request_while_pending_keeps_original_timer_and_denies");
         let engine = remote_control_engine();
-        let first = test_message(
+        let mut first = test_message(
             RemoteControlType::Request,
             None,
             51,
             ids.window_id,
             ids.controller_id.clone(),
         );
-        let second = test_message(
-            RemoteControlType::Request,
-            None,
-            52,
-            ids.window_id,
-            ids.controller_id.clone(),
-        );
-        // First request parks and arms a timer for seq 51.
-        engine.store_pending_request(ControlGrantKey::for_message(&first).unwrap(), first);
+        first.request_id = Some("same-retry-attempt".to_string());
+        let mut second = first.clone();
+        second.seq = 52;
+        assert!(engine.store_pending_request(ControlGrantKey::for_message(&first).unwrap(), first));
         let armed_seq = engine
             .pending_request_seq(ids.window_id, &ids.controller_id)
             .unwrap();
         assert_eq!(armed_seq, 51);
-        // Repeat request while pending: `park_consent_request` must NOT store
-        // the newer message (this mirrors its `if !already_pending` guard).
-        if !engine.has_pending_request(ids.window_id, &ids.controller_id) {
-            engine.store_pending_request(ControlGrantKey::for_message(&second).unwrap(), second);
-        }
+        assert!(!engine.store_pending_request(ControlGrantKey::for_message(&second).unwrap(), second),
+            "publication retry must preserve the original parked request and deadline");
         // The original timer's guard still matches, so it will deny.
         assert_eq!(
-            engine.pending_request_seq(ids.window_id, &ids.controller_id),
-            Some(armed_seq),
-            "the parked seq must stay the one the timer was armed for"
+            engine.pending_request_id(ids.window_id, &ids.controller_id).as_deref(),
+            Some("same-retry-attempt"),
+            "the timer keeps the exact attempt identity"
         );
         // ... and the deny path (timer -> answer_consent(false)) takes the entry.
         assert!(engine
-            .take_pending_request(ids.window_id, &ids.controller_id)
+            .take_pending_request(ids.window_id, &ids.controller_id, Some("same-retry-attempt"))
             .is_some());
         assert!(!engine.has_pending_request(ids.window_id, &ids.controller_id));
         assert!(!is_authorized(ids.window_id, &ids.controller_id));
@@ -21831,9 +22294,6 @@ mod tests {
         assert_eq!(taken[0].seq, 41);
         assert!(!engine.has_pending_request(ids.window_id, &ids.controller_id));
         assert!(!is_authorized(ids.window_id, &ids.controller_id));
-        // The revoke paths in this file must actually call it (wiring, not
-        // just the helper): see the source-grep test in
-        // apps/desktop/tests/controlConsent.test.ts.
     }
 
     #[test]
@@ -21903,27 +22363,25 @@ mod tests {
     fn status_packet_carries_the_consent_reason_to_the_controller() {
         let ids =
             remote_control_test_ids("status_packet_carries_the_consent_reason_to_the_controller");
-        let status = RemoteControlStatus {
-            window_id: ids.window_id,
-            owner_identity: None,
-            controller_id: ids.controller_id.clone(),
-            status: "denied",
-            message: "The sharer declined remote control.".to_string(),
-            grant_token: None,
-            reason: Some(RemoteControlReason::ConsentTimedOut),
-        };
+        let status = RemoteControlStatus { request_id: Some("exact-attempt".to_string()), window_id: ids.window_id,
+        owner_identity: None,
+        controller_id: ids.controller_id.clone(),
+        status: "denied",
+        message: "The sharer declined remote control.".to_string(),
+        grant_token: None,
+        reason: Some(RemoteControlReason::ConsentTimedOut), };
         let packet = status_packet_for(&status, "native-host");
         assert_eq!(packet.reason, Some(RemoteControlReason::ConsentTimedOut));
+        assert_eq!(packet.request_id.as_deref(), Some("exact-attempt"));
         assert_eq!(packet.target_user_id, ids.controller_id);
         let json = serde_json::to_value(&packet).expect("serialize");
         assert_eq!(json["status"], "denied");
+        assert_eq!(json["requestId"], "exact-attempt");
         assert_eq!(json["reason"], "consentTimedOut");
         // A status without a reason must not emit the key at all (additive wire).
-        let plain = RemoteControlStatus {
-            reason: None,
-            status: "awaitingConsent",
-            ..status
-        };
+        let plain = RemoteControlStatus { request_id: None, reason: None,
+        status: "awaitingConsent",
+        ..status };
         let json =
             serde_json::to_value(&status_packet_for(&plain, "native-host")).expect("serialize");
         assert_eq!(json["status"], "awaitingConsent");
@@ -21933,15 +22391,13 @@ mod tests {
     #[test]
     fn status_packet_routes_host_result_back_to_controller() {
         let ids = remote_control_test_ids("status_packet_routes_host_result_back_to_controller");
-        let status = RemoteControlStatus {
-            window_id: ids.window_id,
-            owner_identity: None,
-            controller_id: ids.controller_id.clone(),
-            status: "active",
-            message: "Remote control active for shared window".to_string(),
-            grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
-            reason: None,
-        };
+        let status = RemoteControlStatus { request_id: None, window_id: ids.window_id,
+        owner_identity: None,
+        controller_id: ids.controller_id.clone(),
+        status: "active",
+        message: "Remote control active for shared window".to_string(),
+        grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
+        reason: None, };
 
         let packet = status_packet_for(&status, "host-id");
 
@@ -21991,15 +22447,13 @@ mod tests {
         let ids = remote_control_test_ids(
             "accessibility_denied_status_packet_routes_host_result_back_to_controller",
         );
-        let status = RemoteControlStatus {
-            window_id: ids.window_id,
-            owner_identity: None,
-            controller_id: ids.controller_id.clone(),
-            status: "accessibilityDenied",
-            message: "Petal needs Accessibility permission to replay remote input.".to_string(),
-            grant_token: None,
-            reason: None,
-        };
+        let status = RemoteControlStatus { request_id: None, window_id: ids.window_id,
+        owner_identity: None,
+        controller_id: ids.controller_id.clone(),
+        status: "accessibilityDenied",
+        message: "Petal needs Accessibility permission to replay remote input.".to_string(),
+        grant_token: None,
+        reason: None, };
 
         let packet = status_packet_for(&status, "host-id");
 
@@ -22114,23 +22568,19 @@ mod tests {
             .lock_unpoisoned()
             .remove(&(ids.window_id, ids.controller_id.clone()));
 
-        let denied = RemoteControlStatus {
-            window_id: ids.window_id,
-            owner_identity: None,
-            controller_id: ids.controller_id.clone(),
-            status: "accessibilityDenied",
-            message: "denied".to_string(),
-            grant_token: None,
-            reason: None,
-        };
+        let denied = RemoteControlStatus { request_id: None, window_id: ids.window_id,
+        owner_identity: None,
+        controller_id: ids.controller_id.clone(),
+        status: "accessibilityDenied",
+        message: "denied".to_string(),
+        grant_token: None,
+        reason: None, };
         assert!(should_emit_status(&denied));
         assert!(!should_emit_status(&denied));
 
-        let unavailable = RemoteControlStatus {
-            status: "targetUnavailable",
-            message: "unavailable".to_string(),
-            ..denied.clone()
-        };
+        let unavailable = RemoteControlStatus { request_id: None, status: "targetUnavailable",
+        message: "unavailable".to_string(),
+        ..denied.clone() };
         assert!(should_emit_status(&unavailable));
         assert!(!should_emit_status(&unavailable));
         assert!(should_emit_status(&denied));
@@ -22182,15 +22632,13 @@ mod tests {
         );
         let key = (ids.window_id, ids.controller_id.clone());
         last_emitted_statuses().lock_unpoisoned().remove(&key);
-        let status = RemoteControlStatus {
-            window_id: ids.window_id,
-            owner_identity: None,
-            controller_id: ids.controller_id.clone(),
-            status: "active",
-            message: "Remote control active for shared window".to_string(),
-            grant_token: None,
-            reason: None,
-        };
+        let status = RemoteControlStatus { request_id: None, window_id: ids.window_id,
+        owner_identity: None,
+        controller_id: ids.controller_id.clone(),
+        status: "active",
+        message: "Remote control active for shared window".to_string(),
+        grant_token: None,
+        reason: None, };
 
         assert!(should_deliver_status(&status, false));
         assert!(!should_deliver_status(&status, false));
@@ -22213,15 +22661,13 @@ mod tests {
         let ids = remote_control_test_ids("transient_feedback_reemits_after_identical_status");
         let key = (ids.window_id, ids.controller_id.clone());
         last_emitted_statuses().lock_unpoisoned().remove(&key);
-        let occluded = RemoteControlStatus {
-            window_id: ids.window_id,
-            owner_identity: None,
-            controller_id: ids.controller_id.clone(),
-            status: "occluded",
-            message: "The shared target is covered at that point.".to_string(),
-            grant_token: None,
-            reason: None,
-        };
+        let occluded = RemoteControlStatus { request_id: None, window_id: ids.window_id,
+        owner_identity: None,
+        controller_id: ids.controller_id.clone(),
+        status: "occluded",
+        message: "The shared target is covered at that point.".to_string(),
+        grant_token: None,
+        reason: None, };
         assert!(should_deliver_status(&occluded, false));
         assert!(should_deliver_status(&occluded, false));
         assert!(should_deliver_status(&occluded, false));
@@ -22239,22 +22685,18 @@ mod tests {
             remote_control_test_ids("lifecycle_statuses_remain_deduplicated_but_feedback_does_not");
         let key = (ids.window_id, ids.controller_id.clone());
         last_emitted_statuses().lock_unpoisoned().remove(&key);
-        let active = RemoteControlStatus {
-            window_id: ids.window_id,
-            owner_identity: None,
-            controller_id: ids.controller_id.clone(),
-            status: "active",
-            message: "Remote control active".to_string(),
-            grant_token: None,
-            reason: None,
-        };
+        let active = RemoteControlStatus { request_id: None, window_id: ids.window_id,
+        owner_identity: None,
+        controller_id: ids.controller_id.clone(),
+        status: "active",
+        message: "Remote control active".to_string(),
+        grant_token: None,
+        reason: None, };
         assert!(should_deliver_status(&active, false));
         assert!(!should_deliver_status(&active, false), "active must dedupe");
-        let occluded = RemoteControlStatus {
-            status: "occluded",
-            message: "covered".to_string(),
-            ..active.clone()
-        };
+        let occluded = RemoteControlStatus { request_id: None, status: "occluded",
+        message: "covered".to_string(),
+        ..active.clone() };
         assert!(should_deliver_status(&occluded, false));
         assert!(should_deliver_status(&occluded, false));
         // The transient feedback never overwrote the lifecycle latch, so an
@@ -22443,6 +22885,25 @@ mod tests {
                 .contains_key(&(ids.window_id, ids.controller_id.clone())),
             "revoke() must clear this controller's replay-failure-status throttle entry"
         );
+    }
+
+    #[test]
+    fn window_retirement_removes_authority_before_native_release() {
+        fn release_after_authority_retired(window_id: u32) {
+            assert!(
+                sessions()
+                    .lock_unpoisoned()
+                    .keys()
+                    .all(|key| key.window_id != window_id),
+                "a late press must lose authority before native held-input cleanup"
+            );
+        }
+        let ids =
+            remote_control_test_ids("window_retirement_removes_authority_before_native_release");
+        authorize_shared(ids.window_id, &ids.controller_id);
+        let (revoked, _) =
+            drain_window_control_releasing(ids.window_id, release_after_authority_retired);
+        assert_eq!(revoked, vec![ids.controller_id]);
     }
 
     #[test]
@@ -22730,24 +23191,20 @@ mod tests {
                 })
             }));
 
-        let stopped = RemoteControlStatus {
-            window_id: 154,
-            owner_identity: None,
-            controller_id: controller_id.clone(),
-            status: "stopped",
-            message: "Remote control stopped".to_string(),
-            grant_token: None,
-            reason: None,
-        };
-        let active = RemoteControlStatus {
-            window_id: 154,
-            owner_identity: None,
-            controller_id,
-            status: "active",
-            message: "Remote control active for shared window".to_string(),
-            grant_token: Some("grant-#39".to_string()),
-            reason: None,
-        };
+        let stopped = RemoteControlStatus { request_id: None, window_id: 154,
+        owner_identity: None,
+        controller_id: controller_id.clone(),
+        status: "stopped",
+        message: "Remote control stopped".to_string(),
+        grant_token: None,
+        reason: None, };
+        let active = RemoteControlStatus { request_id: None, window_id: 154,
+        owner_identity: None,
+        controller_id,
+        status: "active",
+        message: "Remote control active for shared window".to_string(),
+        grant_token: Some("grant-#39".to_string()),
+        reason: None, };
         publish_status_in_order(transport.clone(), "host", &stopped);
         publish_status_in_order(transport, "host", &active);
 

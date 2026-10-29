@@ -6,6 +6,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tokio_util::sync::CancellationToken;
 
 use crate::camera_session::ActiveCamera;
 use crate::platform::cg::WindowFrame;
@@ -38,6 +39,33 @@ pub(crate) enum SharedWindowScreenStatus {
     Closed,
 }
 
+#[derive(Default)]
+struct CameraPermissionState {
+    retirement: u64,
+    request: Option<Arc<CancellationToken>>,
+}
+
+/// Pending access belongs to this publication attempt, not Settings consumers.
+pub(crate) struct CameraPermissionRequest<'a> {
+    pending: &'a Mutex<CameraPermissionState>,
+    cancel: Arc<CancellationToken>,
+}
+
+impl CameraPermissionRequest<'_> {
+    pub(crate) fn cancellation(&self) -> &CancellationToken {
+        &self.cancel
+    }
+}
+
+impl Drop for CameraPermissionRequest<'_> {
+    fn drop(&mut self) {
+        let mut pending = self.pending.lock_unpoisoned();
+        if pending.request.as_ref().is_some_and(|cancel| Arc::ptr_eq(cancel, &self.cancel)) {
+            pending.request.take();
+        }
+    }
+}
+
 pub struct SessionState {
     joined: Mutex<Option<JoinedRoom>>,
     transition_lock: tokio::sync::Mutex<()>,
@@ -47,6 +75,7 @@ pub struct SessionState {
     generation: Arc<AtomicU64>,
     desired_mic_muted: AtomicBool,
     camera_intent: AtomicBool,
+    camera_permission: Mutex<CameraPermissionState>,
     camera_healing: AtomicBool,
     /// The application-scoped camera owner (ADR 0003): one low-level
     /// capture shared by publication and Settings-preview leases.
@@ -68,6 +97,7 @@ impl Default for SessionState {
             generation: Arc::new(AtomicU64::new(0)),
             desired_mic_muted: AtomicBool::new(true),
             camera_intent: AtomicBool::new(false),
+            camera_permission: Mutex::new(CameraPermissionState::default()),
             camera_healing: AtomicBool::new(false),
             cameras: crate::linux_camera::global_owner(),
             camera: Mutex::new(None),
@@ -78,7 +108,11 @@ impl Default for SessionState {
 
 impl SessionState {
     pub(crate) fn begin_room_generation(&self) -> RoomGeneration {
+        let mut pending = self.camera_permission.lock_unpoisoned();
         let value = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(cancel) = pending.request.take() {
+            cancel.cancel();
+        }
         RoomGeneration::new(self.generation.clone(), value)
     }
 
@@ -90,7 +124,13 @@ impl SessionState {
     }
 
     pub(crate) fn invalidate_room_generation(&self) {
-        self.generation.fetch_add(1, Ordering::SeqCst);
+        {
+            let mut pending = self.camera_permission.lock_unpoisoned();
+            self.generation.fetch_add(1, Ordering::SeqCst);
+            if let Some(cancel) = pending.request.take() {
+                cancel.cancel();
+            }
+        }
         self.pictures.cancel();
     }
 
@@ -244,6 +284,26 @@ impl SessionState {
         self.camera_control.lock().await
     }
 
+    pub(crate) async fn lock_camera_start(
+        &self,
+    ) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+        // Snapshot before waiting behind Settings/capture work. A newer Off
+        // or room leave must retire even an On that has no permission token yet.
+        let (generation, retirement) = {
+            let pending = self.camera_permission.lock_unpoisoned();
+            (self.current_room_generation(), pending.retirement)
+        };
+        let control = self.lock_camera_control().await;
+        {
+            let pending = self.camera_permission.lock_unpoisoned();
+            if !generation.is_current() || retirement != pending.retirement {
+                return None;
+            }
+            self.camera_intent.store(true, Ordering::SeqCst);
+        }
+        Some(control)
+    }
+
     pub(crate) fn camera_publishing(&self) -> bool {
         self.camera.lock_unpoisoned().is_some()
     }
@@ -253,7 +313,42 @@ impl SessionState {
     }
 
     pub(crate) fn set_camera_intent(&self, enabled: bool) {
+        // Admission and retirement use the same lock: a request either joins
+        // before Off and is cancelled, or observes Off and cannot prompt.
+        let mut pending = self.camera_permission.lock_unpoisoned();
         self.camera_intent.store(enabled, Ordering::SeqCst);
+        if !enabled {
+            pending.retirement = pending.retirement.wrapping_add(1);
+            if let Some(cancel) = pending.request.take() {
+                cancel.cancel();
+            }
+        }
+    }
+
+    /// The caller MUST hold camera_control and own the failed start/capture.
+    /// Cleanup is not a new user Off: advancing retirement here would reject
+    /// an explicit On queued after Off but before this old failure settled.
+    pub(crate) fn clear_camera_start_failure(&self) {
+        let mut pending = self.camera_permission.lock_unpoisoned();
+        self.camera_intent.store(false, Ordering::SeqCst);
+        if let Some(cancel) = pending.request.take() {
+            cancel.cancel();
+        }
+    }
+
+    pub(crate) fn begin_camera_permission_request(
+        &self,
+        generation: &RoomGeneration,
+    ) -> Result<CameraPermissionRequest<'_>, String> {
+        let mut pending = self.camera_permission.lock_unpoisoned();
+        if !generation.is_current() || !self.camera_intent() {
+            return Err("Camera permission cancelled; the camera stays off".to_string());
+        }
+        let cancel = Arc::new(CancellationToken::new());
+        if let Some(previous) = pending.request.replace(cancel.clone()) {
+            previous.cancel();
+        }
+        Ok(CameraPermissionRequest { pending: &self.camera_permission, cancel })
     }
 
     pub(crate) fn try_begin_camera_heal(&self) -> bool {
@@ -273,12 +368,22 @@ impl SessionState {
     pub(crate) fn put_active_camera(
         &self,
         camera: &mut Option<crate::camera_session::ActiveCamera>,
+        generation: &RoomGeneration,
     ) -> bool {
-        // Never consume a capture without a live room; the caller owns cleanup.
-        if !self.is_in_room() || camera.is_none() || self.camera_publishing() {
+        if !self.is_in_room() {
             return false;
         }
-        *self.camera.lock_unpoisoned() = camera.take();
+        // Leave invalidates the generation before taking this same lock. It
+        // therefore either takes the adopted capture or makes adoption fail.
+        let mut current = self.camera.lock_unpoisoned();
+        if !generation.is_current()
+            || !self.camera_intent()
+            || camera.is_none()
+            || current.is_some()
+        {
+            return false;
+        }
+        *current = camera.take();
         true
     }
 
@@ -370,6 +475,15 @@ pub(crate) async fn join_room_command(
         });
     }
     crate::resilience::start_for_room(&app, resilience_events, generation.clone());
+    // Controller-role remote control receiver: Status/Result packets from a
+    // Windows sharer (and clipboard copy responses) arrive on this
+    // subscription; host-role input stays refused inside handle_message.
+    crate::remote_control::start_receiver_for_room(
+        &app,
+        connection.room(),
+        identity.clone(),
+        generation.clone(),
+    );
     crate::presence::start_for_room(
         &app,
         connection.room(),
@@ -774,4 +888,114 @@ pub(crate) async fn set_share_audio_enabled_for_state(
     _enabled: bool,
 ) -> Result<crate::screen_audio::ShareAudioState, String> {
     Err("Screen sharing is unsupported on Linux".to_string())
+}
+
+#[cfg(test)]
+mod camera_permission_tests {
+    use super::*;
+
+    #[test]
+    fn camera_permission_off_retires_pending_publication_request() {
+        let state = SessionState::default();
+        let generation = state.begin_room_generation();
+        state.set_camera_intent(true);
+        let request = state.begin_camera_permission_request(&generation).unwrap();
+        state.set_camera_intent(false);
+        assert!(request.cancellation().is_cancelled());
+        assert!(state.begin_camera_permission_request(&generation).is_err());
+    }
+
+    #[test]
+    fn camera_permission_leave_retires_pending_request_and_rejects_late_admission() {
+        let state = SessionState::default();
+        let generation = state.begin_room_generation();
+        state.set_camera_intent(true);
+        let request = state.begin_camera_permission_request(&generation).unwrap();
+        state.invalidate_room_generation();
+        assert!(request.cancellation().is_cancelled());
+        assert!(state.begin_camera_permission_request(&generation).is_err());
+    }
+
+    #[test]
+    fn camera_permission_completed_request_cannot_retire_its_successor() {
+        let state = SessionState::default();
+        let generation = state.begin_room_generation();
+        state.set_camera_intent(true);
+        let old = state.begin_camera_permission_request(&generation).unwrap();
+        let current = state.begin_camera_permission_request(&generation).unwrap();
+        assert!(old.cancellation().is_cancelled());
+        drop(old);
+        state.set_camera_intent(false);
+        assert!(current.cancellation().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn camera_permission_queued_on_cannot_cross_newer_off() {
+        let state = SessionState::default();
+        state.begin_room_generation();
+        let settings_control = state.lock_camera_control().await;
+        let queued_on = state.lock_camera_start();
+        tokio::pin!(queued_on);
+        assert!(futures_util::poll!(&mut queued_on).is_pending());
+        state.set_camera_intent(false);
+        drop(settings_control);
+        assert!(queued_on.await.is_none());
+        assert!(!state.camera_intent());
+    }
+
+    #[tokio::test]
+    async fn camera_permission_queued_on_cannot_cross_room_leave() {
+        let state = SessionState::default();
+        state.begin_room_generation();
+        let settings_control = state.lock_camera_control().await;
+        let queued_on = state.lock_camera_start();
+        tokio::pin!(queued_on);
+        assert!(futures_util::poll!(&mut queued_on).is_pending());
+        state.invalidate_room_generation();
+        drop(settings_control);
+        assert!(queued_on.await.is_none());
+        assert!(!state.camera_intent());
+    }
+
+    #[tokio::test]
+    async fn camera_permission_new_on_after_off_has_current_ownership() {
+        let state = SessionState::default();
+        let generation = state.begin_room_generation();
+        let settings_control = state.lock_camera_control().await;
+        let old_on = state.lock_camera_start();
+        tokio::pin!(old_on);
+        assert!(futures_util::poll!(&mut old_on).is_pending());
+        state.set_camera_intent(false);
+        let new_on = state.lock_camera_start();
+        tokio::pin!(new_on);
+        assert!(futures_util::poll!(&mut new_on).is_pending());
+        drop(settings_control);
+        assert!(old_on.await.is_none());
+        let _current_control = new_on.await.expect("explicit new On remains valid");
+        assert!(state.camera_intent());
+        assert!(state.begin_camera_permission_request(&generation).is_ok());
+    }
+
+    #[tokio::test]
+    async fn camera_permission_old_cancel_cleanup_preserves_newer_explicit_on() {
+        let state = SessionState::default();
+        let generation = state.begin_room_generation();
+        let first_control = state.lock_camera_start().await.unwrap();
+        let first_permission = state.begin_camera_permission_request(&generation).unwrap();
+        state.set_camera_intent(false);
+        assert!(first_permission.cancellation().is_cancelled());
+        let second_on = state.lock_camera_start();
+        tokio::pin!(second_on);
+        assert!(futures_util::poll!(&mut second_on).is_pending());
+        // The first start receives cancellation after the newer On queued.
+        state.clear_camera_start_failure();
+        state.clear_camera_start_failure();
+        assert!(!state.camera_intent());
+        drop(first_permission);
+        drop(first_control);
+        let _second_control = second_on.await.expect("old failure must not retire a newer explicit On");
+        assert!(state.camera_intent());
+        let second_permission = state.begin_camera_permission_request(&generation).unwrap();
+        assert!(!second_permission.cancellation().is_cancelled());
+    }
 }

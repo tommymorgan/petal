@@ -27,7 +27,7 @@
     /** Wall-clock deadline mirrored from the host's timeout. */
     expiresAt: number;
   };
-  type RequestIdentity = Pick<ControlConsentRequestedEvent, 'kind' | 'windowId' | 'controllerId'>;
+  type RequestIdentity = Pick<ControlConsentRequestedEvent, 'kind' | 'windowId' | 'controllerId' | 'requestId'>;
 
   let queue = $state<QueuedRequest[]>([]);
   let now = $state(Date.now());
@@ -50,7 +50,7 @@
   const waitingCount = $derived(Math.max(0, queue.length - 1));
 
   function sameRequest(a: RequestIdentity, b: RequestIdentity) {
-    return a.kind === b.kind && a.windowId === b.windowId && a.controllerId === b.controllerId;
+    return a.kind === b.kind && a.windowId === b.windowId && a.controllerId === b.controllerId && a.requestId === b.requestId;
   }
 
   function enqueue(payload: ControlConsentRequestedEvent) {
@@ -59,15 +59,17 @@
     // normally suppresses duplicate events, but keeping the first entry here
     // makes the route fail closed even if delivery is repeated.
     if (existing >= 0) return;
+    queue = queue.filter((q) => !(q.kind === payload.kind && q.windowId === payload.windowId && q.controllerId === payload.controllerId));
     queue = [...queue, { ...payload, expiresAt: Date.now() + payload.timeoutMs }];
   }
 
-  function drop(windowId: number, controllerId: string, kind?: ControlConsentRequestedEvent['kind']) {
+  function drop(windowId: number, controllerId: string, kind?: ControlConsentRequestedEvent['kind'], requestId?: string | null) {
     const before = queue.length;
     queue = queue.filter((q) => !(
       q.windowId === windowId &&
       q.controllerId === controllerId &&
       (kind === undefined || q.kind === kind)
+      && (requestId === undefined || q.requestId === requestId)
     ));
     if (queue.length !== before) {
       presentationGeneration += 1;
@@ -102,6 +104,7 @@
     try {
       if (req.kind === 'fullControlEscalation') {
         await invoke(COMMANDS.remoteControlAnswerEscalation, {
+          requestId: req.requestId ?? '',
           windowId: req.windowId,
           controllerId: req.controllerId,
           approve
@@ -110,6 +113,7 @@
         await invoke(COMMANDS.remoteControlAnswerConsent, {
           windowId: req.windowId,
           controllerId: req.controllerId,
+          requestId: req.requestId ?? '',
           approve
         });
       }
@@ -122,7 +126,7 @@
       );
     } finally {
       answering = false;
-      drop(req.windowId, req.controllerId, req.kind);
+      drop(req.windowId, req.controllerId, req.kind, req.requestId);
     }
   }
 
@@ -184,11 +188,11 @@
       // escalation prompt alone; it has its own typed identity and deadline.
       if (s.status === 'active' || (s.status === 'denied' &&
           (s.reason === 'consentDenied' || s.reason === 'consentTimedOut'))) {
-        drop(s.windowId, s.controllerId, 'control');
+        drop(s.windowId, s.controllerId, 'control', s.requestId);
         return;
       }
       // Share/controller/policy teardown invalidates either prompt kind.
-      drop(s.windowId, s.controllerId);
+      drop(s.windowId, s.controllerId, undefined, s.requestId);
     });
     const unShareState = listen<{ windowId: number; shared: boolean }>(EVENTS.shareStateChanged, (event) => {
       if (!event.payload.shared) {

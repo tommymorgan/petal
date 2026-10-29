@@ -717,6 +717,8 @@ interface RemoteControlBase {
   controllerId: string;
   windowId: number;
   seq: number;
+  /** Exact explicit request attempt; lifecycle replies must echo it. */
+  requestId?: string;
   /** Missing means a legacy window target; it never implies a display. */
   targetKind?: RemoteControlTargetKind;
   /** Opaque identity of one live capture/publication instance. */

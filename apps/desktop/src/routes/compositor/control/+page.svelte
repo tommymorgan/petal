@@ -122,6 +122,7 @@
   let controlOverlay: HTMLElement | null = null;
   const showFocusLostCue = $derived(active && !hasFocus);
   let grantToken = $state<string | null>(null);
+  let requestId = $state<string | null>(null);
   type ClipboardModifierState = {
     key: string;
     code: string;
@@ -247,9 +248,10 @@
   type Point = { x: number; y: number };
 
   type ControlWindow = typeof window & {
-    __petalRemoteControlSetActive?: (value: boolean) => void;
+    __petalRemoteControlSetActive?: (value: boolean, attemptId?: string | null) => void;
     __petalRemoteControlSourceDimensions?: (width: number, height: number) => void;
     __petalPendingRemoteControlActive?: boolean;
+    __petalPendingRemoteControlRequestId?: string | null;
     __petalPendingControlSourceDimensions?: { width: number; height: number };
     __petalDrawSetActive?: (value: boolean) => void;
     __petalDebugToggle?: () => void;
@@ -933,7 +935,9 @@
     window.addEventListener('focus', onWindowFocus);
     window.addEventListener('blur', onWindowBlur);
     let unlistenRemoteControlStatus: UnlistenFn | undefined;
-    controlWindow.__petalRemoteControlSetActive = (value: boolean) => {
+    let unlistenRemoteControlRequestStarted: UnlistenFn | undefined;
+    controlWindow.__petalRemoteControlSetActive = (value: boolean, attemptId?: string | null) => {
+        requestId = value ? attemptId ?? null : null;
         active = value;
         if (!active) grantToken = null;
         if (!active) clearPendingInput();
@@ -951,7 +955,7 @@
       setSourceDimensions(width, height);
     }
     if (typeof controlWindow.__petalPendingRemoteControlActive === 'boolean') {
-      controlWindow.__petalRemoteControlSetActive(controlWindow.__petalPendingRemoteControlActive);
+      controlWindow.__petalRemoteControlSetActive(controlWindow.__petalPendingRemoteControlActive, controlWindow.__petalPendingRemoteControlRequestId);
     }
     controlWindow.__petalDrawSetActive = (value: boolean) => {
       if (!value && drawActive) commitDrawText();
@@ -969,6 +973,13 @@
     controlWindow.__petalDebugToggle = () => {
       setDebugOpen(!debugOpen);
     };
+    listen<{ windowId: number; ownerIdentity: string; requestId: string }>(EVENTS.remoteControlRequestStarted, ({ payload }) => {
+      if (payload.windowId !== windowId || (ownerIdentity && payload.ownerIdentity !== ownerIdentity)) return;
+      requestId = payload.requestId;
+      active = false;
+      grantToken = null;
+      clearPendingInput();
+    }).then((unlisten) => { unlistenRemoteControlRequestStarted = unlisten; }).catch(() => {});
     listen<RemoteControlStatus>(EVENTS.remoteControlStatus, (event) => {
       if (event.payload.windowId !== windowId) return;
       // Note (Fable F3): the host's "active" status carries ownerIdentity:
@@ -979,6 +990,7 @@
       // unlike the web-harness controller, which does authenticate the
       // sender against the LiveKit-verified identity (see #377 review).
       if (ownerIdentity && event.payload.ownerIdentity && event.payload.ownerIdentity !== ownerIdentity) return;
+      if (!event.payload.requestId || event.payload.requestId !== requestId) return;
       if (event.payload.status === 'active' && event.payload.grantToken) {
         grantToken = event.payload.grantToken;
       } else if (event.payload.status === 'stopped') {
@@ -999,6 +1011,7 @@
       window.removeEventListener('blur', onWindowBlur);
       controlOverlay = null;
       unlistenRemoteControlStatus?.();
+      unlistenRemoteControlRequestStarted?.();
     };
   });
 

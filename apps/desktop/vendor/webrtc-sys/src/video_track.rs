@@ -79,6 +79,7 @@ pub mod ffi {
         fn new_native_video_sink(observer: Box<VideoSinkWrapper>) -> SharedPtr<NativeVideoSink>;
 
         fn video_resolution(self: &VideoTrackSource) -> VideoResolution;
+        fn set_video_resolution(self: &VideoTrackSource, resolution: &VideoResolution);
         fn on_captured_frame(
             self: &VideoTrackSource,
             frame: &UniquePtr<VideoFrame>,

@@ -196,6 +196,7 @@ export function parseRemoteControlJson(payload: string): RemoteControlMessage | 
   try { value = JSON.parse(payload) as Record<string, unknown>; } catch { return null; }
   const kinds = ['request', 'release', 'status', 'pointer', 'wheel', 'key', 'text', 'result'];
   if (value.v !== 1 || typeof value.kind !== 'string' || !kinds.includes(value.kind)) return null;
+  if (value.requestId !== undefined && (typeof value.requestId !== 'string' || value.requestId.length === 0)) return null;
   if (value.action !== undefined && !['move', 'down', 'up', 'click'].includes(String(value.action))) return null;
   if (value.targetKind !== undefined && !['window', 'display'].includes(String(value.targetKind))) {
     if (value.kind === 'request') delete value.targetKind;
@@ -302,41 +303,16 @@ export function remoteControlGrantEnvelopeIsValid(message: RemoteControlMessage)
   );
 }
 
-/**
- * May an inbound `active` status RE-ESTABLISH a control session the controller
- * no longer has?
- *
- * #808: it must. A `stopped` for a superseded request clears
- * `state.activeRemoteControl`, and adoption of every later `active` was gated
- * on that same object being non-null -- so once cleared, nothing could restore
- * it and the controller sat permanently out of control while the host kept
- * granting. Measured live: the harness reported `{granted:false,
- * grantToken:null}` with `active=null`, two milliseconds after a `stopped`,
- * against a host that had just logged `status emitted (local+controller)
- * status='active'`. The same gap defeated #371's reconnect re-emit, whose
- * entire purpose is to restore a controller whose data channel was recreated.
- *
- * The sender check is preserved rather than skipped. `targetUserId` and
- * `windowId` on the wire are attacker-controlled and are NOT authentication;
- * the restore therefore requires the LiveKit-verified `senderIdentity` to own
- * the tile for that window, and requires a real grant token. A tokenless
- * `active`, a foreign sender, or an unknown window restores nothing.
- */
-export function remoteControlStatusRestoresSession(
+/** Authenticate and correlate lifecycle status before ANY grant/UI mutation. */
+export function remoteControlStatusMatchesRequest(
   message: RemoteControlStatusMessage,
-  context: {
-    hasActiveSession: boolean;
-    localIdentity: string | undefined;
-    senderIdentity: string | undefined;
-    tileOwner: string | undefined;
-  }
+  active: { requestId?: string; targetUserId: string; windowId: number } | null,
+  localIdentity: string | undefined,
+  senderIdentity: string | undefined
 ): boolean {
-  if (context.hasActiveSession) return false;
-  if (message.status !== 'active') return false;
-  if (typeof message.grantToken !== 'string' || message.grantToken.length === 0) return false;
-  if (!context.localIdentity || message.targetUserId !== context.localIdentity) return false;
-  if (!context.senderIdentity || context.senderIdentity !== context.tileOwner) return false;
-  return remoteControlGrantEnvelopeIsValid(message);
+  return Boolean(active && active.requestId && message.requestId === active.requestId &&
+    message.windowId === active.windowId && message.controllerId === active.targetUserId &&
+    senderIdentity === active.targetUserId && localIdentity && message.targetUserId === localIdentity);
 }
 
 /**

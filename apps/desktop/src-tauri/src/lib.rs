@@ -210,6 +210,8 @@ mod linux_prerequisites;
 #[doc(hidden)]
 pub mod linux_pw_compat;
 #[cfg(target_os = "linux")]
+mod linux_remote_control;
+#[cfg(target_os = "linux")]
 mod linux_share;
 #[cfg(target_os = "linux")]
 mod linux_share_capture;

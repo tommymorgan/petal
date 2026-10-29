@@ -963,6 +963,7 @@ mod command_server {
                     crate::camera_session::apply_camera_device(
                         &app,
                         device_id,
+                        None, // Device-only runbook selection uses Auto, never the old device's mode.
                         preferences.inner(),
                         session.inner(),
                     )

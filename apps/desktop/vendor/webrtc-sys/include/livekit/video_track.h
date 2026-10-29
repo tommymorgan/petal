@@ -99,6 +99,7 @@ class VideoTrackSource {
     SourceState state() const override;
     bool remote() const override;
     VideoResolution video_resolution() const;
+    void set_video_resolution(const VideoResolution& resolution);
     bool on_captured_frame(const webrtc::VideoFrame& frame,
                            const FrameMetadata& frame_metadata);
 
@@ -117,6 +118,7 @@ class VideoTrackSource {
   VideoTrackSource(const VideoResolution& resolution, bool is_screencast);
 
   VideoResolution video_resolution() const;
+  void set_video_resolution(const VideoResolution& resolution) const;
 
   bool on_captured_frame(const std::unique_ptr<VideoFrame>& frame,
                          const FrameMetadata& frame_metadata)

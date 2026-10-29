@@ -103,9 +103,11 @@
   let lastFrameReceivedMs = $state<number | null>(null);
   let freshnessTimer: ReturnType<typeof setInterval> | undefined;
   let unlistenRemoteControlStatus: UnlistenFn | undefined;
+  let unlistenRemoteControlRequestStarted: UnlistenFn | undefined;
   let remoteControlTimeout: ReturnType<typeof setTimeout> | undefined;
   let remoteControlFeedbackTimeout: ReturnType<typeof setTimeout> | undefined;
   let remoteControlRequestSerial = 0;
+  let remoteControlRequestId: string | null = null;
   let modeMenu: Menu | null = null;
   let viewModeItem: CheckMenuItem | null = null;
   let controlModeItem: CheckMenuItem | null = null;
@@ -230,6 +232,7 @@
   }
 
   function applyRemoteControlStatus(status: RemoteControlStatus) {
+    if (!status.requestId || status.requestId !== remoteControlRequestId) return;
     const effect = remoteControlStatusEffect(status.status);
     // Consent flow: the host parked our request and is asking the sharer.
     // Stay in "requesting" (the button keeps its pending state) but swap the
@@ -272,12 +275,14 @@
   ) {
     clearRemoteControlTimeout();
     const serial = ++remoteControlRequestSerial;
+    const requestId = remoteControlRequestId;
     remoteControlTimeout = setTimeout(() => {
       if (serial !== remoteControlRequestSerial || !remoteControlRequesting) return;
       remoteControlActive = false;
       remoteControlRequesting = false;
       setRemoteControlFeedback('requestFailed', timeoutMessage);
-      void invoke(COMMANDS.remoteControlRequestTimedOut, { windowId, ownerIdentity }).catch(() => {});
+      remoteControlRequestId = null;
+      if (requestId) void invoke(COMMANDS.remoteControlRequestTimedOut, { windowId, ownerIdentity, requestId }).catch(() => {});
     }, timeoutMs);
   }
 
@@ -292,13 +297,21 @@
     remoteControlRequestSerial += 1;
     setRemoteControlFeedback(null, null);
     remoteControlRequesting = next;
+    if (next) remoteControlRequestId = crypto.randomUUID();
+    const requestId = remoteControlRequestId;
+    if (!next) {
+      remoteControlRequestId = null;
+      remoteControlActive = false;
+    }
     if (next) startRemoteControlTimeout();
     try {
       const confirmedActive = await invoke<boolean>(COMMANDS.remoteControlSetActive, {
         windowId,
         ownerIdentity,
-        active: next
+        active: next,
+        requestId: requestId ?? undefined,
       });
+      if (requestId !== remoteControlRequestId) return;
       if (!next) {
         clearRemoteControlTimeout();
         remoteControlActive = false;
@@ -309,6 +322,7 @@
         remoteControlRequesting = false;
       }
     } catch {
+      if (requestId !== remoteControlRequestId) return;
       clearRemoteControlTimeout();
       remoteControlActive = false;
       remoteControlRequesting = false;
@@ -647,15 +661,19 @@
     if (!Number.isFinite(windowId) || windowId <= 0 || remoteControlRequesting) return;
     const next = !drawActive;
     if (next && remoteControlActive) {
+      const requestId = remoteControlRequestId;
       try {
         await invoke<boolean>(COMMANDS.remoteControlSetActive, {
           windowId,
           ownerIdentity,
-          active: false
+          active: false,
+          requestId: requestId ?? undefined
         });
       } catch {
         // Draw mode is local to the viewer; still flip the local capture layer.
       }
+      if (requestId !== remoteControlRequestId) return;
+      remoteControlRequestId = null;
       clearRemoteControlTimeout();
       remoteControlActive = false;
       remoteControlRequesting = false;
@@ -754,7 +772,7 @@
     // ai-chat overlay route owns it directly (see that route's doc comment
     // for why it can't use `listen` the way this panel webview can).
     const surfaceWindow = window as typeof window & {
-      __petalRemoteControlHeaderActive?: (value: boolean) => void;
+      __petalRemoteControlHeaderActive?: (value: boolean, requestId?: string | null) => void;
       __petalRemoteControlMode?: (value: string) => void;
     };
     surfaceWindow.__petalRemoteControlMode = (value: string) => {
@@ -764,7 +782,8 @@
       controlMode = value === 'fullControl' ? 'fullControl' : 'cursorPreserving';
     };
     surfaceWindow.__petalRemoteControlHeaderActive =
-      (value: boolean) => {
+      (value: boolean, requestId?: string | null) => {
+        if (!requestId || requestId !== remoteControlRequestId) return;
         clearRemoteControlTimeout();
         remoteControlRequestSerial += 1;
         remoteControlActive = value;
@@ -780,6 +799,7 @@
         applyRemoteControlStatus({
           windowId,
           controllerId: ownerName,
+          requestId: remoteControlRequestId,
           status,
           message: 'Remote control status changed'
         });
@@ -788,6 +808,13 @@
       (value: boolean) => {
         mediaPaused = value;
       };
+    listen<{ windowId: number; ownerIdentity: string; requestId: string }>(EVENTS.remoteControlRequestStarted, ({ payload }) => {
+      if (payload.windowId !== windowId || (ownerIdentity && payload.ownerIdentity !== ownerIdentity)) return;
+      if (remoteControlRequesting && remoteControlRequestId !== payload.requestId) return;
+      remoteControlRequestId = payload.requestId;
+      remoteControlActive = false;
+      remoteControlRequesting = true;
+    }).then((unlisten) => { unlistenRemoteControlRequestStarted = unlisten; }).catch(() => {});
     listen<RemoteControlStatus>(EVENTS.remoteControlStatus, (event) => {
       if (event.payload.windowId !== windowId) return;
       if (ownerIdentity && event.payload.ownerIdentity && event.payload.ownerIdentity !== ownerIdentity) return;
@@ -801,6 +828,8 @@
     return () => {
       unlistenRemoteControlStatus?.();
       unlistenRemoteControlStatus = undefined;
+      unlistenRemoteControlRequestStarted?.();
+      unlistenRemoteControlRequestStarted = undefined;
       delete surfaceWindow.__petalRemoteControlMode;
       unlistenAiChatRemoteState?.();
       unlistenAiChatRemoteState = undefined;

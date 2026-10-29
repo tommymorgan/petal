@@ -10,8 +10,9 @@ Feature: Native Linux camera publication
     Then Windows receives its changing camera picture
     And Linux shows the matching native self-view without a browser acquisition
 
-  # C02: one application-scoped capture owner serves preview, self-view and
-  # publication; the last visible consumer releases the device.
+  # C02 DONE November 5: one unchanged capture feeds preview/publication.
+  # Tommy observed LED ON with both, ON with publication off/preview retained,
+  # then OFF after the actual last native preview closed; capture links zero.
   Scenario: Share one camera owner between preview and publication
     Given the visible Linux settings preview displays Cam-A
     When I turn camera publication on
@@ -22,8 +23,11 @@ Feature: Native Linux camera publication
     When I close that last preview
     Then Cam-A capture and its device indicator stop
 
-  # C03: fail-closed permission and absence states; verified at the fixture
-  # level where the desktop cannot produce the OS dialog rows.
+  # C03 locally verified November 4: real private Camera portal denial,
+  # actual pending-request cancellation through production Off, and zero
+  # private camera sources. All show the corresponding native state with
+  # no SFU/Windows video or capture links. Presence alone reported
+  # not-determined, never the non-Linux authorized default.
   Scenario Outline: Show accurate camera permission or absence state
     Given Linux camera is off
     When I request camera and <permission_result>
@@ -36,6 +40,10 @@ Feature: Native Linux camera publication
       | no camera is available | no camera available |
 
   # C04: latest-selection-wins across devices and modes.
+  # Combined actual Settings/native GTK self-view/released Windows check passes:
+  # genuine saved A completion/frame replay is rejected after B becomes active.
+  # GTK widget snapshots and decoded B observations span replay; no OS-late-open
+  # or monitor-scanout claim. Native mode queries now serialize their shared slot.
   Scenario: Latest camera device and mode selection wins
     Given native camera permission is granted and the capture backend exposes Cam-A and Cam-B with their supported modes
     When I open the device selector and each device's mode selector
@@ -45,7 +53,11 @@ Feature: Native Linux camera publication
     Then Cam-B at the selected supported mode remains selected in settings, self-view and outgoing video
     And older device or mode frames cannot replace it
 
-  # C05: bounded failure retirement without disturbing other media.
+  # C05 DONE: actual C920 node-ACL loss, repaired capture-stream failure and
+  # attended physical unplug/replug all preserve DP-1/unmuted Volt276 and
+  # released Windows share decoding/audio reception. Restoration/replug never
+  # auto-enables camera; explicit On recovers video. Permission loss uses real
+  # owned-client node ACLs, not ineffective empty-app-id PermissionStore NO.
   Scenario Outline: Retire a failed camera without changing other media
     Given Linux publishes Cam-A, DP-1 and an unmuted microphone
     When Cam-A encounters <camera_failure>

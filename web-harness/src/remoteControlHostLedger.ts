@@ -40,6 +40,8 @@ export interface HostEmulationState {
   /** Identity of the controller currently holding the grant, if any. */
   controllerId: string | null;
   grantToken: string | null;
+  requestId: string | null;
+  windowId: number | null;
   received: ReceivedControlInput[];
   /** True once a request has been answered with an `active` status. */
   granted: boolean;
@@ -63,6 +65,8 @@ export function createHostEmulationState(): HostEmulationState {
     enabled: false,
     controllerId: null,
     grantToken: null,
+    requestId: null,
+    windowId: null,
     received: [],
     granted: false,
     publishError: null,
@@ -88,6 +92,7 @@ function statusMessage(
     targetUserId: controllerIdentity,
     windowId: message.windowId,
     seq: Date.now(),
+    requestId: message.requestId,
     message:
       status === 'active'
         ? 'Remote control granted by the web harness host emulator: it records input and never injects it'
@@ -120,13 +125,20 @@ export function hostEmulationDecision(
     return { action: 'ignore', reason: 'controllerId does not match the authenticated sender' };
   }
   if (message.kind === 'request') {
-    const grantToken = `rc-n2w-${message.windowId}-${Date.now().toString(36)}`;
+    if (!message.requestId) return { action: 'ignore', reason: 'request has no attempt identity' };
+    const grantToken = state.granted && state.requestId === message.requestId &&
+      state.controllerId === senderIdentity && state.windowId === message.windowId
+      ? state.grantToken : crypto.randomUUID();
     return {
       action: 'grant',
       status: statusMessage('active', message, localIdentity, senderIdentity, grantToken)
     };
   }
   if (message.kind === 'release') {
+    if (!message.requestId || message.requestId !== state.requestId ||
+        senderIdentity !== state.controllerId || message.windowId !== state.windowId) {
+      return { action: 'ignore', reason: 'release does not match the live request' };
+    }
     return {
       action: 'stop',
       status: statusMessage('stopped', message, localIdentity, senderIdentity, null)
@@ -159,11 +171,15 @@ export function applyHostEmulationDecision(
       state.granted = true;
       state.controllerId = decision.status.targetUserId;
       state.grantToken = decision.status.grantToken ?? null;
+      state.requestId = decision.status.requestId ?? null;
+      state.windowId = decision.status.windowId;
       break;
     case 'stop':
       state.granted = false;
       state.controllerId = null;
       state.grantToken = null;
+      state.requestId = null;
+      state.windowId = null;
       break;
     case 'record':
       if (state.received.length >= HOST_LEDGER_MAX_INPUTS) state.received.shift();

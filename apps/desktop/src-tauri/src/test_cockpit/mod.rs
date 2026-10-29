@@ -8918,6 +8918,7 @@ async fn run_remote_control_native_to_native_scenario(
         host_window_id,
         Some(host_identity.clone()),
         true,
+        None,
     )
     .await
     {
@@ -9327,6 +9328,7 @@ async fn run_remote_control_native_to_web_scenario(
         host_window_id,
         Some(host_identity.clone()),
         true,
+        None,
     )
     .await
     {
@@ -11456,13 +11458,10 @@ async fn run_scenario(
         let preferences = app.try_state::<crate::transport::camera::CameraDevicePreferences>();
         match (state, preferences) {
             (Some(state), Some(preferences)) => {
-                let _control = state.lock_camera_control().await;
-                state.set_camera_intent(true);
-                if let Err(error) = crate::camera_session::start_camera_publish_with_device(
+                if let Err(error) = crate::camera_session::start_camera_publish_intent(
                     app,
+                    &preferences,
                     &state,
-                    preferences.preferred_device(),
-                    preferences.preferred_mode(),
                 )
                 .await
                 {
@@ -11909,9 +11908,7 @@ pub async fn start_test_cockpit(
             // synthetic camera keeps publishing through every later scenario.
             if matches!(scenario.kind, ScenarioKind::CameraNativeToWeb) {
                 if let Some(state) = app.try_state::<crate::session::SessionState>() {
-                    let _control = state.lock_camera_control().await;
-                    state.set_camera_intent(false);
-                    crate::camera_session::stop_camera_publish(&app, &state).await;
+                    crate::camera_session::stop_camera_publish_intent(&app, &state).await;
                     log::info!(
                         "test-cockpit: {} stopped the native camera publish (scenario epilogue)",
                         scenario.id

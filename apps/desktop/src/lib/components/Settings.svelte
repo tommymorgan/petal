@@ -76,6 +76,8 @@
   import {
     CAMERA_FPS_PRESETS,
     CAMERA_RESOLUTION_PRESETS,
+    cameraFrameRateOptions,
+    cameraResolutionOptions,
     cameraSupportsFps,
     cameraSupportsResolution,
     listCameraModes,
@@ -200,15 +202,18 @@
   let realCameras = $state<DeviceOption[]>([]);
   let nativeCameras = $state<DeviceOption[]>([]);
 
-  // User-chosen camera capture mode (Settings resolution/FPS menus). The
-  // modes list is enumerated per camera so unsupported presets are greyed
-  // out. Windows-only: the macOS camera path has no resolution/FPS prefs.
+  // Linux offers the device's advertised sizes/rates; Windows retains its
+  // presets with unsupported choices disabled. macOS has no mode preferences.
   let cameraModes = $state<CameraMode[]>([]);
   let cameraModesError = $state(false);
+  let cameraModesDeviceId = $state('');
+  let cameraModesRequest = 0;
+  let cameraSelectionRequest = 0;
+  let cameraPrefsRequest = 0;
+  let cameraSelecting = $state(false);
   let cameraResolutionId = $state('auto');
   let cameraFps = $state(30);
   let cameraPrefsNote = $state<string | null>(null);
-  let cameraPrefsSeeded = false;
 
   // Real enumerated mic/speaker devices (issue #28 — native-side
   // `list_audio_devices`, not the browser's enumerateDevices, since the
@@ -370,36 +375,40 @@
     cameraDevicesLoaded && nativeCameras.length === 0 && !cameraDevicesError
   );
 
-  // Which resolution/FPS presets the selected camera can actually deliver;
-  // everything else is greyed out in the menus.
+  const cameraResolutions = $derived(
+    isLinux() ? cameraResolutionOptions(cameraModes) : CAMERA_RESOLUTION_PRESETS
+  );
   const selectedResolution = $derived(
-    CAMERA_RESOLUTION_PRESETS.find((p) => p.id === cameraResolutionId) ??
-      CAMERA_RESOLUTION_PRESETS[0]
+    cameraResolutions.find((p) => p.id === cameraResolutionId) ?? cameraResolutions[0]
+  );
+  const cameraFrameRates = $derived(
+    isLinux()
+      ? cameraFrameRateOptions(cameraModes, selectedResolution.width, selectedResolution.height)
+      : CAMERA_FPS_PRESETS
   );
   const cameraResolutionDisabled = $derived(
     new Set(
-      CAMERA_RESOLUTION_PRESETS.filter(
+      cameraResolutions.filter(
         (p) => p.id !== 'auto' && !cameraSupportsResolution(cameraModes, p.width, p.height)
       ).map((p) => p.id)
     )
   );
   const cameraFpsDisabled = $derived(
-    selectedResolution.id === 'auto'
-      ? new Set(CAMERA_FPS_PRESETS.map(String))
-      : new Set(
-          CAMERA_FPS_PRESETS.filter(
-            (fps) =>
-              !cameraSupportsFps(
-                cameraModes,
-                selectedResolution.width,
-                selectedResolution.height,
-                fps
-              )
-          ).map(String)
-        )
-  );
-  const cameraModesAvailable = $derived(
-    cameraDevicesLoaded && !cameraDevicesError && cameraModes.length > 0
+    isLinux()
+      ? new Set<string>()
+      : selectedResolution.id === 'auto'
+        ? new Set(cameraFrameRates.map(String))
+        : new Set(
+            cameraFrameRates.filter(
+              (fps) =>
+                !cameraSupportsFps(
+                  cameraModes,
+                  selectedResolution.width,
+                  selectedResolution.height,
+                  fps
+                )
+            ).map(String)
+          )
   );
   const hasDisabledCameraPresets = $derived(
     cameraResolutionDisabled.size > 0 || cameraFpsDisabled.size > 0
@@ -415,6 +424,10 @@
     cameraOptions.some((c) => c.id === selectedCamera)
       ? selectedCamera
       : (cameraOptions[0]?.id ?? '')
+  );
+  const cameraModesAvailable = $derived(
+    !cameraSelecting && cameraDevicesLoaded && !cameraDevicesError && !cameraModesError &&
+      cameraModesDeviceId === cameraValue && cameraModes.length > 0
   );
   const micValue = $derived(
     micOptions.some((m) => m.id === selectedMic) ? selectedMic : (micOptions[0]?.id ?? '')
@@ -517,82 +530,118 @@
   }
 
   async function handleCameraSelect(id: string) {
+    const request = ++cameraSelectionRequest;
     selectedCamera = id;
-    updateAudioDevices(undefined, undefined, id);
+    cameraSelecting = true;
+    ++cameraModesRequest;
+    cameraModes = [];
+    cameraModesDeviceId = '';
     cameraNote = null;
-    void refreshCameraModes(id);
+    cameraPrefsNote = null;
     try {
       const applied = await setCameraDevice(id);
-      if (!applied) {
-        void acquirePreview(id);
-        return;
+      if (request !== cameraSelectionRequest) return;
+      if (applied) {
+        if (applied.usedDefaultFallback) cameraNote = 'Camera not found, using default';
+        else if (applied.applied) cameraNote = 'Switched camera';
+        else if (!applied.inRoom) cameraNote = 'Saved — applies when you join a room';
+        else if (applied.error) cameraNote = `Could not switch camera: ${applied.error}`;
+        else cameraNote = 'Saved — applies when you enable the camera';
       }
-      if (applied.usedDefaultFallback) cameraNote = 'Camera not found, using default';
-      else if (applied.applied) cameraNote = 'Switched camera';
-      else if (!applied.inRoom) cameraNote = 'Saved — applies when you join a room';
-      else if (applied.error) cameraNote = `Could not switch camera: ${applied.error}`;
-      else cameraNote = 'Saved — applies when you enable the camera';
+      await refreshCameraModes(id);
     } catch (e) {
+      if (request !== cameraSelectionRequest) return;
       cameraNote = `Could not switch camera: ${e}`;
+    } finally {
+      if (request === cameraSelectionRequest) cameraSelecting = false;
     }
+    if (request !== cameraSelectionRequest) return;
     // The native id space cannot be safely correlated with WebKit's salted
     // deviceId space. The preview therefore remains best-effort/default.
     void acquirePreview(id);
   }
 
+  async function refreshCameraDevices() {
+    try {
+      const devices = await listCameraDevices();
+      if (devices) nativeCameras = devices.map((d) => ({ id: d.id, label: d.name }));
+      cameraDevicesError = null;
+    } catch (e) {
+      cameraDevicesError = String(e);
+    } finally {
+      cameraDevicesLoaded = true;
+    }
+    if (!cameraDevicesError) void refreshCameraModes();
+  }
+
   async function refreshCameraModes(deviceId?: string) {
     if (!hasTauri || isMac()) return;
+    const request = ++cameraModesRequest;
     const id = deviceId ?? cameraValue;
+    cameraModes = [];
+    cameraModesDeviceId = '';
+    cameraModesError = false;
     if (!id) return;
-    if (!cameraPrefsSeeded) {
-      cameraPrefsSeeded = true;
-      const m = session.cameraMode;
-      if (m) {
-        const preset = CAMERA_RESOLUTION_PRESETS.find(
-          (p) => p.width === m.width && p.height === m.height
-        );
-        if (preset) {
-          cameraResolutionId = preset.id;
-          if (CAMERA_FPS_PRESETS.includes(m.frameRate)) cameraFps = m.frameRate;
-        }
-      }
-    }
     try {
-      cameraModes = (await listCameraModes(id)) ?? [];
-      cameraModesError = false;
+      const modes = (await listCameraModes(id)) ?? [];
+      // Both checks matter: a newer query can target the same id, and device
+      // discovery can change the effective fallback without starting a query.
+      if (request !== cameraModesRequest || id !== cameraValue) return;
+      cameraModes = modes;
+      cameraModesDeviceId = id;
+      // The device command persisted its normalized pair atomically. Reading
+      // modes is presentation-only; a late query must never restart capture.
+      const m = session.cameraMode;
+      const preset = m && CAMERA_RESOLUTION_PRESETS.find(
+        (p) => p.width === m.width && p.height === m.height
+      );
+      cameraResolutionId = m
+        ? isLinux() ? `${m.width}x${m.height}` : preset?.id ?? 'auto'
+        : 'auto';
+      if (m) cameraFps = m.frameRate;
     } catch (e) {
-      cameraModes = [];
+      if (request !== cameraModesRequest || id !== cameraValue) return;
       cameraModesError = true;
       console.warn('refreshCameraModes failed', e);
+      return;
     }
-    // A selection this camera can't deliver falls back to Auto — the capture
-    // side would fall back too, so keep the UI honest.
-    const res = CAMERA_RESOLUTION_PRESETS.find((p) => p.id === cameraResolutionId);
-    if (res && res.id !== 'auto') {
-      if (!cameraSupportsResolution(cameraModes, res.width, res.height)) {
-        cameraResolutionId = 'auto';
-        void applyCameraPrefs();
-      } else if (!cameraSupportsFps(cameraModes, res.width, res.height, cameraFps)) {
-        const first = CAMERA_FPS_PRESETS.find((fps) =>
-          cameraSupportsFps(cameraModes, res.width, res.height, fps)
-        );
-        if (first !== undefined) cameraFps = first;
-        void applyCameraPrefs();
-      }
-    }
+  }
+
+  function supportedCameraFrameRates(width: number, height: number): number[] {
+    return isLinux()
+      ? cameraFrameRateOptions(cameraModes, width, height)
+      : CAMERA_FPS_PRESETS.filter((fps) => cameraSupportsFps(cameraModes, width, height, fps));
   }
 
   async function applyCameraPrefs() {
     if (!hasTauri || isMac()) return;
-    const res =
-      CAMERA_RESOLUTION_PRESETS.find((p) => p.id === cameraResolutionId) ??
-      CAMERA_RESOLUTION_PRESETS[0];
+    if (cameraSelecting) return;
+    const request = ++cameraPrefsRequest;
+    const selection = cameraSelectionRequest;
+    let res = cameraResolutions.find((p) => p.id === cameraResolutionId) ?? cameraResolutions[0];
+    if (isLinux() && res.id !== 'auto') {
+      if (!cameraModesAvailable) return;
+      const rates = supportedCameraFrameRates(res.width, res.height);
+      if (rates.length === 0) {
+        cameraResolutionId = 'auto';
+        res = cameraResolutions[0];
+      } else if (!rates.includes(cameraFps)) {
+        cameraFps = rates[0];
+      }
+    }
     cameraPrefsNote = null;
     const width = res.id === 'auto' ? null : res.width;
     const height = res.id === 'auto' ? null : res.height;
     const frameRate = res.id === 'auto' ? null : cameraFps;
+    // Snapshot and persist the submitted pair before another selection can
+    // change menu state while the native command is pending.
+    const mode = width === null || height === null || frameRate === null
+      ? null
+      : { width, height, frameRate };
+    updateCameraMode(mode);
     try {
       const applied = await setCameraPrefs(width, height, frameRate);
+      if (request !== cameraPrefsRequest || selection !== cameraSelectionRequest) return;
       if (applied) {
         if (applied.applied) cameraPrefsNote = 'Switched camera mode';
         else if (!applied.inRoom) cameraPrefsNote = 'Saved — applies when you join a room';
@@ -600,22 +649,21 @@
         else cameraPrefsNote = 'Saved — applies when you enable the camera';
       }
     } catch (e) {
+      if (request !== cameraPrefsRequest || selection !== cameraSelectionRequest) return;
       cameraPrefsNote = `Could not switch camera mode: ${e}`;
     }
-    updateCameraMode(
-      res.id === 'auto' ? null : { width: res.width, height: res.height, frameRate: cameraFps }
-    );
   }
 
   async function handleResolutionSelect(id: string) {
     cameraResolutionId = id;
     if (id !== 'auto') {
-      const res = CAMERA_RESOLUTION_PRESETS.find((p) => p.id === id);
-      if (res && !cameraSupportsFps(cameraModes, res.width, res.height, cameraFps)) {
-        const first = CAMERA_FPS_PRESETS.find((fps) =>
-          cameraSupportsFps(cameraModes, res.width, res.height, fps)
-        );
-        if (first !== undefined) cameraFps = first;
+      const res = cameraResolutions.find((p) => p.id === id);
+      if (res) {
+        const rates = supportedCameraFrameRates(res.width, res.height);
+        if (!rates.includes(cameraFps)) {
+          if (rates.length > 0) cameraFps = rates[0];
+          else cameraResolutionId = 'auto';
+        }
       }
     }
     await applyCameraPrefs();
@@ -971,6 +1019,7 @@
   // fed by the same single camera capture as publication — never a second
   // getUserMedia acquisition from this webview.
   let nativePreview = $state<{ deviceId: string; label: string } | null>(null);
+  let nativePreviewWanted = false;
   // Settings runs in its own window, so a preview here competes with the
   // meeting's camera publish for the same device (on Windows the native
   // capture is a single client; on macOS a second getUserMedia knocked the
@@ -1051,17 +1100,7 @@
 
   $effect(() => {
     if (!hasTauri || cameraDevicesLoaded) return;
-    void (async () => {
-      try {
-        const devices = await listCameraDevices();
-        if (devices) nativeCameras = devices.map((d) => ({ id: d.id, label: d.name }));
-        void refreshCameraModes();
-      } catch (e) {
-        cameraDevicesError = String(e);
-      } finally {
-        cameraDevicesLoaded = true;
-      }
-    })();
+    void refreshCameraDevices();
   });
 
   function releaseStream(stream: MediaStream | null) {
@@ -1087,6 +1126,7 @@
   }
 
   function stopPreview(reason = 'teardown') {
+    nativePreviewWanted = false;
     previewRequestId += 1;
     clearPreviewStream(reason);
     if (nativePreview) {
@@ -1096,27 +1136,31 @@
   }
 
   async function acquirePreview(deviceId: string) {
-    stopPreview('reacquire');
+    // Linux reuses its visible native lease. Closing it before every
+    // selection would tear down the capture just reconciled by the setter.
+    if (hasTauri && isLinux()) {
+      nativePreviewWanted = true;
+      previewRequestId += 1;
+    } else {
+      stopPreview('reacquire');
+    }
     const requestId = previewRequestId;
     acquiredCameraId = deviceId;
     previewError = null;
     if (hasTauri && isLinux()) {
-      // The preview is a native window sharing the real camera owner's one
-      // capture (C02); a meeting camera on means the same device is busy.
-      if (await meetingCameraActive()) {
-        if (requestId !== previewRequestId) return;
-        meetingCameraOn = true;
-        previewError = MEETING_CAMERA_REASON;
-        return;
-      }
-      meetingCameraOn = false;
+      // Linux preview and publication share the native owner's capture.
       try {
         const opened = await invoke<LinuxCameraPreviewOpened>(COMMANDS.linuxCameraPreviewOpen);
         if (requestId !== previewRequestId) {
-          void invoke(COMMANDS.linuxCameraPreviewClose).catch(() => {});
+          // A newer open owns the shared preview; an old completion cannot
+          // close its lease.
+          if (!nativePreviewWanted) {
+            void invoke(COMMANDS.linuxCameraPreviewClose).catch(() => {});
+          }
           return;
         }
         nativePreview = { deviceId: opened.deviceId, label: opened.label };
+        await refreshCameraDevices();
         logPreviewState('acquired', 'native-window');
       } catch (e) {
         if (requestId !== previewRequestId) return;
@@ -1222,11 +1266,13 @@
     }
   }
 
-  // One handler for both native edges. `active` true releases the device
-  // immediately; false re-acquires through `acquirePreview`, which re-reads
-  // the native snapshot -- so a stale or racing "off" while a publish is
-  // still retrying leaves the camera alone.
+  // WebView previews release their separate capture before publication.
+  // Linux's native preview keeps its shared lease across both meeting edges.
   function applyMeetingCameraState(active: boolean) {
+    if (hasTauri && isLinux()) {
+      meetingCameraOn = active;
+      return;
+    }
     if (active) {
       if (meetingCameraOn) return;
       meetingCameraOn = true;
@@ -1545,7 +1591,7 @@
               id="camera-resolution"
               label="Camera resolution"
               value={cameraResolutionId}
-              options={CAMERA_RESOLUTION_PRESETS.map((p) => ({ id: p.id, label: p.label }))}
+              options={cameraResolutions.map((p) => ({ id: p.id, label: p.label }))}
               emptyLabel="No camera"
               disabled={!cameraModesAvailable}
               disabledOptions={cameraResolutionDisabled}
@@ -1559,7 +1605,7 @@
               id="camera-fps"
               label="Camera frame rate"
               value={String(cameraFps)}
-              options={CAMERA_FPS_PRESETS.map((fps) => ({ id: String(fps), label: `${fps} fps` }))}
+              options={cameraFrameRates.map((fps) => ({ id: String(fps), label: `${Number(fps.toPrecision(6))} fps` }))}
               emptyLabel="No camera"
               disabled={!cameraModesAvailable || cameraResolutionId === 'auto'}
               disabledOptions={cameraFpsDisabled}

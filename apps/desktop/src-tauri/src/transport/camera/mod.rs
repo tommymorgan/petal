@@ -57,13 +57,13 @@ pub struct AppliedCameraDevice {
 }
 
 /// A user-chosen camera capture mode (Settings resolution/FPS menus).
-/// `frame_rate` is the integer fps preset (15/30/60); matching against the
-/// camera's native modes rounds 29.97-style rates to the nearest integer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+/// `frame_rate` preserves advertised fractional rates. Windows still selects
+/// the native cadence closest to an integer Settings preset (including 29.97).
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct PreferredCameraMode {
     pub width: u32,
     pub height: u32,
-    pub frame_rate: u32,
+    pub frame_rate: f64,
 }
 
 /// In-memory camera preference mirror. The frontend owns durable persistence;
@@ -718,11 +718,11 @@ where
         .map(|(index, _)| index)
 }
 
-/// Absolute distance between a mode's fps and a target integer fps preset.
+/// Absolute distance between a mode's fps and the requested fps.
 #[cfg(any(target_os = "windows", test))]
-fn format_frame_rate_distance(format: CameraFormatMetadata, target_fps: u32) -> f64 {
+fn format_frame_rate_distance(format: CameraFormatMetadata, target_fps: f64) -> f64 {
     let fps = format.frame_rate_numerator as f64 / format.frame_rate_denominator.max(1) as f64;
-    (fps - target_fps as f64).abs()
+    (fps - target_fps).abs()
 }
 
 /// Stable, deduplicated mode list for the UI: the same (w, h, fps) exposed
@@ -1051,7 +1051,7 @@ mod tests {
         let preferred_60 = PreferredCameraMode {
             width: 1280,
             height: 720,
-            frame_rate: 60,
+            frame_rate: 60.0,
         };
         assert_eq!(
             select_camera_format_index(formats.iter().copied(), Some(preferred_60)).unwrap(),
@@ -1061,7 +1061,7 @@ mod tests {
         let preferred_30 = PreferredCameraMode {
             width: 1280,
             height: 720,
-            frame_rate: 30,
+            frame_rate: 30.0,
         };
         assert_eq!(
             select_camera_format_index(formats.iter().copied(), Some(preferred_30)).unwrap(),
@@ -1083,7 +1083,7 @@ mod tests {
         let preferred = PreferredCameraMode {
             width: 1280,
             height: 720,
-            frame_rate: 30,
+            frame_rate: 30.0,
         };
         assert_eq!(
             select_camera_format_index(formats.iter().copied(), Some(preferred)).unwrap(),
@@ -1107,7 +1107,7 @@ mod tests {
         let preferred = PreferredCameraMode {
             width: 3840,
             height: 2160,
-            frame_rate: 30,
+            frame_rate: 30.0,
         };
         assert_eq!(
             select_camera_format_index(formats.iter().copied(), Some(preferred)).unwrap(),
@@ -1128,7 +1128,7 @@ mod tests {
         let preferred = PreferredCameraMode {
             width: 1280,
             height: 720,
-            frame_rate: 30,
+            frame_rate: 30.0,
         };
         assert_eq!(
             select_camera_format_index(formats.iter().copied(), Some(preferred)).unwrap(),

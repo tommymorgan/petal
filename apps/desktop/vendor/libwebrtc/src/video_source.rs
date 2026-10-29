@@ -130,6 +130,11 @@ pub mod native {
         pub fn video_resolution(&self) -> VideoResolution {
             self.handle.video_resolution()
         }
+
+        /// Update source dimensions after adopting a new capture mode.
+        pub fn set_video_resolution(&self, resolution: VideoResolution) {
+            self.handle.set_video_resolution(resolution);
+        }
     }
 }
 

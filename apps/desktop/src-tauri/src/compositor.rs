@@ -3536,9 +3536,10 @@ fn control_source_dimensions_script(source_width: u32, source_height: u32) -> St
     )
 }
 
-fn remote_control_active_script(active: bool) -> String {
+fn remote_control_active_script(active: bool, request_id: Option<&str>) -> String {
+    let request_id = serde_json::to_string(&request_id).expect("request identity is JSON serializable");
     format!(
-        "window.__petalPendingRemoteControlActive = {active}; window.__petalRemoteControlSetActive?.({active});"
+        "window.__petalPendingRemoteControlRequestId = {request_id}; window.__petalPendingRemoteControlActive = {active}; window.__petalRemoteControlSetActive?.({active}, {request_id});"
     )
 }
 
@@ -5519,7 +5520,9 @@ pub(crate) fn set_remote_control_active(
         }
     });
     let active_json = if active { "true" } else { "false" };
-    if let Err(e) = control.eval(remote_control_active_script(active)) {
+    let request_id = crate::remote_control_core::remote_control_engine().controller_request_id(window_id, &key.owner_identity);
+    let request_id_json = serde_json::to_string(&request_id).map_err(|error| error.to_string())?;
+    if let Err(e) = control.eval(remote_control_active_script(active, request_id.as_deref())) {
         log::warn!(
             "compositor: failed to eval remote-control active update for window {window_id} overlay '{}': {e}",
             control.label()
@@ -5527,7 +5530,7 @@ pub(crate) fn set_remote_control_active(
     }
     if let Some(panel) = app.get_webview_window(&panel_label_for_key(&key)) {
         if let Err(e) = panel.eval(format!(
-            "window.__petalRemoteControlHeaderActive && window.__petalRemoteControlHeaderActive({active_json})"
+            "window.__petalRemoteControlHeaderActive && window.__petalRemoteControlHeaderActive({active_json}, {request_id_json})"
         )) {
             log::warn!(
                 "compositor: failed to eval remote-control header active update for window {window_id} panel '{}': {e}",
@@ -10215,12 +10218,12 @@ mod tests {
     #[test]
     fn control_active_updates_survive_page_startup_races() {
         assert_eq!(
-            remote_control_active_script(true),
-            "window.__petalPendingRemoteControlActive = true; window.__petalRemoteControlSetActive?.(true);"
+            remote_control_active_script(true, Some("attempt")),
+            "window.__petalPendingRemoteControlRequestId = \"attempt\"; window.__petalPendingRemoteControlActive = true; window.__petalRemoteControlSetActive?.(true, \"attempt\");"
         );
         assert_eq!(
-            remote_control_active_script(false),
-            "window.__petalPendingRemoteControlActive = false; window.__petalRemoteControlSetActive?.(false);"
+            remote_control_active_script(false, None),
+            "window.__petalPendingRemoteControlRequestId = null; window.__petalPendingRemoteControlActive = false; window.__petalRemoteControlSetActive?.(false, null);"
         );
     }
 

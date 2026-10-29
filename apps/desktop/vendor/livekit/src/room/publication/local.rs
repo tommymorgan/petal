@@ -18,7 +18,11 @@ use livekit_protocol::{self as proto, AudioTrackFeature, PacketTrailerFeature};
 use parking_lot::Mutex;
 
 use super::TrackPublicationInner;
-use crate::{e2ee::EncryptionType, options::TrackPublishOptions, prelude::*};
+use crate::{
+    e2ee::EncryptionType,
+    options::{TrackPublishOptions, VideoEncoding},
+    prelude::*,
+};
 
 #[derive(Default)]
 struct LocalInfo {
@@ -76,6 +80,26 @@ impl LocalTrackPublication {
 
     pub fn publish_options(&self) -> TrackPublishOptions {
         self.local.publish_options.lock().clone()
+    }
+
+    /// Change the existing single video encoding without replacing the track.
+    /// Retain successful limits for the SDK's automatic reconnect republish.
+    pub fn set_single_video_encoding(&self, encoding: VideoEncoding) -> RoomResult<()> {
+        let mut options = self.local.publish_options.lock();
+        let Some(LocalTrack::Video(track)) = self.track() else {
+            return Err(RoomError::Internal("publication has no local video track".into()));
+        };
+        let mut parameters = track.publishing_layer_parameters();
+        if parameters.len() != 1 {
+            return Err(RoomError::Internal(
+                "single video encoding update requires exactly one sender encoding".into(),
+            ));
+        }
+        parameters[0].max_bitrate = encoding.max_bitrate;
+        parameters[0].max_framerate = encoding.max_framerate;
+        track.set_publishing_layer_parameters(&parameters)?;
+        options.video_encoding = Some(encoding);
+        Ok(())
     }
 
     pub fn mute(&self) {

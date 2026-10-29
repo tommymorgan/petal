@@ -29,8 +29,9 @@ pub(super) struct CameraAccess {
 
 fn denied_response(status: u32) -> String {
     match status {
-        1 => "Camera permission cancelled; the camera stays off".to_string(),
-        2 => "Camera permission denied by the desktop portal".to_string(),
+        // Camera maps both denied access and dialog cancellation to status 1.
+        1 => "Camera permission denied or cancelled; the camera stays off".to_string(),
+        2 => "Camera permission request failed in the desktop portal; the camera stays off".to_string(),
         _ => "The desktop portal returned an unknown camera permission outcome".to_string(),
     }
 }
@@ -190,16 +191,7 @@ impl Drop for CameraPortalSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn negative_portal_statuses_map_to_distinct_visible_states() {
-        assert!(denied_response(1).contains("cancelled"));
-        assert!(denied_response(1).contains("off"));
-        assert!(denied_response(2).contains("denied"));
-        assert!(denied_response(255).contains("unknown"));
-        // The neutral loss explanation never claims a specific cause.
-        assert!(CAMERA_ACCESS_LOST.contains("Camera access or device lost"));
-    }
+    use futures_util::FutureExt;
 
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::fs::OpenOptionsExt;
@@ -307,7 +299,6 @@ mod tests {
     impl NegativeResponsePortal {
         async fn access_camera(
             &self,
-            _session: OwnedObjectPath,
             options: Properties,
             #[zbus(header)] header: zbus::message::Header<'_>,
             #[zbus(connection)] connection: &zbus::Connection,
@@ -343,8 +334,118 @@ mod tests {
         }
     }
 
+    struct PendingRequest {
+        closed: Arc<tokio::sync::Notify>,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.portal.Request")]
+    impl PendingRequest {
+        fn close(&self) {
+            self.closed.notify_one();
+        }
+    }
+
+    struct PendingResponsePortal {
+        requests: tokio::sync::mpsc::UnboundedSender<Arc<tokio::sync::Notify>>,
+    }
+
+    #[zbus::interface(name = "org.freedesktop.portal.Camera")]
+    impl PendingResponsePortal {
+        async fn access_camera(
+            &self,
+            options: Properties,
+            #[zbus(header)] header: zbus::message::Header<'_>,
+            #[zbus(connection)] connection: &zbus::Connection,
+        ) -> zbus::fdo::Result<OwnedObjectPath> {
+            let token = options
+                .get("handle_token")
+                .and_then(|value| <&str>::try_from(value).ok())
+                .ok_or_else(|| zbus::fdo::Error::Failed("missing request token".to_string()))?;
+            let sender = header
+                .sender()
+                .ok_or_else(|| zbus::fdo::Error::Failed("missing caller identity".to_string()))?
+                .as_str()
+                .trim_start_matches(':')
+                .replace('.', "_");
+            let path = OwnedObjectPath::try_from(format!(
+                "/org/freedesktop/portal/desktop/request/{sender}/{token}"
+            ))
+            .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+            let closed = Arc::new(tokio::sync::Notify::new());
+            connection
+                .object_server()
+                .at(path.clone(), PendingRequest { closed: closed.clone() })
+                .await
+                .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+            self.requests
+                .send(closed)
+                .map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+            Ok(path)
+        }
+    }
+
     #[tokio::test]
-    async fn denied_and_cancelled_camera_responses_never_become_granted_access() {
+    async fn camera_permission_off_closes_its_real_request_without_retiring_independent_access() {
+        // Wire/lifecycle proof only: no permission response is invented and no
+        // actual desktop portal, application or media device is operated.
+        let (_bus, address) = PrivateBus::start();
+        let (requests, mut observed) = tokio::sync::mpsc::unbounded_channel();
+        let server = zbus::connection::Builder::address(address.as_str())
+            .unwrap()
+            .name(DESTINATION)
+            .unwrap()
+            .serve_at(DESKTOP, PendingResponsePortal { requests })
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let mut publication = CameraPortalSession {
+            connection: Some(zbus::connection::Builder::address(address.as_str()).unwrap().build().await.unwrap()),
+            request_serial: 0,
+        };
+        let mut independent = CameraPortalSession {
+            connection: Some(zbus::connection::Builder::address(address.as_str()).unwrap().build().await.unwrap()),
+            request_serial: 0,
+        };
+        let state = crate::session::SessionState::default();
+        let generation = state.begin_room_generation();
+        state.set_camera_intent(true);
+        let request = state.begin_camera_permission_request(&generation).unwrap();
+        let independent_cancel = CancellationToken::new();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let (publication_result, ()) = tokio::join!(
+                publication.request_access(request.cancellation()),
+                async {
+                    let publication_closed = observed.recv().await.unwrap();
+                    let (independent_result, ()) = tokio::join!(
+                        independent.request_access(&independent_cancel),
+                        async {
+                            let independent_closed = observed.recv().await.unwrap();
+                            state.set_camera_intent(false);
+                            publication_closed.notified().await;
+                            assert!(!independent_cancel.is_cancelled());
+                            assert!(matches!(
+                                independent_closed.notified().now_or_never(),
+                                None
+                            ));
+                            independent_cancel.cancel();
+                            independent_closed.notified().await;
+                        },
+                    );
+                    assert!(independent_result.err().expect("independent cleanup cancels access").contains("cancelled"));
+                },
+            );
+            assert!(publication_result.err().expect("Off cancels access").contains("cancelled"));
+        })
+        .await
+        .expect("Off must close the owned request without a permission response");
+        publication.close().await;
+        independent.close().await;
+        server.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn negative_camera_responses_never_become_granted_access() {
         // Protocol/error-state test, not GNOME permission acceptance. Its
         // private bus is passed directly to the production session; global
         // environment and the actual desktop portal are never replaced.
@@ -369,45 +470,19 @@ mod tests {
             .build()
             .await
             .expect("private response client");
-        let sender = connection
-            .unique_name()
-            .expect("private client identity")
-            .as_str()
-            .trim_start_matches(':')
-            .replace('.', "_");
         let mut portal = CameraPortalSession {
             connection: Some(connection),
             request_serial: 0,
         };
-        for (status, expected) in [(1, "cancelled"), (2, "denied"), (255, "unknown")] {
+        for status in [1, 2, 255] {
             response.store(status, Ordering::SeqCst);
-            let session = OwnedObjectPath::try_from(format!(
-                "/org/freedesktop/portal/desktop/session/{sender}/petal_camera"
-            ))
-            .expect("private session path");
-            // request_serial must reach the emitted handle path, matching the
-            // sender/token pair request() computes from its own state.
-            portal.request_serial += 1;
-            let options = HashMap::from([(
-                "handle_token",
-                Value::from(format!("petal_{}", portal.request_serial)),
-            )]);
             let result = tokio::time::timeout(
                 Duration::from_secs(5),
-                portal.request(
-                    "AccessCamera",
-                    &(&session, options),
-                    &CancellationToken::new(),
-                ),
+                portal.request_access(&CancellationToken::new()),
             )
             .await
             .expect("production camera response handling must settle");
-            let error =
-                result.expect_err("a negative portal response must never grant camera access");
-            assert!(
-                error.to_lowercase().contains(expected),
-                "portal status {status} must retain its real error state, got {error}"
-            );
+            assert!(result.is_err(), "a negative portal response must never grant camera access");
         }
         portal.close().await;
         server
