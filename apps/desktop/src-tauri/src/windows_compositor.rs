@@ -598,7 +598,9 @@ impl Compositor {
             return;
         }
         window.canonical_pixel_size = Some(size);
-        window_geometry().lock_unpoisoned().insert(key.clone(), size);
+        window_geometry()
+            .lock_unpoisoned()
+            .insert(key.clone(), size);
         let _ = compositor_handle().tx.try_send(Command::ResizeWebview {
             key: key.clone(),
             width: size.0,
@@ -1423,10 +1425,7 @@ pub(crate) struct RemoteControlTargetMetadata {
     pub(crate) share_instance_id: String,
 }
 
-pub(crate) fn remote_control_window_exists(
-    window_id: u32,
-    owner_identity: Option<&str>,
-) -> bool {
+pub(crate) fn remote_control_window_exists(window_id: u32, owner_identity: Option<&str>) -> bool {
     snapshot().lock_unpoisoned().iter().any(|window| {
         window.window_id == window_id
             && owner_identity.is_none_or(|owner| owner == window.owner_identity)
@@ -2259,10 +2258,7 @@ pub(crate) async fn push_frame(
         },
     );
 }
-pub(crate) async fn update_window_canonical_source_size(
-    key: WindowKey,
-    size: (u32, u32),
-) {
+pub(crate) async fn update_window_canonical_source_size(key: WindowKey, size: (u32, u32)) {
     send_command_async(Command::UpdateCanonicalSourceSize { key, size }).await;
 }
 

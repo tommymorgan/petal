@@ -1187,17 +1187,21 @@ mod tests {
             updater["endpoints"],
             serde_json::json!(["https://app.petal.live/api/updater"])
         );
-        assert!(updater["pubkey"]
-            .as_str()
-            .is_some_and(|key| key.len() > 40));
+        assert!(updater["pubkey"].as_str().is_some_and(|key| key.len() > 40));
     }
 
     #[test]
     fn endpoint_detection_rejects_missing_empty_and_blank() {
         assert!(!updater_endpoints_configured_in(None));
-        assert!(!updater_endpoints_configured_in(Some(&serde_json::json!({}))));
-        assert!(!updater_endpoints_configured_in(Some(&serde_json::json!({"endpoints": []}))));
-        assert!(!updater_endpoints_configured_in(Some(&serde_json::json!({"endpoints": [" "]}))));
+        assert!(!updater_endpoints_configured_in(Some(&serde_json::json!(
+            {}
+        ))));
+        assert!(!updater_endpoints_configured_in(Some(
+            &serde_json::json!({"endpoints": []})
+        )));
+        assert!(!updater_endpoints_configured_in(Some(
+            &serde_json::json!({"endpoints": [" "]})
+        )));
         assert!(updater_endpoints_configured_in(Some(
             &serde_json::json!({"endpoints": ["https://example.com/api/updater"]})
         )));
@@ -1735,7 +1739,10 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         assert!(message.contains("this Mac"), "{message}");
         // The underlying detail survives for petal.log.
-        assert!(message.len() > INCOMPATIBLE_UPDATE_MARKER.len() + 10, "{message}");
+        assert!(
+            message.len() > INCOMPATIBLE_UPDATE_MARKER.len() + 10,
+            "{message}"
+        );
     }
 
     /// The marker must not be stamped onto a SUCCESS, or the frontend would
@@ -1762,8 +1769,10 @@ mod tests {
     #[test]
     fn the_marker_is_the_documented_frontend_contract() {
         assert_eq!(INCOMPATIBLE_UPDATE_MARKER, "update is incompatible with");
-        assert!(incompatible_update_message("update archive is not a Windows executable")
-            .starts_with(INCOMPATIBLE_UPDATE_MARKER));
+        assert!(
+            incompatible_update_message("update archive is not a Windows executable")
+                .starts_with(INCOMPATIBLE_UPDATE_MARKER)
+        );
     }
 
     /// ...while a genuinely wrong-arch macOS tarball is still refused, so the

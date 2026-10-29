@@ -363,11 +363,9 @@ pub(crate) async fn start_camera_publish_with_device(
     preferred_device_id: Option<String>,
     preferred_mode: Option<PreferredCameraMode>,
 ) -> Result<CameraPublishOutcome, String> {
-    #[cfg(target_os = "linux")]
-    state
-        .cameras
-        .prepare(app, preferred_device_id.as_deref(), preferred_mode)
-        .await?;
+    // The room gate runs BEFORE any native access: a camera start outside a
+    // room must reject with no portal permission request or device probe
+    // (the X03 no-activation invariant).
     let (room_connection, identity, generation) = {
         if !state.camera_intent() {
             return Err("camera start cancelled".to_string());
@@ -381,6 +379,11 @@ pub(crate) async fn start_camera_publish_with_device(
         };
         (room_connection, identity, state.current_room_generation())
     };
+    #[cfg(target_os = "linux")]
+    state
+        .cameras
+        .prepare(app, preferred_device_id.as_deref(), preferred_mode)
+        .await?;
     log::info!(
         "session: start_camera_publish begin (identity '{}')",
         crate::logging::log_safe_quoted(&identity)

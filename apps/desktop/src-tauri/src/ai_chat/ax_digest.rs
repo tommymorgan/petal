@@ -482,14 +482,7 @@ fn collect_nodes(
     let mut child_ancestors = ancestors.to_vec();
     child_ancestors.push(node_path_label(node));
     for child in &node.children {
-        collect_nodes(
-            child,
-            depth + 1,
-            &child_ancestors,
-            masked,
-            next_order,
-            flat,
-        );
+        collect_nodes(child, depth + 1, &child_ancestors, masked, next_order, flat);
     }
     score
 }
@@ -1324,7 +1317,8 @@ mod native {
                 WindowMatch::SameFrameFallback if frame_match.is_none() => {
                     frame_match = Some(window);
                 }
-                WindowMatch::ExactIdentity | WindowMatch::SameFrameFallback | WindowMatch::None => {}
+                WindowMatch::ExactIdentity | WindowMatch::SameFrameFallback | WindowMatch::None => {
+                }
             }
         }
         // AXWindowNumber is the stable CG window identity. Some applications
@@ -1550,6 +1544,7 @@ mod native_windows {
     use std::thread;
     use std::time::{Duration, Instant};
     use tokio::sync::mpsc;
+    use windows::core::Interface;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -1567,7 +1562,6 @@ mod native_windows {
         UIA_TreeControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
         UIA_WindowControlTypeId, UIA_CONTROLTYPE_ID,
     };
-    use windows::core::Interface;
 
     /// Walk budget shared down the recursion (mirrors the macOS `WalkContext`).
     struct WalkContext {
@@ -1729,11 +1723,7 @@ mod native_windows {
         let title = unsafe { element.CurrentName() }.ok().map(|b| b.to_string());
         // Defense in depth: a secure field's text never enters this process
         // at all (same read-time redaction as the macOS walk).
-        let value = if masked {
-            None
-        } else {
-            current_value(element)
-        };
+        let value = if masked { None } else { current_value(element) };
         let rect = unsafe { element.CurrentBoundingRectangle() }.ok();
         let origin = rect.map(|r| (r.left as f64, r.top as f64));
         let (width, height) = rect
@@ -1820,10 +1810,22 @@ mod native_windows {
 
         #[test]
         fn common_control_types_map_to_friendly_names() {
-            assert_eq!(control_type_name(UIA_ButtonControlTypeId), Some("Button".into()));
-            assert_eq!(control_type_name(UIA_EditControlTypeId), Some("Edit".into()));
-            assert_eq!(control_type_name(UIA_TextControlTypeId), Some("Text".into()));
-            assert_eq!(control_type_name(UIA_ListItemControlTypeId), Some("ListItem".into()));
+            assert_eq!(
+                control_type_name(UIA_ButtonControlTypeId),
+                Some("Button".into())
+            );
+            assert_eq!(
+                control_type_name(UIA_EditControlTypeId),
+                Some("Edit".into())
+            );
+            assert_eq!(
+                control_type_name(UIA_TextControlTypeId),
+                Some("Text".into())
+            );
+            assert_eq!(
+                control_type_name(UIA_ListItemControlTypeId),
+                Some("ListItem".into())
+            );
             // An unmapped id falls back to None -> the walker emits UIAUnknown.
             assert_eq!(control_type_name(UIA_CONTROLTYPE_ID(99999)), None);
         }
@@ -1859,9 +1861,7 @@ mod native_windows {
             assert!(serialized
                 .text
                 .contains("Edit \"Text editor\" value=\"hello world\""));
-            assert!(serialized
-                .text
-                .contains("Window \"Untitled - Notepad\""));
+            assert!(serialized.text.contains("Window \"Untitled - Notepad\""));
             assert!(serialized.indexes.contains_key(&0));
         }
     }
@@ -1927,10 +1927,7 @@ mod tests {
             window_match(Some(42), false, 42),
             WindowMatch::ExactIdentity
         );
-        assert_eq!(
-            window_match(None, true, 42),
-            WindowMatch::SameFrameFallback
-        );
+        assert_eq!(window_match(None, true, 42), WindowMatch::SameFrameFallback);
     }
 
     fn container(children: Vec<DigestNode>) -> DigestNode {
@@ -2045,11 +2042,7 @@ mod tests {
         // identical filter (caught by adversarial review after the first
         // pass of this fix escaped title but left role untouched).
         let hostile_role = "AXButton\u{202E}deraeD"; // opens an override, never closes it
-        let root = container(vec![DigestNode::leaf(
-            hostile_role,
-            Some("Delete"),
-            None,
-        )]);
+        let root = container(vec![DigestNode::leaf(hostile_role, Some("Delete"), None)]);
         let output = serialize_digest(4, &root);
 
         assert!(
@@ -2301,7 +2294,9 @@ mod tests {
         leaf.width = 80.0;
         leaf.height = 24.0;
         let output = serialize_digest(1, &container(vec![leaf]));
-        let rect = output.indexes[&0].rect.expect("indexed element needs a rect");
+        let rect = output.indexes[&0]
+            .rect
+            .expect("indexed element needs a rect");
         assert_eq!(rect.center(), (80.0, 72.0));
         assert!(rect.is_usable());
     }

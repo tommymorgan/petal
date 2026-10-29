@@ -40,8 +40,6 @@ export function linuxMeetingLimitation(
 ): string | undefined {
   if (!hasTauriBridge() || !isLinux(ua)) return undefined;
   switch (action) {
-    case 'camera':
-      return 'Camera publication is unsupported on Linux';
     case 'region':
       return 'Region sharing is unsupported on Linux';
     case 'remotecontrol':

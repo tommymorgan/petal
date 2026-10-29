@@ -483,7 +483,11 @@ impl SessionState {
     /// the session mutex across the LiveKit round trip. None when not joined.
     pub(crate) fn joined_room_for_rename(
         &self,
-    ) -> Option<(Arc<livekit::Room>, Arc<crate::presence::PresenceState>, String)> {
+    ) -> Option<(
+        Arc<livekit::Room>,
+        Arc<crate::presence::PresenceState>,
+        String,
+    )> {
         let guard = self.inner.lock_unpoisoned();
         guard.joined.as_ref().map(|j| {
             (

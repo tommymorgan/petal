@@ -98,7 +98,8 @@ fn apply_speaking(
         // answers still shows as speaking -- that residual case needs real
         // per-track audio-level detection to close, which this does not
         // attempt.)
-        let speaking = speaking_identities.contains(&participant.identity) && !participant.mic_muted;
+        let speaking =
+            speaking_identities.contains(&participant.identity) && !participant.mic_muted;
         changed |= participant.speaking != speaking;
         participant.speaking = speaking;
     }
@@ -419,7 +420,10 @@ mod tests {
 
     #[test]
     fn apply_name_renames_only_the_matching_identity() {
-        let mut roster = vec![participant("me", "Max", true), participant("u2", "Ada", false)];
+        let mut roster = vec![
+            participant("me", "Max", true),
+            participant("u2", "Ada", false),
+        ];
         assert!(apply_name(&mut roster, "me", "Maxine"));
         assert_eq!(roster[0].name, "Maxine");
         assert_eq!(roster[1].name, "Ada");

@@ -156,10 +156,9 @@ fn push_remote_state_to_overlay(_app: &AppHandle, _state: &RemoteState) {}
 
 #[cfg(target_os = "macos")]
 fn push_remote_transcript_to_overlay(app: &AppHandle, delta: &RemoteTranscriptDelta) {
-    let Some(label) = crate::compositor::ai_chat_overlay_label_for_window(
-        delta.window_id,
-        &delta.owner_identity,
-    ) else {
+    let Some(label) =
+        crate::compositor::ai_chat_overlay_label_for_window(delta.window_id, &delta.owner_identity)
+    else {
         return;
     };
     let Some(win) = app.get_webview_window(&label) else {
@@ -270,7 +269,13 @@ pub fn publish_state(
 }
 
 /// Broadcast a transcript delta so every participant sees the same conversation.
-pub fn publish_transcript(app: &AppHandle, window_id: u32, role: TranscriptRole, text: &str, final_: bool) {
+pub fn publish_transcript(
+    app: &AppHandle,
+    window_id: u32,
+    role: TranscriptRole,
+    text: &str,
+    final_: bool,
+) {
     let Some((connection, identity)) = control_channel(app) else {
         return;
     };
@@ -298,7 +303,11 @@ fn control_channel(app: &AppHandle) -> Option<(Arc<RoomConnection>, String)> {
 
 /// Subscribe to the topic for one room generation. Registered alongside the
 /// other per-room receivers in `session::room`.
-pub(crate) fn start_receiver_for_room(app: &AppHandle, room: Arc<Room>, generation: RoomGeneration) {
+pub(crate) fn start_receiver_for_room(
+    app: &AppHandle,
+    room: Arc<Room>,
+    generation: RoomGeneration,
+) {
     let mut events = room.subscribe();
     // A fresh room means a fresh floor and no remembered remote sessions. Reset
     // BEFORE the safety timer starts, or its first tick could measure a
@@ -407,8 +416,13 @@ impl LocalSession {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Dispatch {
     Ignore(Ignored),
-    Start { window_id: u32, requester: String },
-    Stop { window_id: u32 },
+    Start {
+        window_id: u32,
+        requester: String,
+    },
+    Stop {
+        window_id: u32,
+    },
     /// The floor is now the sender's: open their audio path and tell the room.
     OpenTurn {
         window_id: u32,
@@ -416,9 +430,15 @@ pub(crate) enum Dispatch {
         source: PttSource,
     },
     /// Somebody else holds the floor; the asker is told who.
-    FloorBusy { window_id: u32, holder: String },
+    FloorBusy {
+        window_id: u32,
+        holder: String,
+    },
     /// The sender held the floor and gave it up.
-    CloseTurn { window_id: u32, speaker: String },
+    CloseTurn {
+        window_id: u32,
+        speaker: String,
+    },
     /// A typed turn to send into the session, attributed to the sender.
     /// Distinct from `OpenTurn`/`CloseTurn`: text never touches the floor.
     SendText {
@@ -996,8 +1016,9 @@ mod tests {
 
         note_floor_audio("bob");
         assert_eq!(
-            tick_coordination(Instant::now() + super::super::room::SILENCE_TIMEOUT
-                - Duration::from_millis(1))
+            tick_coordination(
+                Instant::now() + super::super::room::SILENCE_TIMEOUT - Duration::from_millis(1)
+            )
             .expired_floor,
             None
         );
@@ -1093,7 +1114,11 @@ mod tests {
             |_| panic!("nothing should expire"),
         )
         .await;
-        assert_eq!(ticks.load(Ordering::SeqCst), 4, "loop did not stop promptly");
+        assert_eq!(
+            ticks.load(Ordering::SeqCst),
+            4,
+            "loop did not stop promptly"
+        );
     }
 
     // ---- the dispatch harness ------------------------------------------------
@@ -1506,7 +1531,13 @@ mod tests {
             body: live_state("dave"),
         };
 
-        let dispatch = decide(&from_carol, "carol", Some(OWNER), &LocalSession::default(), now);
+        let dispatch = decide(
+            &from_carol,
+            "carol",
+            Some(OWNER),
+            &LocalSession::default(),
+            now,
+        );
         assert_eq!(
             dispatch,
             Dispatch::RecordedRemoteState(RemoteState {
@@ -1519,10 +1550,13 @@ mod tests {
                 error: None,
             })
         );
-        assert_eq!(remote_session(&carols_window), Some(match dispatch {
-            Dispatch::RecordedRemoteState(state) => state,
-            other => panic!("{other:?}"),
-        }));
+        assert_eq!(
+            remote_session(&carols_window),
+            Some(match dispatch {
+                Dispatch::RecordedRemoteState(state) => state,
+                other => panic!("{other:?}"),
+            })
+        );
 
         // Our own heartbeat coming back to us is not news.
         assert_eq!(
@@ -1586,7 +1620,13 @@ mod tests {
             body: live_state("mallory"),
         };
         assert_eq!(
-            decide(&forged, "mallory", Some(OWNER), &LocalSession::default(), now),
+            decide(
+                &forged,
+                "mallory",
+                Some(OWNER),
+                &LocalSession::default(),
+                now
+            ),
             Dispatch::Ignore(Ignored::Unauthorized(wire::Rejection::NotWindowOwner))
         );
         assert_eq!(

@@ -12,9 +12,9 @@
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
-    DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DWM_BLURBEHIND,
-    DWM_WINDOW_CORNER_PREFERENCE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
-    DWMWCP_ROUND, DWM_BB_BLURREGION, DWM_BB_ENABLE,
+    DwmEnableBlurBehindWindow, DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_DONOTROUND, DWMWCP_ROUND, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
+    DWM_WINDOW_CORNER_PREFERENCE,
 };
 use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject};
 
@@ -78,8 +78,14 @@ pub(crate) fn make_native_rounded(window: &tauri::WebviewWindow) {
         .map_err(|e| format!("no hwnd: {e}"))
         .and_then(|hwnd| set_window_native_mode(hwnd, true));
     match result {
-        Ok(()) => log::info!("petal: native corner radius applied to '{}'", window.label()),
-        Err(e) => log::warn!("petal: failed to apply native corner radius to '{}': {e}", window.label()),
+        Ok(()) => log::info!(
+            "petal: native corner radius applied to '{}'",
+            window.label()
+        ),
+        Err(e) => log::warn!(
+            "petal: failed to apply native corner radius to '{}': {e}",
+            window.label()
+        ),
     }
 }
 
@@ -93,6 +99,8 @@ pub fn set_main_pill_mode(app: tauri::AppHandle, active: bool) -> Result<(), Str
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "set_main_pill_mode: main window not found".to_string())?;
-    let hwnd = window.hwnd().map_err(|e| format!("set_main_pill_mode: no hwnd: {e}"))?;
+    let hwnd = window
+        .hwnd()
+        .map_err(|e| format!("set_main_pill_mode: no hwnd: {e}"))?;
     set_window_native_mode(hwnd, !active)
 }

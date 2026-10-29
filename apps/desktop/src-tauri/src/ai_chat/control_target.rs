@@ -162,7 +162,10 @@ mod tests {
     fn an_unreadable_secure_input_state_is_unknown_not_inactive() {
         assert_eq!(secure_input_from_reading(None), SecureInput::Unknown);
         assert_eq!(secure_input_from_reading(Some(true)), SecureInput::Active);
-        assert_eq!(secure_input_from_reading(Some(false)), SecureInput::Inactive);
+        assert_eq!(
+            secure_input_from_reading(Some(false)),
+            SecureInput::Inactive
+        );
     }
 
     #[test]

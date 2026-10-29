@@ -127,7 +127,9 @@ impl SharePriorityStore {
                     // back to the side/offset pair every shipped build wrote
                     // instead of guessing a model and relocating the tab.
                     let position = json_f64(file.hover_tab_perimeter_position.as_ref())
-                        .filter(|_| file.hover_tab_perimeter_version == Some(HOVER_TAB_POSITION_VERSION))
+                        .filter(|_| {
+                            file.hover_tab_perimeter_version == Some(HOVER_TAB_POSITION_VERSION)
+                        })
                         .map(normalize_hover_tab_position)
                         .unwrap_or_else(|| {
                             hover_tab_position_for_side_offset(file.hover_tab_side, legacy_offset)

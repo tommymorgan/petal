@@ -521,8 +521,7 @@ mod tests {
         assert_eq!(v["clientContent"]["turns"][0]["role"], "user");
         assert_eq!(v["clientContent"]["turnComplete"], true);
         assert_eq!(
-            v["clientContent"]["turns"][0]["parts"][0]["text"],
-            "what does this button do?",
+            v["clientContent"]["turns"][0]["parts"][0]["text"], "what does this button do?",
             "unlike the greeting, a typed message is sent verbatim -- no \
              control-message framing wraps the participant's own words"
         );
@@ -747,7 +746,10 @@ mod tests {
             .as_array()
             .unwrap();
         // Bounded text.
-        assert_eq!(decls[0]["parameters"]["properties"]["text"]["maxLength"], 2000);
+        assert_eq!(
+            decls[0]["parameters"]["properties"]["text"]["maxLength"],
+            2000
+        );
         // A click must cite the snapshot generation it came from, so a stale
         // index is detectable rather than silently mis-resolved.
         assert_eq!(
@@ -761,7 +763,10 @@ mod tests {
         assert_eq!(keys.len(), 7);
         assert!(!keys.iter().any(|k| k.as_str().unwrap().contains("Cmd")));
         // Bounded scrolling.
-        assert_eq!(decls[3]["parameters"]["properties"]["amount"]["maximum"], 100);
+        assert_eq!(
+            decls[3]["parameters"]["properties"]["amount"]["maximum"],
+            100
+        );
     }
 
     #[test]
@@ -786,12 +791,19 @@ mod tests {
             {"id":"fc_3","name":"window_type","args":{"text":"third"}}
         ]}}"#;
         let events = parse_server_message(raw);
-        assert_eq!(events.len(), 1, "a single envelope was split into concurrent events");
+        assert_eq!(
+            events.len(),
+            1,
+            "a single envelope was split into concurrent events"
+        );
         let ServerEvent::ToolCallBatch(calls) = &events[0] else {
             panic!("expected one ToolCallBatch, got {:?}", events[0]);
         };
         assert_eq!(
-            calls.iter().map(|call| call.id.as_str()).collect::<Vec<_>>(),
+            calls
+                .iter()
+                .map(|call| call.id.as_str())
+                .collect::<Vec<_>>(),
             ["fc_1", "fc_2", "fc_3"]
         );
     }

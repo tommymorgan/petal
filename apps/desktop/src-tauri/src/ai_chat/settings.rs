@@ -304,10 +304,8 @@ mod tests {
     #[test]
     fn missing_or_corrupt_file_falls_back_to_safe_defaults() {
         // A corrupt settings file must not enable the feature.
-        let dir = std::env::temp_dir().join(format!(
-            "petal-ai-chat-corrupt-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("petal-ai-chat-corrupt-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(SETTINGS_FILE);

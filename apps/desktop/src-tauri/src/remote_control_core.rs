@@ -2236,13 +2236,31 @@ mod tests {
     #[test]
     fn control_mode_defaults_and_wire_parsing() {
         // Default is cursor-preserving.
-        assert_eq!(RemoteControlMode::default(), RemoteControlMode::CursorPreserving);
-        assert_eq!(RemoteControlMode::from_wire_option(None), RemoteControlMode::CursorPreserving);
-        assert_eq!(RemoteControlMode::from_wire("cursorPreserving"), RemoteControlMode::CursorPreserving);
-        assert_eq!(RemoteControlMode::from_wire("fullControl"), RemoteControlMode::FullControl);
+        assert_eq!(
+            RemoteControlMode::default(),
+            RemoteControlMode::CursorPreserving
+        );
+        assert_eq!(
+            RemoteControlMode::from_wire_option(None),
+            RemoteControlMode::CursorPreserving
+        );
+        assert_eq!(
+            RemoteControlMode::from_wire("cursorPreserving"),
+            RemoteControlMode::CursorPreserving
+        );
+        assert_eq!(
+            RemoteControlMode::from_wire("fullControl"),
+            RemoteControlMode::FullControl
+        );
         // Unknown/None never guesses a stronger mode.
-        assert_eq!(RemoteControlMode::from_wire("banana"), RemoteControlMode::CursorPreserving);
-        assert_eq!(RemoteControlMode::from_wire(""), RemoteControlMode::CursorPreserving);
+        assert_eq!(
+            RemoteControlMode::from_wire("banana"),
+            RemoteControlMode::CursorPreserving
+        );
+        assert_eq!(
+            RemoteControlMode::from_wire(""),
+            RemoteControlMode::CursorPreserving
+        );
         assert!(matches!(
             RemoteControlMode::from_wire("full-control"),
             RemoteControlMode::FullControl

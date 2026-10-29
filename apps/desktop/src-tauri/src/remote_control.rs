@@ -5156,7 +5156,8 @@ fn apply_clipboard_paste(
     let Some(_clipboard_lock) = remote_clipboard::try_clipboard_operation_lock() else {
         return;
     };
-    if !generation.is_current() || !host_clipboard_target_is_current(state.inner(), metadata.window_id)
+    if !generation.is_current()
+        || !host_clipboard_target_is_current(state.inner(), metadata.window_id)
     {
         return;
     }
@@ -5172,7 +5173,10 @@ fn apply_clipboard_paste(
     let Ok(text) = String::from_utf8(body) else {
         return;
     };
-    if remote_clipboard::system_clipboard().write_text(&text).is_err() {
+    if remote_clipboard::system_clipboard()
+        .write_text(&text)
+        .is_err()
+    {
         return;
     }
     // The clipboard write is deliberately before target invocation. If the
@@ -5184,7 +5188,11 @@ fn apply_clipboard_paste(
         metadata.window_id,
         &message.controller_id,
         "paste",
-        if replay_succeeded { "applied" } else { "replayFailed" },
+        if replay_succeeded {
+            "applied"
+        } else {
+            "replayFailed"
+        },
     );
     #[cfg(not(feature = "cockpit-privileged"))]
     let _ = replay_succeeded;
@@ -5232,12 +5240,9 @@ fn dispatch_clipboard_copy_request(
     request: RemoteClipboardCopyRequest,
     generation: &RoomGeneration,
 ) {
-    let Some(message) = clipboard_copy_message_if_authorized(
-        state,
-        local_identity,
-        trusted_sender,
-        &request,
-    ) else {
+    let Some(message) =
+        clipboard_copy_message_if_authorized(state, local_identity, trusted_sender, &request)
+    else {
         return;
     };
     let app = app.clone();
@@ -5385,7 +5390,8 @@ pub fn start_receiver_for_room(
                     if topic != remote_clipboard::REMOTE_CLIPBOARD_TEXT_TOPIC {
                         continue;
                     }
-                    let Some(reader) = reader.take_if(|info| clipboard_stream_metadata(info).is_some())
+                    let Some(reader) =
+                        reader.take_if(|info| clipboard_stream_metadata(info).is_some())
                     else {
                         continue;
                     };
@@ -5641,11 +5647,9 @@ async fn controller_clipboard_target(
 ) -> Result<(RemoteControlTargetKind, Option<String>), String> {
     #[cfg(target_os = "macos")]
     {
-        let target = crate::compositor::remote_control_target_metadata(
-            window_id,
-            Some(owner_identity),
-        )
-        .ok_or_else(|| format!("remote window {window_id} is not open"))?;
+        let target =
+            crate::compositor::remote_control_target_metadata(window_id, Some(owner_identity))
+                .ok_or_else(|| format!("remote window {window_id} is not open"))?;
         if target.target_kind != RemoteControlTargetKind::Window {
             return Err("remote clipboard requires an application-window share".to_string());
         }
@@ -5657,16 +5661,15 @@ async fn controller_clipboard_target(
             .await
             .into_iter()
             .find(|window| {
-                window.window_id == window_id && window.owner_identity == owner_identity && !window.hidden
+                window.window_id == window_id
+                    && window.owner_identity == owner_identity
+                    && !window.hidden
             })
             .ok_or_else(|| format!("remote window {window_id} is not open"))?;
         if target.source_kind != crate::transport::publisher::SharedSourceKind::Window {
             return Err("remote clipboard requires an application-window share".to_string());
         }
-        return Ok((
-            RemoteControlTargetKind::Window,
-            target.share_instance_id,
-        ));
+        return Ok((RemoteControlTargetKind::Window, target.share_instance_id));
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -5754,9 +5757,13 @@ fn clipboard_replay_message(
     }
     let task_frame = match fresh_control_frame(state, message.window_id) {
         SharedWindowScreenStatus::OnScreen(frame) => frame,
-        SharedWindowScreenStatus::OffScreen => return Err("target window is off screen".to_string()),
+        SharedWindowScreenStatus::OffScreen => {
+            return Err("target window is off screen".to_string())
+        }
         SharedWindowScreenStatus::Closed => return Err("target window is unavailable".to_string()),
-        SharedWindowScreenStatus::NotShared => return Err("target window is no longer shared".to_string()),
+        SharedWindowScreenStatus::NotShared => {
+            return Err("target window is no longer shared".to_string())
+        }
     };
     let target_pid = resolved_replay_target_pid(
         active_display_share(state, message.window_id),
@@ -5835,10 +5842,9 @@ fn prepare_macos_controller_request_for_capable_host(
     // shares intentionally do not, so this preserves the legacy Mac-host
     // request shape while allowing Mac -> Windows activation to use the
     // envelope Windows requires.
-    let Some(target) = crate::compositor::remote_control_target_metadata(
-        window_id,
-        Some(owner_identity),
-    ) else {
+    let Some(target) =
+        crate::compositor::remote_control_target_metadata(window_id, Some(owner_identity))
+    else {
         return;
     };
     let Some(share_instance_id) = target.share_instance_id else {
@@ -6104,11 +6110,7 @@ pub async fn remote_control_set_active(
             .as_deref()
             .unwrap_or(message.target_user_id.as_str())
             .to_owned();
-        prepare_macos_controller_request_for_capable_host(
-            &mut message,
-            window_id,
-            &request_owner,
-        );
+        prepare_macos_controller_request_for_capable_host(&mut message, window_id, &request_owner);
     }
     log::info!(
         "remote-control: {} requested for window {window_id}: {}",
@@ -7027,7 +7029,9 @@ pub(crate) mod input {
 
         fn write_text(&self, text: &str) {
             if let Err(error) = crate::remote_clipboard::system_clipboard().write_text(text) {
-                log::warn!("remote-control: native clipboard write failed during AX Cmd+C: {error}");
+                log::warn!(
+                    "remote-control: native clipboard write failed during AX Cmd+C: {error}"
+                );
             }
         }
     }
@@ -15079,13 +15083,17 @@ pub(crate) mod input {
                 0,
             );
 
-            assert!(replay_with_backends(&down, frame, Some(1234), &sink, &ax, &sl, &pb, &tap).is_ok());
+            assert!(
+                replay_with_backends(&down, frame, Some(1234), &sink, &ax, &sl, &pb, &tap).is_ok()
+            );
             assert!(
                 take_release_failure_reports().is_empty(),
                 "a press is not a release; reporting one would make the signature meaningless"
             );
 
-            assert!(replay_with_backends(&up, frame, Some(1234), &sink, &ax, &sl, &pb, &tap).is_err());
+            assert!(
+                replay_with_backends(&up, frame, Some(1234), &sink, &ax, &sl, &pb, &tap).is_err()
+            );
             assert_eq!(
                 take_release_failure_reports(),
                 vec![(
@@ -15121,7 +15129,10 @@ pub(crate) mod input {
             );
             let _cancelled = super::super::InjectionCancelledForTests::set();
             let result = replay_with_backends(&up, frame, Some(1234), &sink, &ax, &sl, &pb, &tap);
-            assert!(result.is_ok(), "the cancelled path reports success by design");
+            assert!(
+                result.is_ok(),
+                "the cancelled path reports success by design"
+            );
             assert_eq!(
                 take_release_failure_reports(),
                 vec![(
@@ -19166,7 +19177,10 @@ mod tests {
             let mut fields = object.keys().cloned().collect::<Vec<_>>();
             fields.sort();
             assert_eq!(fields, entry.fields, "{} fields", entry.name);
-            assert_eq!(object.get("kind").and_then(|value| value.as_str()), Some("copy"));
+            assert_eq!(
+                object.get("kind").and_then(|value| value.as_str()),
+                Some("copy")
+            );
             assert!(remote_clipboard::operation_id_is_valid(
                 object
                     .get("operationId")
@@ -19181,7 +19195,10 @@ mod tests {
         }
         let streams = fixture.remote_clipboard_streams;
         assert_eq!(streams.topic, remote_clipboard::REMOTE_CLIPBOARD_TEXT_TOPIC);
-        assert_eq!(streams.mime_type, remote_clipboard::REMOTE_CLIPBOARD_TEXT_MIME);
+        assert_eq!(
+            streams.mime_type,
+            remote_clipboard::REMOTE_CLIPBOARD_TEXT_MIME
+        );
         assert_eq!(streams.directions, ["copyResponse", "paste"]);
         assert_eq!(
             streams.attributes,
@@ -19198,14 +19215,20 @@ mod tests {
         assert_eq!(streams.reliability, "reliable");
         assert_eq!(streams.destination, "oneAuthenticatedParticipant");
         assert_eq!(
-            streams.success_signals.get("copyResponse").map(String::as_str),
+            streams
+                .success_signals
+                .get("copyResponse")
+                .map(String::as_str),
             Some("targetedTextStreamOnly")
         );
         assert_eq!(
             streams.success_signals.get("paste").map(String::as_str),
             Some("none")
         );
-        assert!(streams.text_rules.iter().any(|rule| rule == "rejectOversize"));
+        assert!(streams
+            .text_rules
+            .iter()
+            .any(|rule| rule == "rejectOversize"));
     }
 
     fn clipboard_stream_info(
@@ -19894,12 +19917,7 @@ mod tests {
             ),
             ("key", "reliable", "host", "authenticatedController"),
             ("text", "reliable", "host", "authenticatedController"),
-            (
-                "copyRequest",
-                "reliable",
-                "host",
-                "authenticatedController",
-            ),
+            ("copyRequest", "reliable", "host", "authenticatedController"),
             (
                 "clipboardTextStream",
                 "reliable",

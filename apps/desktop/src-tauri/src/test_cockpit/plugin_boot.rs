@@ -181,7 +181,9 @@ pub fn csp_modification_disabled(app: &AppHandle) -> serde_json::Value {
 /// build embeds nothing at all -- both are rig conditions with a specific fix,
 /// not evidence that plugins are broken.
 pub fn probe_asset_present(app: &AppHandle) -> bool {
-    app.asset_resolver().get(PROBE_ASSET_KEY.to_string()).is_some()
+    app.asset_resolver()
+        .get(PROBE_ASSET_KEY.to_string())
+        .is_some()
 }
 
 pub fn open_probe_window(app: &AppHandle) -> Result<(), String> {

@@ -687,7 +687,10 @@ mod tests {
 
         let mut multiline = message;
         multiline.text = Some("one\ntwo".into());
-        assert_eq!(multiline.validate(), Err("draw text annotation must be single-line"));
+        assert_eq!(
+            multiline.validate(),
+            Err("draw text annotation must be single-line")
+        );
     }
 
     #[test]

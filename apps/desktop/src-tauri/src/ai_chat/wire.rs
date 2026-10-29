@@ -69,7 +69,11 @@ pub struct WindowKey {
 /// implementation, not by these tests — which is why the tests below now
 /// assert the literal JSON KEY NAMES rather than just round-tripping.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Body {
     /// Ask the window's owner to start a session.
     StartRequest,
@@ -289,10 +293,7 @@ mod tests {
     #[test]
     fn ptt_requires_an_authenticated_sender() {
         assert_eq!(authorize(&msg(Body::PttStart), "peer-bob"), Ok(()));
-        assert_eq!(
-            authorize(&msg(Body::PttStart), ""),
-            Err(Rejection::NotSelf)
-        );
+        assert_eq!(authorize(&msg(Body::PttStart), ""), Err(Rejection::NotSelf));
     }
 
     #[test]
@@ -311,7 +312,10 @@ mod tests {
     fn a_future_version_is_rejected_outright() {
         let mut m = msg(Body::StartRequest);
         m.v = VERSION + 1;
-        assert_eq!(authorize(&m, "owner-alice"), Err(Rejection::UnsupportedVersion));
+        assert_eq!(
+            authorize(&m, "owner-alice"),
+            Err(Rejection::UnsupportedVersion)
+        );
     }
 
     #[test]

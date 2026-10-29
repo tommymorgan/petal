@@ -540,14 +540,18 @@ pub fn startup_demand_decision(window_id: u32, inputs: StartupDemandInputs) -> (
     // Only sample occlusion once a real frame has landed. Short-circuiting
     // here also keeps the hysteresis counter itself unpolluted, so the first
     // post-reveal sample starts from zero instead of arriving pre-tripped.
-    let occluded =
-        inputs.first_frame_seen && occlusion_is_debounced(window_id, inputs.appkit_reports_occluded);
+    let occluded = inputs.first_frame_seen
+        && occlusion_is_debounced(window_id, inputs.appkit_reports_occluded);
     // "No geometry yet" is not "geometry unavailable" (#590). Before the first
     // frame the panel has no meaningful size, and `demand_pixel_dimensions`
     // has already substituted MAX_DEMAND_DIMENSION_PX for exactly that case --
     // don't then throw it away by calling the window invisible.
     let visible = inputs.geometry_visible || !inputs.first_frame_seen;
-    requested_dimensions(visible && !occluded, inputs.pixel_width, inputs.pixel_height)
+    requested_dimensions(
+        visible && !occluded,
+        inputs.pixel_width,
+        inputs.pixel_height,
+    )
 }
 
 fn publish_message(app: &AppHandle, message: ViewerDemandMessage) {
@@ -750,7 +754,10 @@ mod tests {
         for _ in 0..5 {
             startup_demand_decision(90_300, hidden_placeholder());
         }
-        assert_eq!(startup_demand_decision(90_300, revealed(true)), (1920, 1080));
+        assert_eq!(
+            startup_demand_decision(90_300, revealed(true)),
+            (1920, 1080)
+        );
         assert_eq!(
             startup_demand_decision(90_300, revealed(true)),
             (LOWEST_LAYER_WIDTH, LOWEST_LAYER_HEIGHT)
@@ -761,7 +768,10 @@ mod tests {
     fn genuine_occlusion_after_first_frame_still_downgrades() {
         // The occlusion saving is not disabled, only deferred until it can
         // mean something: a window the user can actually see.
-        assert_eq!(startup_demand_decision(90_301, revealed(true)), (1920, 1080));
+        assert_eq!(
+            startup_demand_decision(90_301, revealed(true)),
+            (1920, 1080)
+        );
         assert_eq!(
             startup_demand_decision(90_301, revealed(true)),
             (LOWEST_LAYER_WIDTH, LOWEST_LAYER_HEIGHT)

@@ -37,11 +37,11 @@ pub mod camera;
 // The native room's single subscription-ownership seam: audio + shared-window
 // video in, remote cameras out (the hidden gallery bridge owns those).
 pub(crate) mod native_subscription;
-pub mod publisher;
 /// #169: two-peer-connection tests for the vendored publisher transport's
 /// rollback-and-re-offer recovery. Test-only.
 #[cfg(test)]
 mod negotiation_recovery;
+pub mod publisher;
 // Receiver-side authoritative publication reconciliation (#298).
 pub mod reconcile;
 pub mod room_directory;

@@ -416,7 +416,9 @@ mod tests {
     fn takeover_test_lock() -> TakeoverTestGuard {
         static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
         TakeoverTestGuard {
-            _lock: LOCK.get_or_init(|| std::sync::Mutex::new(())).lock_unpoisoned(),
+            _lock: LOCK
+                .get_or_init(|| std::sync::Mutex::new(()))
+                .lock_unpoisoned(),
         }
     }
 

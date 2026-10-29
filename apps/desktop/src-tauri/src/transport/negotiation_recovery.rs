@@ -70,19 +70,26 @@ fn with_simulcast_recv(answer: &str, rids: &[&str]) -> String {
 }
 
 async fn sfu_answer(sfu: &PeerConnection, offer: SessionDescription) -> String {
-    sfu.set_remote_description(offer).await.expect("sfu takes the offer");
+    sfu.set_remote_description(offer)
+        .await
+        .expect("sfu takes the offer");
     let answer = sfu
         .create_answer(AnswerOptions::default())
         .await
         .expect("sfu answers");
     let text = answer.to_string();
-    sfu.set_local_description(answer).await.expect("sfu applies its answer");
+    sfu.set_local_description(answer)
+        .await
+        .expect("sfu applies its answer");
     text
 }
 
 fn transport_with_offer_channel(
     publisher: &PeerConnection,
-) -> (PeerTransport, tokio::sync::mpsc::UnboundedReceiver<SessionDescription>) {
+) -> (
+    PeerTransport,
+    tokio::sync::mpsc::UnboundedReceiver<SessionDescription>,
+) {
     let transport = PeerTransport::new(publisher.clone(), SignalTarget::Publisher, false);
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
     transport.on_offer(Some(Box::new(move |offer| {
@@ -118,8 +125,9 @@ async fn rejected_answer_on_stopped_sender_is_rolled_back_and_renegotiated() {
     );
     let answer1 = sfu_answer(&sfu, offer1).await;
     // The SFU keeps q and f and prunes h -- dynacast's shape in the field.
-    let pruned = SessionDescription::parse(&with_simulcast_recv(&answer1, &["q", "f"]), SdpType::Answer)
-        .expect("pruned simulcast answer parses");
+    let pruned =
+        SessionDescription::parse(&with_simulcast_recv(&answer1, &["q", "f"]), SdpType::Answer)
+            .expect("pruned simulcast answer parses");
 
     // The pre-#183 trigger: the sender is stopped before its answer lands.
     transceiver.stop().expect("stop the sender");
@@ -142,7 +150,10 @@ async fn rejected_answer_on_stopped_sender_is_rolled_back_and_renegotiated() {
         .await
         .expect("recovery must not hang")
         .expect("recovery must not surface the rejection");
-    assert_eq!(outcome, RemoteDescriptionOutcome::RolledBackAndRenegotiating);
+    assert_eq!(
+        outcome,
+        RemoteDescriptionOutcome::RolledBackAndRenegotiating
+    );
     let offer2 = tokio::time::timeout(STEP, offers.recv())
         .await
         .expect("replacement offer within the step budget")

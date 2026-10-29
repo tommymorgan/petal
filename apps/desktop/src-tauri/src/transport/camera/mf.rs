@@ -15,13 +15,12 @@ use windows::core::{implement, Error as WindowsError, Interface, Ref, HRESULT};
 use windows::Win32::Foundation::{HMODULE, RPC_E_CHANGED_MODE};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION, ID3D11Device,
+    D3D11CreateDevice, ID3D11Device, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
 };
 use windows::Win32::Media::MediaFoundation::{
     IMF2DBuffer, IMFActivate, IMFAttributes, IMFDXGIDeviceManager, IMFMediaEvent, IMFMediaSource,
     IMFSample, IMFSourceReader, IMFSourceReaderCallback, IMFSourceReaderCallback_Impl,
-    IMFSourceReaderEx,
-    MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType,
+    IMFSourceReaderEx, MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateMediaType,
     MFCreateSourceReaderFromMediaSource, MFEnumDeviceSources, MFMediaType_Video, MFShutdown,
     MFStartup, MFVideoFormat_NV12, MFSTARTUP_FULL, MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
     MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE, MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_GUID,
@@ -36,12 +35,12 @@ use windows::Win32::System::Com::{
     CoInitializeEx, CoTaskMemFree, CoUninitialize, COINIT_MULTITHREADED,
 };
 
-use crate::sync_ext::MutexExt;
 use super::{
-    CameraBackend, CameraDeviceInfo, CameraError, CameraFrame, CameraMode, CameraStatus,
-    CameraStatusSource, FrameLayout, PreferredCameraMode, dedupe_and_sort_modes,
-    frame_from_packed_nv12, operation_error, select_camera_format_index, CameraFormatMetadata,
+    dedupe_and_sort_modes, frame_from_packed_nv12, operation_error, select_camera_format_index,
+    CameraBackend, CameraDeviceInfo, CameraError, CameraFormatMetadata, CameraFrame, CameraMode,
+    CameraStatus, CameraStatusSource, FrameLayout, PreferredCameraMode,
 };
+use crate::sync_ext::MutexExt;
 
 const CALLBACK_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -96,8 +95,7 @@ impl Drop for MediaFoundationRuntime {
 pub(super) fn list_devices() -> Result<Vec<CameraDeviceInfo>, CameraError> {
     let _apartment = ComApartment::enter()?;
     let _runtime = MediaFoundationRuntime::start()?;
-    enumerate_cameras()
-        .map(|cameras| cameras.into_iter().map(|camera| camera.info).collect())
+    enumerate_cameras().map(|cameras| cameras.into_iter().map(|camera| camera.info).collect())
 }
 
 /// Enumerate the concrete (width, height, frame-rate) modes the selected
@@ -105,7 +103,9 @@ pub(super) fn list_devices() -> Result<Vec<CameraDeviceInfo>, CameraError> {
 /// with a SYNCHRONOUS reader — types are read, no samples, so the camera light
 /// never comes on. Feeds the Settings menus: only presets the camera can
 /// actually deliver are enabled (the shared `list_modes` provider).
-pub(super) fn list_modes(preferred_device_id: Option<&str>) -> Result<Vec<CameraMode>, CameraError> {
+pub(super) fn list_modes(
+    preferred_device_id: Option<&str>,
+) -> Result<Vec<CameraMode>, CameraError> {
     let _apartment = ComApartment::enter()?;
     let _runtime = MediaFoundationRuntime::start()?;
     let mut cameras = enumerate_cameras()?;
@@ -737,11 +737,11 @@ fn configure_nv12_reader(
         candidates.push((media_type, metadata));
     }
 
-    let selected_index = select_camera_format_index(
-        candidates.iter().map(|(_, metadata)| *metadata),
-        preferred,
-    )
-    .ok_or_else(|| CameraError::Operation("camera exposes no usable video media type".into()))?;
+    let selected_index =
+        select_camera_format_index(candidates.iter().map(|(_, metadata)| *metadata), preferred)
+            .ok_or_else(|| {
+                CameraError::Operation("camera exposes no usable video media type".into())
+            })?;
     let (native_type, native_format) = candidates.swap_remove(selected_index);
     let native_layout = FrameLayout::new(native_format.width, native_format.height)?;
     // Pin the exact native media type the selection chose. Without this the
@@ -924,7 +924,12 @@ impl CameraCapture {
                 if let Err(error) = unsafe { activation.ShutdownObject() } {
                     log::debug!("camera: armed activation shutdown failed: {error}");
                 }
-                let retry = open_reader_attempt(&fallback_selected.activation, &callback, false, preferred_mode);
+                let retry = open_reader_attempt(
+                    &fallback_selected.activation,
+                    &callback,
+                    false,
+                    preferred_mode,
+                );
                 match retry {
                     Ok(parts) => (parts.0, parts.1, parts.2, fallback_selected.activation),
                     Err(software_error) => {
@@ -982,7 +987,10 @@ impl CameraCapture {
             activation: Some(activation),
             runtime: Some(runtime),
             dimensions: (layout.width, layout.height),
-            frame_rate: (configured_format.frame_rate_numerator, configured_format.frame_rate_denominator),
+            frame_rate: (
+                configured_format.frame_rate_numerator,
+                configured_format.frame_rate_denominator,
+            ),
             device_id,
             used_default_fallback,
         })
@@ -1090,8 +1098,8 @@ mod tests {
     #[ignore = "probes MF for AV1 encoder/decoder MFTs on this machine (Windows + MF + COM required)"]
     fn probe_av1_mfts() {
         use windows::Win32::Media::MediaFoundation::{
-            MFTEnumEx, MFT_REGISTER_TYPE_INFO, MFT_CATEGORY_VIDEO_DECODER,
-            MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG, MFMediaType_Video, MFVideoFormat_AV1,
+            MFMediaType_Video, MFTEnumEx, MFVideoFormat_AV1, MFT_CATEGORY_VIDEO_DECODER,
+            MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG, MFT_REGISTER_TYPE_INFO,
         };
         use windows::Win32::System::Com::CoTaskMemFree;
         let _apartment = ComApartment::enter().expect("com");

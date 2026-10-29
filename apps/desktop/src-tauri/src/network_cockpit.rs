@@ -60,7 +60,9 @@ pub async fn open_network_cockpit_window(app: AppHandle) -> Result<(), String> {
     // destroyed on close and rebuilt on open, so an unpositioned rebuild
     // creeps ~1 inch per open on Windows until the cascade wraps. Pin the
     // same deterministic position (centered on the main window's monitor).
-    if let Some((x, y)) = crate::window_picker::centered_secondary_window_position(&app, 720.0, 680.0) {
+    if let Some((x, y)) =
+        crate::window_picker::centered_secondary_window_position(&app, 720.0, 680.0)
+    {
         let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
     }
 

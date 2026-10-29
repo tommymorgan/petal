@@ -112,7 +112,10 @@ pub fn classify_mint_status(status: u16) -> EndReason {
 /// callers".
 pub fn classify_close_reason(reason: &str) -> EndReason {
     let r = reason.to_lowercase();
-    if r.contains("credit") || r.contains("prepayment") || r.contains("quota") || r.contains("billing")
+    if r.contains("credit")
+        || r.contains("prepayment")
+        || r.contains("quota")
+        || r.contains("billing")
     {
         return EndReason::Quota;
     }
@@ -264,7 +267,10 @@ mod tests {
             ),
             EndReason::MintFailed
         );
-        assert_eq!(classify_close_reason("something else entirely"), EndReason::Error);
+        assert_eq!(
+            classify_close_reason("something else entirely"),
+            EndReason::Error
+        );
     }
 
     #[test]

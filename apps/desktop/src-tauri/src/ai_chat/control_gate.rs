@@ -33,7 +33,7 @@
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::ax_digest::DigestIndex;
-use super::control_policy::{Action, GrantScope, ScrollDirection, SafeKey, Standing};
+use super::control_policy::{Action, GrantScope, SafeKey, ScrollDirection, Standing};
 
 /// Environment variable that arms window control. Anything other than exactly
 /// `1` leaves it off — a typo must not enable it.
@@ -127,7 +127,11 @@ pub fn audit_line(tool: &str, detail: &ActionDetail, ok: bool, code: &str) -> St
 
 /// Role + title, which is as much as the digest retains about an element.
 pub fn describe_element(index: &DigestIndex) -> String {
-    match index.title.as_deref().filter(|title| !title.trim().is_empty()) {
+    match index
+        .title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty())
+    {
         Some(title) => format!("{} \u{201c}{title}\u{201d}", index.role),
         None => index.role.clone(),
     }
@@ -218,10 +222,9 @@ pub fn apply_approval(
     if state.standing == Standing::Refused {
         return AnswerOutcome::Stale;
     }
-    let matches = state
-        .pending
-        .as_ref()
-        .is_some_and(|pending| pending.session_id == session_id && pending.request_id == request_id);
+    let matches = state.pending.as_ref().is_some_and(|pending| {
+        pending.session_id == session_id && pending.request_id == request_id
+    });
     if !matches {
         return AnswerOutcome::Stale;
     }
@@ -367,7 +370,14 @@ mod tests {
     fn the_master_switch_is_off_unless_it_is_exactly_one() {
         assert!(control_enabled_for(Some("1")));
         assert!(control_enabled_for(Some(" 1 ")));
-        for off in [None, Some(""), Some("0"), Some("true"), Some("yes"), Some("11")] {
+        for off in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("yes"),
+            Some("11"),
+        ] {
             assert!(!control_enabled_for(off), "{off:?} must not arm control");
         }
     }
@@ -421,8 +431,14 @@ mod tests {
             apply_approval(&mut state, 5, "fc_old", GrantScope::Once),
             AnswerOutcome::Stale
         );
-        assert_eq!(authorization(&state, 5, "fc_new"), Authorization::NotGranted);
-        assert_eq!(authorization(&state, 5, "fc_old"), Authorization::NotGranted);
+        assert_eq!(
+            authorization(&state, 5, "fc_new"),
+            Authorization::NotGranted
+        );
+        assert_eq!(
+            authorization(&state, 5, "fc_old"),
+            Authorization::NotGranted
+        );
         // The pending request survives an answer that did not match it.
         assert!(state.pending.is_some());
     }
@@ -498,7 +514,10 @@ mod tests {
             },
             Some(&element),
         );
-        assert_eq!(click.element.as_deref(), Some("AXButton \u{201c}Send\u{201d}"));
+        assert_eq!(
+            click.element.as_deref(),
+            Some("AXButton \u{201c}Send\u{201d}")
+        );
 
         // An unresolvable element leaves the field empty rather than inventing
         // a description — the caller refuses such a call outright.
@@ -550,7 +569,10 @@ mod tests {
             assert_eq!(state.standing, Standing::None);
             assert!(state.granted_once.is_none());
             assert!(state.pending.is_none());
-            assert_eq!(authorization(state, first, "fc_1"), Authorization::NotGranted);
+            assert_eq!(
+                authorization(state, first, "fc_1"),
+                Authorization::NotGranted
+            );
         });
         end_session();
     }

@@ -108,7 +108,11 @@ fn record_declined_if_camera(kind: TrackKind, name: &str, sid: &str) -> bool {
 /// Every camera publication the native room has observed and declined, oldest
 /// first. Read by the Test Cockpit; never by media code.
 pub(crate) fn declined_camera_publications() -> Vec<DeclinedCameraPublication> {
-    declined_cameras().lock_unpoisoned().iter().cloned().collect()
+    declined_cameras()
+        .lock_unpoisoned()
+        .iter()
+        .cloned()
+        .collect()
 }
 
 fn admit(publication: &RemoteTrackPublication) {
@@ -167,17 +171,35 @@ mod tests {
     /// registry stays bounded.
     #[test]
     fn declined_camera_publications_are_recorded_once_per_sid_and_bounded() {
-        assert!(record_declined_if_camera(TrackKind::Video, "petal-camera-alice", "TR_cam_a"));
-        assert!(record_declined_if_camera(TrackKind::Video, "petal-camera-alice", "TR_cam_a"));
-        assert!(!record_declined_if_camera(TrackKind::Video, "petal-window-", "TR_bad_window"));
-        assert!(!record_declined_if_camera(TrackKind::Audio, "petal-camera-alice", "TR_audio"));
+        assert!(record_declined_if_camera(
+            TrackKind::Video,
+            "petal-camera-alice",
+            "TR_cam_a"
+        ));
+        assert!(record_declined_if_camera(
+            TrackKind::Video,
+            "petal-camera-alice",
+            "TR_cam_a"
+        ));
+        assert!(!record_declined_if_camera(
+            TrackKind::Video,
+            "petal-window-",
+            "TR_bad_window"
+        ));
+        assert!(!record_declined_if_camera(
+            TrackKind::Audio,
+            "petal-camera-alice",
+            "TR_audio"
+        ));
         let recorded = declined_camera_publications();
         assert_eq!(
             recorded.iter().filter(|e| e.sid == "TR_cam_a").count(),
             1,
             "the snapshot and the buffered event both reach admit(); one record"
         );
-        assert!(recorded.iter().all(|e| e.name.starts_with(CAMERA_TRACK_PREFIX)));
+        assert!(recorded
+            .iter()
+            .all(|e| e.name.starts_with(CAMERA_TRACK_PREFIX)));
 
         for i in 0..(DECLINED_CAMERA_CAPACITY + 8) {
             record_declined_if_camera(

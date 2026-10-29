@@ -13,9 +13,9 @@ use std::{
     time::Instant,
 };
 
-use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 #[cfg(feature = "cockpit-privileged")]
 use tauri::WebviewWindow;
+use tauri::{AppHandle, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
 pub const TEST_PATTERN_DEV_LABEL: &str = "dev-test-pattern";
 pub const TEST_PATTERN_STATUS_LABEL: &str = "dev-test-pattern-cockpit-status";
@@ -61,7 +61,9 @@ fn liveness_state() -> &'static Mutex<TestPatternLivenessState> {
 /// never satisfy a later capture attempt.
 #[cfg(feature = "cockpit-privileged")]
 pub(crate) fn arm_test_pattern_liveness() -> u64 {
-    let mut state = liveness_state().lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut state = liveness_state()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     arm_liveness_state(&mut state)
 }
 
@@ -101,7 +103,9 @@ fn record_liveness_counter(
 
 #[cfg(feature = "cockpit-privileged")]
 pub(crate) fn test_pattern_liveness_snapshot() -> TestPatternLivenessSnapshot {
-    let state = liveness_state().lock().unwrap_or_else(|poison| poison.into_inner());
+    let state = liveness_state()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let counter_delta = state
         .first_counter
         .zip(state.last_counter)
@@ -112,7 +116,9 @@ pub(crate) fn test_pattern_liveness_snapshot() -> TestPatternLivenessSnapshot {
         advancing_reports: state.advancing_reports,
         counter_delta,
         report_sequence: state.report_sequence,
-        fresh: state.last_reported_at.is_some_and(|at| at.elapsed().as_secs_f32() < 2.0),
+        fresh: state
+            .last_reported_at
+            .is_some_and(|at| at.elapsed().as_secs_f32() < 2.0),
     }
 }
 
@@ -121,7 +127,9 @@ pub(crate) fn test_pattern_liveness_snapshot() -> TestPatternLivenessSnapshot {
 #[cfg(feature = "cockpit-privileged")]
 #[tauri::command]
 pub fn report_test_pattern_frame(window: WebviewWindow, counter: u64) -> Result<(), String> {
-    let mut state = liveness_state().lock().unwrap_or_else(|poison| poison.into_inner());
+    let mut state = liveness_state()
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     record_liveness_counter(&mut state, window.label(), counter)
 }
 
@@ -369,7 +377,8 @@ mod tests {
 
     #[cfg(feature = "cockpit-privileged")]
     use super::{
-        arm_liveness_state, record_liveness_counter, TestPatternLivenessState, TEST_PATTERN_DEV_LABEL,
+        arm_liveness_state, record_liveness_counter, TestPatternLivenessState,
+        TEST_PATTERN_DEV_LABEL,
     };
 
     #[cfg(feature = "cockpit-privileged")]

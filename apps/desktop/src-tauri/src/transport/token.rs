@@ -397,11 +397,20 @@ mod tests {
         let value = serde_json::to_value(&request).unwrap();
         assert_eq!(value["accessCode"], fixture["accessCode"]);
         assert_eq!(value["room"], fixture["room"]);
-        assert!(value.get("access_code").is_none(), "backend contract is camelCase");
-
-        let without = BackendTokenRequest { access_code: None, ..request };
         assert!(
-            serde_json::to_value(&without).unwrap().get("accessCode").is_none(),
+            value.get("access_code").is_none(),
+            "backend contract is camelCase"
+        );
+
+        let without = BackendTokenRequest {
+            access_code: None,
+            ..request
+        };
+        assert!(
+            serde_json::to_value(&without)
+                .unwrap()
+                .get("accessCode")
+                .is_none(),
             "absent access code is omitted, not sent as null"
         );
     }

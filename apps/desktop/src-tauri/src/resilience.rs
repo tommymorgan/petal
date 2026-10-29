@@ -2019,7 +2019,10 @@ mod tests {
 
         handle_display_reconfiguration(&context, &displays).await;
 
-        assert_eq!(context.existence_queries.lock_unpoisoned().as_slice(), [4242]);
+        assert_eq!(
+            context.existence_queries.lock_unpoisoned().as_slice(),
+            [4242]
+        );
         assert_eq!(
             context.stopped_sources.lock_unpoisoned().as_slice(),
             [4242],

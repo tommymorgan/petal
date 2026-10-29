@@ -27,7 +27,10 @@ impl PooledFrameData {
 
     #[cfg(target_os = "linux")]
     pub(crate) fn with_pool(bytes: Vec<u8>, pool: CaptureBufferPool) -> Self {
-        Self { bytes, pool: Some(pool) }
+        Self {
+            bytes,
+            pool: Some(pool),
+        }
     }
 }
 

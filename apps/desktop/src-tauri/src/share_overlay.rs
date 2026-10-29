@@ -435,14 +435,17 @@ fn plan_click_capture_clear(
             })
         })
         .collect::<Vec<_>>();
-    planned.extend(reg.retired.iter().filter(|h| h.draw_active).map(|handle| {
-        ClickCaptureClear {
-            overlay_id: None,
-            label: handle.label.clone(),
-            window_id: handle.window_id,
-            reason: ClickCaptureClearReason::Retired,
-        }
-    }));
+    planned.extend(
+        reg.retired
+            .iter()
+            .filter(|h| h.draw_active)
+            .map(|handle| ClickCaptureClear {
+                overlay_id: None,
+                label: handle.label.clone(),
+                window_id: handle.window_id,
+                reason: ClickCaptureClearReason::Retired,
+            }),
+    );
     planned.sort_by(|a, b| a.label.cmp(&b.label));
     planned
 }
@@ -506,8 +509,9 @@ pub(crate) fn enforce_click_through_without_publication(app: &AppHandle) {
         })
         .collect::<std::collections::HashSet<_>>();
     drop(session);
-    let planned =
-        with_registry(|reg| plan_click_capture_clear(reg, &|window_id| published.contains(&window_id)));
+    let planned = with_registry(|reg| {
+        plan_click_capture_clear(reg, &|window_id| published.contains(&window_id))
+    });
     if planned.is_empty() {
         return;
     }
@@ -1450,7 +1454,10 @@ mod tests {
 
         for (x, y) in [(0.0, 0.0), (0.25, 0.5), (1.0, 1.0)] {
             let content_point = normalized_to_content_point(frame, x, y);
-            assert_eq!(content_to_normalized_point(frame, content_point.0, content_point.1), (x, y));
+            assert_eq!(
+                content_to_normalized_point(frame, content_point.0, content_point.1),
+                (x, y)
+            );
         }
     }
 
@@ -1595,7 +1602,8 @@ mod tests {
         assert!(plan_click_capture_clear(&reg, &|_| true).is_empty());
 
         reg.active.get_mut(&1).unwrap().draw_active = false;
-        reg.retired.push(handle("share_overlay_2", "owner-a", 88, true));
+        reg.retired
+            .push(handle("share_overlay_2", "owner-a", 88, true));
         assert!(plan_click_capture_clear(&reg, &|_| false).is_empty());
     }
 

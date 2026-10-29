@@ -209,10 +209,7 @@ mod tests {
             if remaining.len() > 1 {
                 remaining.remove(0)
             } else {
-                remaining
-                    .last()
-                    .cloned()
-                    .unwrap_or(UrlExtraction::Empty)
+                remaining.last().cloned().unwrap_or(UrlExtraction::Empty)
             }
         }
     }
@@ -242,10 +239,15 @@ mod tests {
                     || None,
                     move |url| {
                         let sink_calls = sink_calls.clone();
-                        async move { sink_calls.lock().unwrap().push(url); true }
+                        async move {
+                            sink_calls.lock().unwrap().push(url);
+                            true
+                        }
                     },
                     task_cancel,
-                    move |outcome, first| failure_calls.lock().unwrap().push((outcome.clone(), first)),
+                    move |outcome, first| {
+                        failure_calls.lock().unwrap().push((outcome.clone(), first))
+                    },
                 )
                 .await
             })
@@ -260,7 +262,11 @@ mod tests {
         let exit = handle.await.unwrap();
         assert_eq!(exit, RefreshExit::Cancelled);
 
-        assert_eq!(extractor.calls(), 2, "expected exactly two extraction attempts");
+        assert_eq!(
+            extractor.calls(),
+            2,
+            "expected exactly two extraction attempts"
+        );
         let sent = sink_calls.lock().unwrap().clone();
         assert_eq!(
             sent,
@@ -268,15 +274,22 @@ mod tests {
             "exactly one sink call, carrying the successful URL"
         );
         let failures = failure_calls.lock().unwrap().clone();
-        assert_eq!(failures.len(), 1, "one failure recorded for the Empty attempt");
-        assert!(failures[0].1, "the sole failure must be flagged first_for_share");
+        assert_eq!(
+            failures.len(),
+            1,
+            "one failure recorded for the Empty attempt"
+        );
+        assert!(
+            failures[0].1,
+            "the sole failure must be flagged first_for_share"
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn identical_url_twice_sends_one_update() {
-        let extractor = std::sync::Arc::new(ScriptedExtractor::new(vec![
-            UrlExtraction::Url("https://example.com/same".to_string()),
-        ]));
+        let extractor = std::sync::Arc::new(ScriptedExtractor::new(vec![UrlExtraction::Url(
+            "https://example.com/same".to_string(),
+        )]));
         let sink_calls = std::sync::Arc::new(Mutex::new(Vec::new()));
 
         let cancel = CancellationToken::new();
@@ -303,7 +316,10 @@ mod tests {
                     },
                     move |url| {
                         let sink_calls = sink_calls.clone();
-                        async move { sink_calls.lock().unwrap().push(url); true }
+                        async move {
+                            sink_calls.lock().unwrap().push(url);
+                            true
+                        }
                     },
                     task_cancel,
                     |_outcome, _first| {},
@@ -392,9 +408,9 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn unchanged_fresh_title_skips_extraction_changed_title_triggers_it() {
-        let extractor = std::sync::Arc::new(ScriptedExtractor::new(vec![
-            UrlExtraction::Url("https://example.com/x".to_string()),
-        ]));
+        let extractor = std::sync::Arc::new(ScriptedExtractor::new(vec![UrlExtraction::Url(
+            "https://example.com/x".to_string(),
+        )]));
         let titles = std::sync::Arc::new(Mutex::new(vec![
             Some("Tab A".to_string()), // first attempt
             Some("Tab A".to_string()), // poll 1: unchanged -> should skip
@@ -434,11 +450,19 @@ mod tests {
         // Poll 1 (title unchanged, success fresh): must skip -- still 1 call.
         tokio::time::advance(std::time::Duration::from_secs(4)).await;
         tokio::task::yield_now().await;
-        assert_eq!(extractor.calls(), 1, "unchanged fresh title must skip extraction");
+        assert_eq!(
+            extractor.calls(),
+            1,
+            "unchanged fresh title must skip extraction"
+        );
         // Poll 2 (title changed): must extract -- 2 calls.
         tokio::time::advance(std::time::Duration::from_secs(4)).await;
         tokio::task::yield_now().await;
-        assert_eq!(extractor.calls(), 2, "a changed title must trigger extraction");
+        assert_eq!(
+            extractor.calls(),
+            2,
+            "a changed title must trigger extraction"
+        );
 
         cancel.cancel();
         handle.await.unwrap();
@@ -475,7 +499,10 @@ mod tests {
                     },
                     move |url| {
                         let sink_calls = sink_calls.clone();
-                        async move { sink_calls.lock().unwrap().push(url); true }
+                        async move {
+                            sink_calls.lock().unwrap().push(url);
+                            true
+                        }
                     },
                     task_cancel,
                     |_outcome, _first| {},

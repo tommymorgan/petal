@@ -66,7 +66,7 @@
   } from '$lib/motion';
   import { installDismissibleLayer } from '@petal/shared/ui/dismissibleLayer';
   import type { IdentityColor } from './Avatar.svelte';
-  import type { DrawUpdate } from '$lib/ipc';
+  import type { DrawUpdate, LinuxPictureShare } from '$lib/ipc';
 
   type PillResizeDirection =
     | 'East'
@@ -116,7 +116,10 @@
      * as read it back. */
     expanded?: boolean;
     onControl?: (icon: ControlIcon) => void;
-    onChangeShare?: () => void;
+    pictureShares?: LinuxPictureShare[];
+    onAddShare?: () => void;
+    onChangeShare?: (windowId: number) => void;
+    onStopShare?: (windowId: number) => void;
     /** Public-code disclosure passed from the route; never derive it from the
      * opaque meeting credential inside the presentation layer. */
     inviteAriaLabel?: string;
@@ -174,7 +177,10 @@
     stateTone = 'info',
     expanded = $bindable(true),
     onControl,
+    pictureShares = [],
+    onAddShare,
     onChangeShare,
+    onStopShare,
     inviteAriaLabel = 'Copy invite link',
     inviteTooltip = 'Copy invite link',
     onInviteLinkCopy,
@@ -794,7 +800,10 @@
       {stateDetail}
       {stateTone}
       {onControl}
+      {pictureShares}
+      {onAddShare}
       {onChangeShare}
+      {onStopShare}
       {inviteAriaLabel}
       {inviteTooltip}
       {onInviteLinkCopy}
@@ -953,6 +962,7 @@
            window bounds instead of CSS-anchoring past the webview edge. -->
       <div
         class="more-menu"
+        class:picture-controls={!!onAddShare}
         class:placed={menuPlaced}
         role="menu"
         aria-label="More controls"
@@ -978,15 +988,31 @@
             <span class:invite-control-tooltip={icon === 'invite'}>{linuxMeetingLimitation(icon) ?? tooltipFor(icon)}</span>
           </button>
         {/each}
-        {#if sharingActive && onChangeShare}
-          <button type="button" role="menuitem" class="more-item" aria-label="Change monitor" onclick={() => {
+        {#if onAddShare}
+          <button type="button" role="menuitem" class="more-item" aria-label="Add share" onclick={() => {
             moreOpen = false;
-            onChangeShare?.();
+            onAddShare?.();
           }}>
             <span class="more-item-icon" aria-hidden="true">{@render menuGlyph('screenshare')}</span>
-            <span>Change monitor</span>
+            <span>Add share</span>
           </button>
         {/if}
+        {#each pictureShares as share (share.windowId)}
+          <button type="button" role="menuitem" class="more-item" onclick={() => {
+            moreOpen = false;
+            onChangeShare?.(share.windowId);
+          }}>
+            <span class="more-item-icon" aria-hidden="true">{@render menuGlyph('screenshare')}</span>
+            <span>Change {share.title} (share {share.windowId})</span>
+          </button>
+          <button type="button" role="menuitem" class="more-item" onclick={() => {
+            moreOpen = false;
+            onStopShare?.(share.windowId);
+          }}>
+            <span class="more-item-icon" aria-hidden="true">{@render menuGlyph('screenshare')}</span>
+            <span>Stop {share.title} (share {share.windowId})</span>
+          </button>
+        {/each}
       </div>
     {/if}
   </div>
@@ -1217,6 +1243,11 @@
 
   .more-menu.placed {
     visibility: visible;
+  }
+
+  .more-menu.picture-controls .more-item {
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
 
   /* Device-picker overlay: chrome-level (above both stages), positioned by

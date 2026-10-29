@@ -124,10 +124,8 @@ pub fn start(app: &AppHandle, window_id: u32) {
         1,
         QUEUE_SIZE_MS,
     );
-    let track = LocalAudioTrack::create_audio_track(
-        &track_name,
-        RtcAudioSource::Native(source.clone()),
-    );
+    let track =
+        LocalAudioTrack::create_audio_track(&track_name, RtcAudioSource::Native(source.clone()));
     let (chunks_tx, chunks_rx) = mpsc::channel::<(u64, Vec<i16>)>(CHUNK_QUEUE);
     let epoch = Arc::new(AtomicU64::new(0));
 

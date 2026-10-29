@@ -356,8 +356,7 @@ pub fn dispatch(
 /// Never a blind sleep: a fixed delay is either too short to be reliable or
 /// long enough that the window we checked is no longer the one in front.
 pub fn wait_for_frontmost(target_pid: i32) -> bool {
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_millis(FRONTMOST_WAIT_MS);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(FRONTMOST_WAIT_MS);
     loop {
         if super::control_target::frontmost_app().is_some_and(|app| app.pid == target_pid) {
             return true;
@@ -470,7 +469,11 @@ mod tests {
                 target_pid: pid,
                 ..ok_ctx()
             };
-            assert_eq!(recheck(&typing(), &ctx), Err("target_unavailable"), "{pid:?}");
+            assert_eq!(
+                recheck(&typing(), &ctx),
+                Err("target_unavailable"),
+                "{pid:?}"
+            );
         }
     }
 
@@ -497,10 +500,7 @@ mod tests {
             target_bundle_id: None,
             ..ok_ctx()
         };
-        assert_eq!(
-            recheck(&typing(), &ctx),
-            Err("unknown_target_application")
-        );
+        assert_eq!(recheck(&typing(), &ctx), Err("unknown_target_application"));
     }
 
     #[test]

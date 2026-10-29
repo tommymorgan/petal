@@ -37,7 +37,6 @@ fn denied_response(status: u32) -> String {
 
 pub(super) struct CameraPortalSession {
     connection: Option<zbus::Connection>,
-    path: String,
     request_serial: u64,
 }
 
@@ -55,7 +54,6 @@ impl CameraPortalSession {
             .replace('.', "_");
         Ok(Self {
             connection: Some(connection),
-            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_camera"),
             request_serial: 0,
         })
     }
@@ -142,65 +140,36 @@ impl CameraPortalSession {
         outcome
     }
 
-    /// CreateSession + AccessCamera through the real Camera v1 interface.
-    /// No stream or device list is returned here: the portal supplies only
-    /// permission; devices and modes come from the restricted remote.
+    /// AccessCamera through the real Camera v1 interface. The Camera portal
+    /// has no CreateSession: permission is requested directly, devices come
+    /// from the restricted remote, and OpenPipeWireRemote takes only options.
     pub async fn request_access(
         &mut self,
         cancel: &CancellationToken,
     ) -> Result<CameraAccess, String> {
-        let mut options = self.options();
-        options.insert("session_handle_token", Value::from("petal_camera"));
-        let mut created = self.request("CreateSession", &(options,), cancel).await?;
-        // Some portal backends encode this as a string rather than an object path.
-        let handle = created
-            .remove("session_handle")
-            .ok_or("Camera portal returned no session")?;
-        let actual = if let Ok(path) = <&str>::try_from(&handle) {
-            path.to_string()
-        } else {
-            OwnedObjectPath::try_from(handle)
-                .map_err(|_| "Invalid Camera session identity".to_string())?
-                .to_string()
-        };
-        if actual != self.path {
-            return Err("Camera portal returned an unexpected session identity".to_string());
-        }
-        let session = OwnedObjectPath::try_from(self.path.clone()).map_err(|e| e.to_string())?;
         let options = self.options();
-        self.request("AccessCamera", &(&session, options), cancel)
-            .await?;
+        self.request("AccessCamera", &(options,), cancel).await?;
         Ok(CameraAccess { granted: true })
     }
 
     /// One restricted PipeWire remote fd. The Camera portal permits one fd per
     /// call; the owner opens separate metadata and capture remotes from the
-    /// same granted session.
+    /// same granted access.
     pub async fn remote(&self) -> Result<std::os::fd::OwnedFd, String> {
-        let session = OwnedObjectPath::try_from(self.path.clone()).map_err(|e| e.to_string())?;
         let options: HashMap<&str, Value<'_>> = HashMap::new();
         let remote: zbus::zvariant::OwnedFd = self
             .proxy()
             .await?
-            .call("OpenPipeWireRemote", &(&session, options))
+            .call("OpenPipeWireRemote", &(options,))
             .await
             .map_err(|e| format!("Restricted PipeWire remote unavailable: {e}"))?;
         Ok(remote.into())
     }
 
     pub async fn close(&mut self) {
+        // The Camera portal has no session object to Close; retiring our
+        // private bus connection is the whole teardown.
         if let Some(connection) = self.connection.take() {
-            if let Ok(proxy) = zbus::Proxy::new(
-                &connection,
-                DESTINATION,
-                self.path.as_str(),
-                "org.freedesktop.portal.Session",
-            )
-            .await
-            {
-                let _ =
-                    tokio::time::timeout(CLOSE_TIMEOUT, proxy.call::<_, _, ()>("Close", &())).await;
-            }
             let _ = connection.close().await;
         }
     }
@@ -408,13 +377,14 @@ mod tests {
             .replace('.', "_");
         let mut portal = CameraPortalSession {
             connection: Some(connection),
-            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_camera"),
             request_serial: 0,
         };
         for (status, expected) in [(1, "cancelled"), (2, "denied"), (255, "unknown")] {
             response.store(status, Ordering::SeqCst);
-            let session =
-                OwnedObjectPath::try_from(portal.path.clone()).expect("private session path");
+            let session = OwnedObjectPath::try_from(format!(
+                "/org/freedesktop/portal/desktop/session/{sender}/petal_camera"
+            ))
+            .expect("private session path");
             // request_serial must reach the emitted handle path, matching the
             // sender/token pair request() computes from its own state.
             portal.request_serial += 1;
@@ -474,7 +444,6 @@ mod tests {
             .replace('.', "_");
         let mut portal = CameraPortalSession {
             connection: Some(connection),
-            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_camera"),
             request_serial: 0,
         };
         let result = tokio::time::timeout(

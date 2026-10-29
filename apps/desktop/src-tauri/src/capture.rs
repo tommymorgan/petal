@@ -430,7 +430,6 @@ pub struct WindowCapture {
     no_buffer_log: Arc<Mutex<NoBufferStreakLog>>,
 }
 
-
 /// A no-image-buffer streak shorter than this is a "flap" (#108): the
 /// source stopped drawing for an instant and resumed. Sized from the field
 /// log that motivated the issue -- of 724 streaks in 611 seconds, 630 were
@@ -605,7 +604,6 @@ impl NoBufferStreakLog {
         action
     }
 }
-
 
 /// Renders a `NoBufferStreakLog` decision to the log (#108). Split out so
 /// the three call sites (stream handler no-buffer branch, stream handler
@@ -1932,9 +1930,8 @@ impl WindowCaptureConfig {
 
     fn region_proof_warning_is_due(&self, now: std::time::Instant) -> bool {
         let mut last_warning = self.region_proof_warning_at.lock_unpoisoned();
-        if last_warning.is_some_and(|last| {
-            now.duration_since(last) < REGION_PROOF_WARNING_INTERVAL
-        }) {
+        if last_warning.is_some_and(|last| now.duration_since(last) < REGION_PROOF_WARNING_INTERVAL)
+        {
             return false;
         }
         *last_warning = Some(now);
@@ -2068,16 +2065,14 @@ impl WindowCaptureConfig {
         // proves the new configuration is live by matching its output
         // dimensions (see the proof phase in the output handler). Same-size
         // moves accept the next delivered frame -- documented waiver.
-        *self.pending_region_generation.lock_unpoisoned() = Some(
-            PendingRegionConfigurationState {
-                configuration: crate::region_window::PendingRegionConfiguration {
-                    generation: source.generation.0,
-                    expected_width: width,
-                    expected_height: height,
-                },
-                started_at: reconfiguration_started,
+        *self.pending_region_generation.lock_unpoisoned() = Some(PendingRegionConfigurationState {
+            configuration: crate::region_window::PendingRegionConfiguration {
+                generation: source.generation.0,
+                expected_width: width,
+                expected_height: height,
             },
-        );
+            started_at: reconfiguration_started,
+        });
         log::info!(
             "capture: window {} ROI generation {} applied display={} sourceRect=({:.1},{:.1},{:.1},{:.1}) output={}x{} display_changed={} native_reconfigure_ms={:.3}",
             self.window_id,

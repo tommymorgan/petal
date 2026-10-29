@@ -155,8 +155,8 @@ Linux build dependencies; general distribution packaging is not this gate.
 
 Monitor publication additionally requires the GNOME ScreenCast portal on the
 current user session bus, PipeWire, GStreamer 1.28 or newer, and the
-`pipewiresrc`, `videoconvert`, `videoflip`, `videorate`, `capsfilter` and `appsink`
-elements. The Linux-target Rust bindings use the existing GLib 0.18 family;
+`pipewiresrc`, `videoconvert`, `videocrop`, `videoflip`, `videorate`, `capsfilter`
+and `appsink` elements. The Linux-target Rust bindings use the existing GLib 0.18 family;
 there is no GTK4 or browser-media path. A missing capture element is a
 per-attempt error, not permission to install software or capture a different
 source. Camera and desktop input are separate, unavailable capabilities.
@@ -252,9 +252,11 @@ SFU video SID and sole muted microphone retained. Changing only attempt-local
 cleanup to owner-wide cancellation failed after the real Cancel, once the
 original publication had been established; the unchanged candidate then passed
 again with 25 microphone samples and changing Windows pixels. The production
-portal protocol test also rejects actual private-bus Cancel, Deny and unknown
-responses emitted before the method reply. Treating Deny as success failed its
-negative-response assertion; restoring that branch passed. No global portal
+portal protocol test also rejects actual private-bus Cancel, other-failure
+and unknown responses emitted before the method reply. Treating response 2
+as success failed its negative-response assertion; restoring that branch
+passed. Response 2 means the request ended another way, not a distinct
+permission-denial code. No global portal
 was replaced. GNOME offers no separate runtime Deny button here, and the planned
 Add share affordance belongs to multi-share work: full S06 remains incomplete.
 
@@ -341,6 +343,187 @@ demonstrated defects; later native-module changes were formatting only.
 The final native Linux layer gate passed 10 tests and built the executable.
 Clippy completed with 67 warnings in unchanged modules; the frontend check
 reported zero errors and the existing RoomRow accessibility warning.
+
+Task1.2 is an unaccepted local candidate, not a completed task. The current
+native Linux layer passed 20 tests; the unchanged frontend's earlier check
+reported zero errors and the existing RoomRow warning. The changed UI was
+bundled and the native executable rebuilt before exercising it. Actual
+Add share → Cancel preserved the original share ID/video SID, muted microphone
+and fresh Windows counters 10 → 11. This covers Cancel only; native runtime
+Deny and the complete S06 outline remain unverified.
+
+With explicit temporary pointer-only consent for the owned native chooser,
+window selection now works. The driver captures only that active chooser,
+locates the owned source's nonce in actual pixels, verifies its selected row,
+and releases the pointer session before invoking Share. It does not use GTK's
+fabricated `(0, 0)` screen coordinates or grant product remote control.
+
+The October 29 candidate `985c57ceb50a` passed 20 native Linux tests and the
+native build. Actual Windows pixels show the selected editor's counter 20 → 21
+while the unrelated private fixture is foreground, without that private
+fixture in the publication. The original microphone stayed muted.
+The same candidate published DP-1 plus three independent application windows;
+a fifth Add emitted no new-picker event and retained all four publication SIDs.
+At that limit, per-source Change replaced only its target, rendering counters
+70 → 71. Individual Stop and normal source closure exposed the unrelated
+Windows pictures at 60, 50 and then 51 without changing their publication SIDs.
+
+An isolated copy changed only connected refresh from 1000 ms to zero. The
+same S02 witness then failed specifically because Windows never rendered
+the initial editor counter 20. After restoring that copy's source, the
+unchanged original candidate passed counters 20 → 21 and private-window
+exclusion again, with 64 independent muted-microphone samples. S02 is now
+recorded in the living feature; the remaining outline rows stay TODO.
+The connected X03 gate also passed on this candidate: actual monitor counters
+10 → 11, Stop removing the Windows remote window, 25 unfinished direct
+operations rejected, and real Cancel displaying the failure warning. The
+original microphone remained muted; camera and input were not activated.
+The controls observer also now handles an already-open More menu without
+closing it while waiting for the controls it needs.
+
+
+Static window startup needed connected-only `pipewiresrc` keepalive: a real
+idle window otherwise provided no Windows first picture after subscription.
+The native pipeline also now applies validated per-buffer crop metadata using
+`videocrop` before `videoflip`, which otherwise discards that metadata. It
+consumes the metadata before cropping to avoid applying the origin twice,
+resets cropping on uncropped buffers, and lets native renegotiation handle
+changed dimensions. Seven real GStreamer tests cover padded stride, offsets,
+changing bounds, uncropped reset, malformed crop and orientation.
+Windows also rendered the real editor resize from 1280 × 720 to 960 × 960,
+with all four corner labels, readable counter 30 → 31 and the same publication.
+Fixture stdin commands must be serialized through an observed frame: sending
+resize and counter commands together can leave the latter in Python's
+read-ahead buffer rather than the GLib file-descriptor callback.
+
+The renewed credential authorization restored the actual Windows desktop and
+the existing released native peer in its owned room. Temporary credential
+references were discarded; the credential file and VM settings were unchanged.
+The window-geometry row then rendered 1280 × 720 → 960 × 960 with all four
+corner labels, fresh counters 31 → 32, the same publication SID and an actual
+cursor at the corresponding grid positions. This is window-row evidence, not
+completion of the full S09 outline.
+
+The picture fixture's `fullscreen` command presents an owned corner grid for
+monitor checks. DP-1 and the independent window published simultaneously, and
+Windows rendered the full-monitor counter 41. A guarded change from 100% to
+150% scale then ended the monitor's capture authority: its publication and
+Windows window retired, the unrelated window retained its SID, and Linux
+displayed “Picture sharing access ended; select Share explicitly to retry.”
+Counter 42 never reached Windows. This failed the original S09 uninterrupted
+monitor-continuity criterion; it is not a successful geometry transition or
+permission to reacquire capture silently. Tommy subsequently approved the
+native-grant rule in ADR 0003: preserve geometry while authority remains valid,
+otherwise retire only the affected share and require explicit native
+re-selection. Fresh-picker recovery and a new current picture have not yet
+been exercised after this scale-triggered retirement; S09 remains TODO.
+
+The original 3840 × 1080 mode, 100% scale, layout and transform were restored
+and verified before the independent rollback watchdog was disarmed. The
+Windows VM subsequently entered Aborted state during this display-change
+attempt. Read-only host coredump and kernel records later showed both aborts
+were the same host-side VirtualBox GUI fault: its desktop-watchdog geometry
+helper crashed inside Qt's accessible-name lookup with a null widget pointer.
+An isolated offscreen Qt witness reproduced that exact fault after a wildcard
+widget disconnect, while a receiver-scoped disconnect completed. This is a
+host GUI defect, not a Windows guest or Petal media failure; a process-local
+watchdog bypass exists for a future owned launch but has not been applied or
+boot-tested. No further display mutation or credential reuse followed.
+
+The amended recovery scenario passed end to end on the restored fixture: with
+the editor share and muted microphone active, a guarded 100% → 150% scale
+change ended only DP-1's capture authority, displayed the access-ended
+explanation, and started no replacement. Explicit Share again opened the
+native source picker with nothing published beforehand; explicitly selecting
+DP-1 created a new share instance (fresh SID, new window ID) whose counter 62
+reached Windows. The editor kept its SID throughout and rendered counter 52
+after the recovered monitor share was stopped; the microphone stayed muted.
+The original display configuration was again restored and verified before the
+rollback watchdog was disarmed, and the VM remained running under the
+process-local watchdog bypass. The same proof passed for the resolution row:
+a guarded change from 3840×1080@59.968 to 3840×2160@59.940 also ended the
+monitor grant, and explicit Share again plus fresh DP-1 selection produced a
+new share instance rendering counter 82, with the editor still publishing its
+original SID and rendering 71 after the monitor share stopped. Both geometry
+rows of the recovery outline are therefore exercised; no authority-valid
+monitor geometry transition was observed on this GNOME installation, because
+every tested geometry change ends the capture grant. The window-geometry row
+of the preservation outline remains separately verified for resize.
+
+S06's cancel row passed with real UI: while DP-1 published counter 91, a
+second Add share followed by the native chooser's Cancel published nothing,
+left DP-1's SID unchanged, and DP-1 rendered counter 92 afterward with no
+substitution. The deny row of that outline remains unverified because the
+installed GNOME 51 chooser has no distinct Deny control; this is an
+environmental acceptance gap, not a waiver. S07's editor-close row passed:
+closing the shared editor window retired only its publication (window ID 1)
+while the unrelated monitor share kept its SID and rendered counter 111. Its
+DP-1-disconnect row is not exercisable on this single-monitor host (Mutter
+rejects a zero-monitor configuration, and a physical unplug would require the
+user to replug), and its scoped-revocation row has no authorized external
+per-handle OS revocation API on GNOME 51. Both rows stay open and honestly
+unverified; neither is waived.
+
+Task1.2 remains incomplete: native runtime Deny, physical display
+disconnection, scoped capture-permission revocation and the amended monitor
+geometry/recovery scenarios remain unverified. Existing explicit runtime
+consent covers temporary DP-1 configuration/disconnection, pointer movement
+within owned test windows and revoking only Petal's capture grant, with the
+original display configuration saved and restored. The separate acceptance
+approval changes S09 as recorded above; neither grant authorizes camera or
+product remote control.
+
+The installed GNOME 51 chooser maps both Cancel and its ordinary close action
+to response 1. Its response-2 paths represent session/backend failures rather
+than a distinct user Deny action; see the
+[GNOME 51 response handler](https://github.com/GNOME/xdg-desktop-portal-gnome/blob/51.0/src/screencast.c#L312-L355)
+and [dialog callbacks](https://github.com/GNOME/xdg-desktop-portal-gnome/blob/51.0/src/screencastdialog.c).
+That acceptance mismatch is unresolved, not waived by a protocol failure test.
+The three blocked rows were accepted as documented platform limits
+(ADR 0003): GNOME 51's chooser offers no distinct Deny control, Mutter
+rejects a zero-monitor configuration on this single-monitor host, and no
+external per-share capture-permission revocation API exists. They are
+recorded as deviation rows in the coverage ledger — unverified limits that
+reopen if the platform grows the control — not as satisfied criteria. With
+that acceptance, every Task1.2 scenario is DONE in the plan and its living
+feature records the exercised S06 cancel, S07 editor-close and both S09
+behaviors.
+
+Task 2.1 (native Linux camera) was exercised on this computer at source
+snapshot `653eb3e4` on October 29, 2026, in room `kwa-xjth-qav` with the
+released Windows peer muted. Turning the camera on published a live
+`petal-camera-<identity>` H.264 640x480 track whose SFU layer carried a real
+SSRC and bitrate while the publisher sustained 15 fps (captured=4584,
+pushed=4576); the Windows peer's Linux tile rendered actual image content
+rather than a placeholder, and a native "Camera self-view (HD Pro Webcam
+C920" GTK window existed without any browser acquisition. Stopping removed
+the SFU track, and after leaving the room a late camera start was rejected
+with "not in room". `scripts/check-linux-camera-publication.py` binds those
+C01/C07 gates to the real SFU and real command results.
+
+Three bugs were found and fixed while exercising that path, all specific to
+shipping `pipewire-rs` inside this binary: the bundled libwebrtc static
+library defines hidden `pw_*` dlopen stubs that captured the crate's calls
+(`-Wl,--wrap` now routes them to the real libpipewire through
+`linux_pw_compat.rs`), `wait_initial` violated the thread-loop lock/wait
+protocol and leaked the loop mutex, and `CameraRegistry::drop` called
+`pw_thread_loop_stop` while holding that mutex (self-deadlock). Separately,
+pipewire-rs listeners were dropped immediately after registration, which
+sensed nothing; the handles now live exactly as long as the registry.
+
+Camera acceptance limits on this desktop (recorded as the Task 2.1
+deviation, ADR 0003): neither installed portal frontend implements
+`org.freedesktop.impl.portal.Camera`, so the Camera portal auto-grants
+without a dialog and its restricted remote lists zero camera nodes. The app
+probes the portal once and then enumerates and captures through the session
+PipeWire daemon directly — the platform-normal path for a host application,
+with the in-app Camera button as the consent surface. C01's
+"approve native permission" step therefore has no OS dialog to exercise
+here, and the "changing pixels" clause is proven by SFU layer liveness plus
+rendered tile variance because the camera views a static scene (no physical
+marker was moved). C02's publication-overlap half and C07 both verified
+live; C02's preview-first ordering, C03, C04 and C05 remain open pending
+fixture-level or multi-device evidence.
 
 Run the native read-only prerequisite diagnostic with an intentionally missing
 capture-plugin search path:

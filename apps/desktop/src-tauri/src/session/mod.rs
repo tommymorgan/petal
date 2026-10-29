@@ -126,33 +126,31 @@ pub(crate) use crate::camera_session::{
     ensure_camera_published, repair_camera_publication_after_reconnect, stop_camera_publish,
 };
 pub use commands::{
-    set_share_audio_enabled, set_share_remote_control_allowed, share_audio_state,
-    share_remote_control_allowed, __cmd__current_room, __cmd__join_room_command, __cmd__leave_room_command,
+    __cmd__current_room, __cmd__join_room_command, __cmd__leave_room_command,
     __cmd__remote_control_allowed, __cmd__remote_control_policy, __cmd__room_presence,
     __cmd__set_display_name, __cmd__set_remote_control_allowed, __cmd__set_remote_control_policy,
     __cmd__set_share_audio_enabled, __cmd__set_share_remote_control_allowed,
     __cmd__set_share_resolution, __cmd__share_audio_state, __cmd__share_remote_control_allowed,
-    __tauri_command_name_current_room,
-    __tauri_command_name_join_room_command, __tauri_command_name_leave_room_command,
-    __tauri_command_name_remote_control_allowed, __tauri_command_name_remote_control_policy,
-    __tauri_command_name_room_presence, __tauri_command_name_set_display_name,
-    __tauri_command_name_set_remote_control_allowed,
-    __tauri_command_name_set_remote_control_policy,
-    __tauri_command_name_set_share_audio_enabled,
+    __tauri_command_name_current_room, __tauri_command_name_join_room_command,
+    __tauri_command_name_leave_room_command, __tauri_command_name_remote_control_allowed,
+    __tauri_command_name_remote_control_policy, __tauri_command_name_room_presence,
+    __tauri_command_name_set_display_name, __tauri_command_name_set_remote_control_allowed,
+    __tauri_command_name_set_remote_control_policy, __tauri_command_name_set_share_audio_enabled,
     __tauri_command_name_set_share_remote_control_allowed,
     __tauri_command_name_set_share_resolution, __tauri_command_name_share_audio_state,
-    __tauri_command_name_share_remote_control_allowed,
-    current_room, join_room_command, leave_room_command, remote_control_allowed,
-    remote_control_policy, room_presence, set_display_name, set_remote_control_allowed,
-    set_remote_control_policy, set_share_resolution,
+    __tauri_command_name_share_remote_control_allowed, current_room, join_room_command,
+    leave_room_command, remote_control_allowed, remote_control_policy, room_presence,
+    set_display_name, set_remote_control_allowed, set_remote_control_policy,
+    set_share_audio_enabled, set_share_remote_control_allowed, set_share_resolution,
+    share_audio_state, share_remote_control_allowed,
 };
 pub(crate) use room::cleanup_for_forced_disconnect;
 #[allow(unused_imports)]
 pub use room::RoomLeftEvent;
 pub use room::{join_room, leave_room};
+pub(crate) use share::MAX_CONCURRENT_SHARES;
 #[cfg(test)]
 pub(crate) use share::VIEWER_DEMAND_STALE_AFTER;
-pub(crate) use share::MAX_CONCURRENT_SHARES;
 pub(crate) use share::{
     expire_stale_viewer_demands, note_passive_viewer_demand, note_remote_interaction,
     reconcile_quality_for_window, repair_active_share_publication,
@@ -160,8 +158,8 @@ pub(crate) use share::{
     repair_local_track_publication_after_reconnect,
     repair_screen_audio_publications_after_reconnect, restart_active_shares_after_wake,
     set_share_audio_enabled_for_state, set_share_priority, share_audio_state_for_state,
-    start_share_with_system_picker_filter, ReconnectRepairGuard,
-    SharedWindowScreenStatus, ViewerDemandEvent, ViewerDemandUpdate,
+    start_share_with_system_picker_filter, ReconnectRepairGuard, SharedWindowScreenStatus,
+    ViewerDemandEvent, ViewerDemandUpdate,
 };
 pub use share::{
     promote_quality_for_remote_control, reconcile_quality_after_remote_control_release,
@@ -620,7 +618,8 @@ impl SessionState {
     /// that is the default).
     pub(crate) fn set_remote_control_allowed(&self, allowed: bool) {
         let next = RemoteControlPolicy::from_allowed(allowed, self.remote_control_default_policy());
-        self.remote_control_policy.store(next.as_u8(), Ordering::Relaxed);
+        self.remote_control_policy
+            .store(next.as_u8(), Ordering::Relaxed);
     }
 
     pub(crate) fn remote_control_policy(&self) -> RemoteControlPolicy {
@@ -636,7 +635,8 @@ impl SessionState {
     pub(crate) fn seed_remote_control_policy(&self, policy: RemoteControlPolicy) {
         self.remote_control_default_policy
             .store(policy.as_u8(), Ordering::Relaxed);
-        self.remote_control_policy.store(policy.as_u8(), Ordering::Relaxed);
+        self.remote_control_policy
+            .store(policy.as_u8(), Ordering::Relaxed);
     }
 
     /// Settings change (possibly mid-meeting): always update the default,
@@ -648,7 +648,8 @@ impl SessionState {
         self.remote_control_default_policy
             .store(policy.as_u8(), Ordering::Relaxed);
         if self.remote_control_policy().allows_requests() || !policy.allows_requests() {
-            self.remote_control_policy.store(policy.as_u8(), Ordering::Relaxed);
+            self.remote_control_policy
+                .store(policy.as_u8(), Ordering::Relaxed);
         }
     }
 
@@ -660,9 +661,7 @@ impl SessionState {
         guard.mic.clone()
     }
 
-    pub(crate) fn current_playout(
-        &self,
-    ) -> Option<Arc<crate::transport::audio::SpeakerPlayout>> {
+    pub(crate) fn current_playout(&self) -> Option<Arc<crate::transport::audio::SpeakerPlayout>> {
         let guard = self.inner.lock_unpoisoned();
         guard.playout.clone()
     }
@@ -736,8 +735,8 @@ impl SessionState {
     /// go through the identical generation-guarded, crash-safe apply path
     /// (see the comment on the SDK call below for why it must be this way).
     fn apply_effective_mic_mute(&self) {
-        let muted =
-            self.desired_mic_muted.load(Ordering::SeqCst) || self.ai_chat_ducking.load(Ordering::SeqCst);
+        let muted = self.desired_mic_muted.load(Ordering::SeqCst)
+            || self.ai_chat_ducking.load(Ordering::SeqCst);
         let generation = self.mic_mute_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let latest_generation = self.mic_mute_generation.clone();
         let apply_lock = self.mic_mute_apply_lock.clone();

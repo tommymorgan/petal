@@ -10,6 +10,38 @@ Use one nonpersistent ScreenCast session per picture-only share, selecting one m
 
 A bounded native GStreamer pipeline consumes that exact restricted remote and stream, negotiates publisher-compatible BGRA for shares or NV12 for camera, and hands frames to the existing publisher. Decode/convert camera formats when needed. Explicitly configure appsink for one queued buffer with drop-oldest/latest-frame behavior; apply the same bound to any intermediate queue and the application handoff. Its unlimited default is forbidden. Use reusable storage and respect strides, orientation and color metadata. Keep GTK objects on the main thread and capture/convert work off it. Pipeline error/EOS, portal closure and room generation cancellation converge on the same idempotent stop owner. Never reconnect a failed stream to an arbitrary PipeWire node.
 
+**Accepted product amendment, 2026-10-29:** Tommy approved respecting the native capture grant rather than requiring uninterrupted monitor publication after GNOME ends it. Preserve correct picture/cursor geometry while authority remains valid; a display change alone is not a stop trigger. If the OS ends authority, retire only that share, explain the interruption and offer an explicit action to share again. Recovery opens fresh native source selection before publishing a new share instance; never silently reacquire authority or substitute content. Unrelated shares and microphone intent remain unchanged, and no input authority is restored. The guarded 100% → 150% scale run ended the monitor grant on this computer; this decision changes acceptance, not that observed result, the VM-abort diagnosis or the remaining runtime gates.
+
+**Accepted platform limits, 2026-10-29:** Tommy accepted three verification
+limits as documented platform behavior on this GNOME 51 installation, after
+each was externally evidenced: (1) the portal chooser offers no distinct Deny
+control — Cancel and dialog close are the only exits, so consent testing
+covers cancel only; (2) DP-1 physical-disconnection retirement cannot be
+exercised because Mutter rejects a zero-monitor configuration on this
+single-monitor host and a physical unplug requires the user to replug;
+(3) per-share OS capture-permission revocation has no external API — Mutter
+`Session.Stop` requires the exact creating D-Bus sender, which is Petal's own
+backend, so external scoped revocation cannot be simulated honestly. These
+are recorded limits, not satisfied criteria: the deny, disconnect and
+revocation rows stay unverified, and any future GNOME release that adds the
+control or API reopens them.
+
+**Accepted camera fallback, 2026-10-29 (Option A):** Tommy chose the
+direct-PipeWire fallback after this computer's portal was evidenced dead for
+cameras: xdg-desktop-portal 1.22.1 auto-grants `AccessCamera` and returns a
+restricted remote, but neither installed frontend (gnome 51, gtk) implements
+`org.freedesktop.impl.portal.Camera`, so that remote lists zero camera nodes
+forever. The app probes the portal once per process; when the granted remote
+enumerates nothing it enumerates and captures through the session PipeWire
+daemon directly — the platform-normal path for a host application, where the
+in-app Camera button is the consent surface, exactly like the microphone. A
+desktop whose frontends implement the Camera interface keeps the portal
+path; the fallback is per-probe, not a removal of the portal flow. Evidence
+deviations recorded with C01 in the plan: no OS dialog exists to exercise
+the approval step here, and pixel-change proof substitutes SFU layer
+liveness plus rendered-tile variance because the camera views a static
+scene.
+
 Camera uses Camera.AccessCamera/OpenPipeWireRemote. The portal supplies permission and a restricted remote, not a device/mode enumeration API. Discover camera Video/Source nodes through that remote's PipeWire registry and enumerate each selected node's SPA_PARAM_EnumFormat parameters. Keep a selection bound to the remote generation and node object identity/serial; invalidate it on registry removal or permission loss before a reused node ID can identify another device. Derive labels and modes from returned properties/parameters, not hard-coded V4L2 paths. Missing usable metadata produces an explicit unavailable state.
 
 Camera has no portal Session.Closed or documented revocation-specific signal. Treat PipeWire core error/disconnect, selected-node registry removal and capture pipeline ERROR/EOS as immediate access/device-loss transitions: invalidate all consumer leases, unpublish, close previews and release capture before considering a retry. Use a neutral “camera access or device lost” explanation unless an explicit portal denial identifies permission as the cause. Actual revocation while capturing is an acceptance gate: verify this GNOME backend exposes a terminating observable condition. If it leaves capture alive with no observable revocation, this path is not accepted; report the missing prerequisite instead of asserting revocation detection.

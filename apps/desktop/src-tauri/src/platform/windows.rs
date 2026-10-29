@@ -30,13 +30,12 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VIRTUAL_KEY};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumChildWindows, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos, GetScrollInfo,
-    GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
+    EnumChildWindows, GetAncestor, GetClassNameW, GetClientRect, GetCursorPos, GetForegroundWindow,
+    GetScrollInfo, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, WindowFromPoint, GA_ROOT,
-    GA_ROOTOWNER, GWL_EXSTYLE,
-    GWL_STYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, HWND_TOP, HWND_TOPMOST, SB_HORZ, SB_VERT,
-    SCROLLBAR_CONSTANTS, SCROLLINFO, SCROLLINFO_MASK, SIF_RANGE, WINDOW_STYLE, WS_EX_APPWINDOW,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_HSCROLL, WS_VSCROLL,
+    GA_ROOTOWNER, GWL_EXSTYLE, GWL_STYLE, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, HWND_TOP,
+    HWND_TOPMOST, SB_HORZ, SB_VERT, SCROLLBAR_CONSTANTS, SCROLLINFO, SCROLLINFO_MASK, SIF_RANGE,
+    WINDOW_STYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_HSCROLL, WS_VSCROLL,
 };
 
 use crate::platform::cg::WindowFrame;

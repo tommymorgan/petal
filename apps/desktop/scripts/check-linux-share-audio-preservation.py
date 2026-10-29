@@ -86,17 +86,17 @@ class AudioWitness:
         self.samples += 1
         return participant
 
-    def action(self, command, label, approve_share=None, timeout=90):
+    def action(self, command, label, approve_share=None, timeout=90, *, arguments=None):
         # Start asynchronously so observations continue while portal permission,
         # first-frame publication and cleanup are pending. No command is mocked.
         self.sample()
         evaluate(self.app, """(() => {
             window.__linuxPictureAudioResult = null;
-            window.__TAURI_INTERNALS__.invoke(%s).then(
+            window.__TAURI_INTERNALS__.invoke(%s, %s).then(
                 value => { window.__linuxPictureAudioResult = {value}; },
                 () => { window.__linuxPictureAudioResult = {error: true}; });
             return true;
-        })()""" % json.dumps(command))
+        })()""" % (json.dumps(command), json.dumps(arguments or {})))
         deadline = time.monotonic() + timeout
         if approve_share is not None:
             # An unsupported change command can reject before a picker exists.
@@ -177,7 +177,9 @@ def run_s05(app, observe_participant, approve_share, timeout=90, *, rows=ROWS):
                 old = witness.settled(True)
             command = {'start': 'toggle_window_picker_window',
                        'change': 'open_window_picker_window', 'stop': 'stop_all_shares'}[action]
-            witness.action(command, label, None if action == 'stop' else approve_share, timeout)
+            arguments = {'replaceWindowId': old[0][0]} if action == 'change' else {}
+            witness.action(command, label, None if action == 'stop' else approve_share, timeout,
+                           arguments=arguments)
             result = witness.settled(action != 'stop')
             if action == 'change':
                 assert result[0] != old[0] and result[1] != old[1], \

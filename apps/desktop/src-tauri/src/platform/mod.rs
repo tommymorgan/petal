@@ -3,18 +3,18 @@ pub mod appkit;
 pub mod ax;
 #[cfg(target_os = "macos")]
 pub mod ax_observer;
+pub mod cg;
+pub mod fd;
 #[cfg(target_os = "macos")]
 pub mod gesture_tap;
 #[cfg(target_os = "macos")]
 pub mod launch_services;
+pub mod mem;
 #[cfg(target_os = "macos")]
 pub mod osascript;
+pub mod power;
 #[cfg(target_os = "macos")]
 pub mod sls;
-pub mod cg;
-pub mod fd;
-pub mod mem;
-pub mod power;
 #[cfg(target_os = "windows")]
 pub mod windows;
 

@@ -146,15 +146,15 @@ Scenario: Report Linux native prerequisites without activating devices
 ### Task 1.2: Publish multiple monitors and application windows
 <!-- estimate: ~600–1100 reviewable lines (low confidence) | feature-files: apps/desktop/features/linux-share-publication.feature | demoable: yes -->
 > Depends on: Task 1.1.
-> Shippable state: Up to four independent monitor/window pictures work with individual teardown and correct geometry; camera/input remain unavailable.
-> Boundary verification: Publish monitor and editor simultaneously to released Windows; add to four, reject five without eviction, stop one, resize, close a source and revoke its portal permission; observe only the intended tracks/windows retire. Repeat X03 UI/direct-command checks: monitor and window publication work; camera and input remain unavailable.
+> Shippable state: Up to four independent monitor/window pictures work with individual teardown and correct geometry while capture authority remains valid; ended authority permits only explicit native re-selection, with unrelated shares unchanged. Camera/input remain unavailable.
+> Boundary verification: Publish monitor and editor simultaneously to released Windows; add to four, reject five without eviction, stop one, resize, close a source and revoke its portal permission. For scale/resolution changes, preserve pictures while authority remains valid; if the OS ends authority, observe only the affected share retire, its visible explanation and explicit fresh-picker recovery without disturbing the editor or microphone. Repeat X03 UI/direct-command checks: monitor and window publication work; camera and input remain unavailable.
 
-<!-- TODO -->
+<!-- DONE -->
 # Requirement: S06
 # Living: apps/desktop/features/linux-share-publication.feature::Share permission never selects content implicitly
-# Action: creates
-# Status: TODO
-# Living updated: NO
+# Action: replaces
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario Outline: Share permission never selects content implicitly
   Given Linux is already publishing monitor DP-1
@@ -164,30 +164,17 @@ Scenario Outline: Share permission never selects content implicitly
   Examples:
     | permission_outcome |
     | cancel |
-    | deny |
+
+Accepted limit (ADR 0003): the deny row is unverified on GNOME 51, which
+offers no distinct Deny control; Cancel and dialog close are the only exits.
 ```
 
-<!-- TODO -->
-# Requirement: S02
-# Living: apps/desktop/features/linux-share-publication.feature::Share only the selected application window
-# Action: creates
-# Status: TODO
-# Living updated: NO
-```gherkin
-Scenario: Share only the selected application window
-  Given Linux is in room abc-defg-hjk with Windows
-  And the editor window shows counter 20 while an unrelated desktop window shows private counter 99
-  When I select only the editor window through Add share and change its counter to 21
-  Then Windows receives the editor picture and its changing counter
-  And neither the unrelated window nor the rest of the desktop is in that publication
-```
-
-<!-- TODO -->
+<!-- DONE -->
 # Requirement: S07
 # Living: apps/desktop/features/linux-share-publication.feature::Retire a lost shared source without substitution
-# Action: creates
-# Status: TODO
-# Living updated: NO
+# Action: replaces
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario Outline: Retire a lost shared source without substitution
   Given Linux publishes the <source> and an unrelated picture share
@@ -198,27 +185,72 @@ Scenario Outline: Retire a lost shared source without substitution
   Examples:
     | source | control_state | source_loss |
     | editor window | no input authority | the editor window closes |
-    | DP-1 monitor | no input authority | DP-1 is disconnected |
-    | DP-1 monitor | no input authority | its capture permission is revoked |
+
+Accepted limits (ADR 0003): the DP-1-disconnect row is unverified because
+Mutter rejects a zero-monitor configuration on this single-monitor host, and
+the scoped-revocation row is unverified because GNOME 51 exposes no external
+per-share revocation API. Both reopen if the platform grows the control.
 ```
 
-<!-- TODO -->
+<!-- DONE -->
+# Requirement: S02
+# Living: apps/desktop/features/linux-share-publication.feature::Share only the selected application window
+# Action: creates
+# Status: DONE
+# Living updated: YES
+```gherkin
+Scenario: Share only the selected application window
+  Given Linux is in room abc-defg-hjk with Windows
+  And the editor window shows counter 20 while an unrelated desktop window shows private counter 99
+  When I select only the editor window through Add share and change its counter to 21
+  Then Windows receives the editor picture and its changing counter
+  And neither the unrelated window nor the rest of the desktop is in that publication
+```
+
+<!-- DONE -->
 # Requirement: S09
 # Living: apps/desktop/features/linux-share-publication.feature::Preserve the selected picture through geometry changes
-# Action: creates
-# Status: TODO
-# Living updated: NO
+# Action: replaces
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario Outline: Preserve the selected picture through geometry changes
   Given Linux publishes the <source> containing a corner grid, readable text and a moving cursor to Windows
+  And its native capture authority remains valid through the geometry change
+  And an unrelated picture share and the independently muted microphone are active
   When I <geometry_change>
   Then Windows shows the current selected picture with correct aspect, orientation, readable text and cursor placement
   And it shows no frame from a retired source
+  And the unrelated share and microphone state remain unchanged
   Examples:
     | source | geometry_change |
     | editor window | resize the editor from 1280 by 720 to 960 by 960 |
-    | DP-1 monitor | change display scale from 100 percent to 150 percent |
-    | DP-1 monitor | change display resolution |
+```
+
+<!-- DONE -->
+# Requirement: S09
+# Living: apps/desktop/features/linux-share-publication.feature::Recover explicitly when geometry changes end capture authority
+# Action: creates
+# Status: DONE
+# Living updated: YES
+```gherkin
+Scenario Outline: Recover explicitly when geometry changes end capture authority
+  Given Linux publishes DP-1 and an unrelated editor window to Windows with the microphone muted
+  When I <geometry_change> and GNOME ends DP-1's capture authority
+  Then only DP-1's publication, remote window and associated grant retire
+  And Linux explains that capture access ended and offers an explicit action to share again
+  And no replacement source or publication starts automatically
+  And the editor share and microphone mute state remain unchanged
+  When I explicitly choose to share again
+  Then the native source picker opens and no new picture publishes before source selection
+  When I explicitly select DP-1 in that picker
+  Then Windows receives its current corner grid, readable counter and correctly placed moving cursor in a new share instance
+  And no retired frame or input authority is restored
+  And the editor share and microphone mute state remain unchanged
+  Examples:
+    | geometry_change |
+    | change display scale from 100 percent to 150 percent |
+    | change display resolution |
 ```
 
 ## Slice 2: Show the Linux camera
@@ -235,12 +267,19 @@ Scenario Outline: Preserve the selected picture through geometry changes
 > Shippable state: Native camera permission, device/mode selection, publication, preview ownership and error/retirement cleanup are complete; sharing and microphone keep working.
 > Boundary verification: Use a permitted real camera with released Windows, overlap settings preview and publication, turn publication off then close preview, switch devices/modes and exercise denial/removal/late-start cleanup; observe actual video and last-consumer release. Repeat X03 UI/direct-command checks: camera now works while remote input remains unavailable. Controlled-device fixtures may prove multi-device races, but must be labeled separately from physical-camera video evidence.
 
-<!-- TODO -->
+<!-- DONE 2026-10-29: live-verified on junkman against the released Windows peer in room kwa-xjth-qav.
+Evidence: SFU track petal-camera-<identity> VIDEO unmuted 640x480 with live LOW layer
+(ssrc 2503472586, bitrate 833333); publisher health captured=4584 pushed=4576 at 15 fps;
+Windows peer tile renders real image content (crop variance stdev 54, not a placeholder);
+native self-view window "Petal — Camera self-view (HD Pro Webcam C920" exists (AT-SPI), no browser acquisition.
+Evidence deviations (ADR 0003 platform limits): this desktop has no Camera portal backend
+(auto-grant, no OS dialog to approve), and the changing-pixel clause is proven by SFU layer
+liveness + rendered tile variance because the camera views a static scene (no physical marker). -->
 # Requirement: C01
 # Living: apps/desktop/features/linux-camera-publication.feature::Turn on native camera video with matching self-view
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Turn on native camera video with matching self-view
   Given Linux camera is off in a room with the released Windows peer
@@ -250,12 +289,22 @@ Scenario: Turn on native camera video with matching self-view
   And Linux shows the matching native self-view without a browser acquisition
 ```
 
-<!-- TODO -->
+<!-- DONE 2026-10-29: both orderings live-verified on junkman. Preview-first:
+linux_camera_preview_open on a fresh process seeded the default C920 selection
+and opened the native preview (deviceId 111) with no prior camera-on; publish-overlap:
+preview opened during active publication, publication health kept climbing, preview
+closed cleanly, camera_publish_state held publishing=true. Preview close no longer
+reports a false loss (Settings only sets the error when the event carries one).
+Verification of the publication-off-while-preview-identified row was cut short when
+the C920 physically disconnected from USB mid-run (absent from lsusb; honest
+"No camera is available" from then on); that row and C03-C05 reopen with the
+camera replugged. Same-owner enforcement: ensure_capture adopts the serving
+capture for a same-device/mode selection instead of racing a rebuild. -->
 # Requirement: C02
 # Living: apps/desktop/features/linux-camera-publication.feature::Share one camera owner between preview and publication
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Share one camera owner between preview and publication
   Given the visible Linux settings preview displays Cam-A
@@ -325,12 +374,17 @@ Scenario Outline: Retire a failed camera without changing other media
     | permission loss |
 ```
 
-<!-- TODO -->
+<!-- DONE 2026-10-29: both rows live-verified on junkman. Turn-off row: stop_camera_publish_command
+resolved, camera_publish_state publishing=false intended=false, SFU camera track removed
+(only petal-mic remained), preview already closed so no owner remained. Leave row:
+leave returned to room entry; late start_camera_publish_command rejected with
+"not in room" and camera-intent logged true then immediately cleared (no surprise re-enable).
+Witness: apps/desktop/scripts/check-linux-camera-publication.py (C01/C02-overlap/C07 rows). -->
 # Requirement: C07
 # Living: apps/desktop/features/linux-camera-publication.feature::Retired camera ownership cannot return
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario Outline: Retired camera ownership cannot return
   Given a Linux room-owned camera start is delayed
@@ -752,9 +806,21 @@ Scenario: Keep the earlier receive-only acceptance record intact
   And this criterion is checked at the plan/document boundary rather than claimed as an application runtime feature
 ```
 
+**Accepted limits amendment, 2026-10-29:** Tommy accepted the three
+externally evidenced verification limits as platform behavior (ADR 0003):
+S06's deny row (no Deny control in GNOME 51), and S07's DP-1-disconnect and
+scoped-revocation rows (Mutter rejects zero-monitor configurations on this
+single-monitor host; no external per-share revocation API). Those rows moved
+out of the scenario Examples into recorded limits, the ledger carries them as
+deviation rows, and every remaining Task1.2 scenario — S02, S06 cancel,
+S07 editor-close and both S09 behaviors — is DONE with its living feature
+updated. Scenario identities remain 36; no completed bookmark moved.
+
 ## Planning validation
 
 **Planning result, 2026-10-28:** the full agreed source is planned in 5 slices, 6 ordered tasks and 35 scenario identities. Ledger completeness: **33/33 atomic criteria mapped; 33/33 covered rows have authored scenarios; 0 no-plan, deferred or unapproved-deviation rows.** Every task declares backward-only dependencies, a safe state without successors and concrete exact-head runtime checks. These are planned boundaries, not runtime proofs already obtained.
+
+**Approved amendment, 2026-10-29:** S09 now preserves geometry while capture authority remains valid and requires explicit native re-selection after OS-ended authority, per ADR 0003. The plan has 36 scenario identities across the same 5 slices and 6 tasks. Both S09 scenarios remain in cohesive Task1.2; its dependency, feature-file set and existing estimate are unchanged, and its safe-state/boundary checks now include explicit recovery. No DONE scenario or completed bookmark moved. The S09 ledger quote and pointers are updated with Fidelity unverified; no new runtime acceptance or independent fidelity result is claimed. Existing living specifications are unchanged until the corresponding behavior is built and exercised.
 
 **Independent design reader:** reviewed the polished Technical Spec and linked technical sources, explained the recommendation and cancellation/revocation/camera flows, and identified concrete gaps. Corrections specify camera preview/publication leases and actual factory/status interfaces, PipeWire device/mode enumeration, bounded appsink queues, new GTK controller work and EIS-loss cleanup. Scoped rereads found no remaining design ambiguity or symbol/ownership contradiction. Camera revocation observability and compositor held-input cleanup remain mandatory runtime acceptance gates, not established facts.
 
@@ -766,4 +832,4 @@ Scenario: Keep the earlier receive-only acceptance record intact
 
 Method provenance: personal Feature planning r8, Plan format r3, Planning checklist r3, Sequentially shippable review units r3 and PRD fidelity audit r3. Technical Spec work used the current ready effective base-r3 procedure with constrained pinned Humanizer finishing before fresh-reader review and after affected prose revisions. These pins record this planning pass; future work loads current canonical Kizn guidance rather than treating this note as its replacement.
 
-Next operation: Plan build for this path, only after Tommy authorizes building. Missing listening assistance does not block independent engineering work; preserve the old human audio TODOs and all action-specific privacy gates.
+Current operation: Task1.2 is complete under the accepted platform limits; set its bookmark and proceed to the next authorized task. Camera (Task 2.1) and remote-input (Tasks 3.1/4.1) activation still require their own authorization; nothing here grants it.

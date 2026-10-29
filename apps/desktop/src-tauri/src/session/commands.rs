@@ -1,10 +1,9 @@
-use crate::remote_control_core::RemoteControlPolicy;
 use super::share::{
     set_share_audio_enabled as set_share_audio_enabled_impl,
-    set_share_resolution as set_share_resolution_impl,
-    share_audio_state as share_audio_state_impl,
+    set_share_resolution as set_share_resolution_impl, share_audio_state as share_audio_state_impl,
 };
 use super::{join_room, leave_room, SessionState, ShareSessionError};
+use crate::remote_control_core::RemoteControlPolicy;
 
 // =============================================================================
 // Tauri commands (SPEC.md §4.6 join flow)
@@ -31,8 +30,9 @@ pub async fn join_room_command(
     // `remote_control_policy` is the additive, authoritative field; the
     // legacy boolean is kept so an older frontend bundle still joins
     // (`true` -> Ask, never Auto -- consent is the default).
-    let policy = remote_control_policy
-        .unwrap_or_else(|| RemoteControlPolicy::from_allowed(remote_control_allowed, RemoteControlPolicy::Ask));
+    let policy = remote_control_policy.unwrap_or_else(|| {
+        RemoteControlPolicy::from_allowed(remote_control_allowed, RemoteControlPolicy::Ask)
+    });
     join_room(
         &app,
         &rooms,
@@ -96,10 +96,7 @@ pub fn set_remote_control_policy(
 /// Whether remote peers may control ONE shared window. Per-share, and
 /// independent of the meeting-wide policy -- both must allow.
 #[tauri::command]
-pub fn share_remote_control_allowed(
-    state: tauri::State<'_, SessionState>,
-    window_id: u32,
-) -> bool {
+pub fn share_remote_control_allowed(state: tauri::State<'_, SessionState>, window_id: u32) -> bool {
     state.share_allows_remote_control(window_id)
 }
 

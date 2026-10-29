@@ -450,7 +450,13 @@ pub(crate) fn emit_floor_state(app: &AppHandle, window_id: u32, active_speaker: 
 /// has no async server-side transcription event to hang off of the way a
 /// spoken turn's `InputText` does — Gemini doesn't transcribe text it
 /// already received as text).
-pub(crate) fn emit_transcript(app: &AppHandle, window_id: u32, role: &str, text: &str, final_: bool) {
+pub(crate) fn emit_transcript(
+    app: &AppHandle,
+    window_id: u32,
+    role: &str,
+    text: &str,
+    final_: bool,
+) {
     let _ = app.emit(
         EVENT_TRANSCRIPT,
         serde_json::json!({
@@ -680,7 +686,9 @@ async fn connect_and_run(
         control_queue: VecDeque::new(),
         control_busy: false,
     }) {
-        log::info!("ai_chat: abandoning the start for window {window_id} -- the slot is no longer ours");
+        log::info!(
+            "ai_chat: abandoning the start for window {window_id} -- the slot is no longer ours"
+        );
         abandon_connection(&stop);
         return Err(EndReason::Stopped);
     }
@@ -803,9 +811,7 @@ async fn connect_and_run(
                                     &reason,
                                     end_reason,
                                 );
-                                log::info!(
-                                    "ai_chat: server closed session ({end_reason:?})"
-                                );
+                                log::info!("ai_chat: server closed session ({end_reason:?})");
                                 break;
                             }
                             _ => continue,
@@ -827,9 +833,8 @@ async fn connect_and_run(
                                     // there is no race with real speech to
                                     // arbitrate the way takt's always-listening
                                     // design needs to.
-                                    let _ = tx_frames
-                                        .send(protocol::greeting_trigger_message())
-                                        .await;
+                                    let _ =
+                                        tx_frames.send(protocol::greeting_trigger_message()).await;
                                     // Everyone in the room hears the assistant,
                                     // not just this machine (#657).
                                     super::voice::start(&app, window_id);
@@ -988,7 +993,11 @@ fn target_process(app: &AppHandle, window_id: u32) -> (Option<i32>, Option<Strin
     let pid = app
         .try_state::<crate::session::SessionState>()
         .and_then(|state| state.active_share_pid(window_id))
-        .or_else(|| crate::window_registry::global().map(|r| r.owner_pid_fresh(window_id)).unwrap_or_else(|| crate::platform::cg::owner_pid_for_window_id(window_id)))
+        .or_else(|| {
+            crate::window_registry::global()
+                .map(|r| r.owner_pid_fresh(window_id))
+                .unwrap_or_else(|| crate::platform::cg::owner_pid_for_window_id(window_id))
+        })
         .filter(|pid| *pid > 0);
     let bundle_id = pid.and_then(super::control_target::bundle_id_for_pid);
     (pid, bundle_id)
@@ -1045,7 +1054,9 @@ enum ControlProgress {
 fn enqueue_tool_calls(app: &AppHandle, window_id: u32, calls: Vec<protocol::FunctionCall>) {
     let should_pump = {
         let Ok(mut guard) = slot().lock() else { return };
-        let Some(Slot::Running(session)) = guard.as_mut() else { return };
+        let Some(Slot::Running(session)) = guard.as_mut() else {
+            return;
+        };
         if session.window_id != window_id {
             return;
         }
@@ -1056,10 +1067,7 @@ fn enqueue_tool_calls(app: &AppHandle, window_id: u32, calls: Vec<protocol::Func
     }
 }
 
-fn queue_control_calls(
-    session: &mut ActiveSession,
-    calls: Vec<protocol::FunctionCall>,
-) -> bool {
+fn queue_control_calls(session: &mut ActiveSession, calls: Vec<protocol::FunctionCall>) -> bool {
     session.control_queue.extend(calls);
     if session.control_busy {
         false
@@ -1073,7 +1081,9 @@ fn pump_control_queue(app: &AppHandle, window_id: u32) {
     loop {
         let next = {
             let Ok(mut guard) = slot().lock() else { return };
-            let Some(Slot::Running(session)) = guard.as_mut() else { return };
+            let Some(Slot::Running(session)) = guard.as_mut() else {
+                return;
+            };
             if session.window_id != window_id {
                 return;
             }
@@ -1174,9 +1184,7 @@ fn handle_tool_call(
             super::control_exec::ClickResolution::Resolved(_)
         ) {
             let code = match resolution {
-                super::control_exec::ClickResolution::StaleGeneration => {
-                    "stale_digest_generation"
-                }
+                super::control_exec::ClickResolution::StaleGeneration => "stale_digest_generation",
                 _ => "element_unpositioned",
             };
             refuse_tool_call(app, window_id, tx, id, name, code, None);
@@ -1201,7 +1209,10 @@ fn handle_tool_call(
     let (target_pid, target_bundle_id) = target_process(app, window_id);
     let window_present = (handles.is_shared)()
         && target_pid.is_some()
-        && crate::window_registry::global().map(|r| r.frame_fresh(window_id)).unwrap_or_else(|| crate::platform::cg::frame_for_window_id(window_id)).is_some();
+        && crate::window_registry::global()
+            .map(|r| r.frame_fresh(window_id))
+            .unwrap_or_else(|| crate::platform::cg::frame_for_window_id(window_id))
+            .is_some();
     let ctx = GrantContext {
         window_present,
         // The TARGET application, not merely whatever is frontmost: the
@@ -1228,7 +1239,15 @@ fn handle_tool_call(
         Standing::Refused => {
             // A refused session must not keep raising cards — that is exactly
             // the wear-down the stickiness exists to prevent.
-            refuse_tool_call(app, window_id, tx, id, name, "control_rejected", Some(&detail));
+            refuse_tool_call(
+                app,
+                window_id,
+                tx,
+                id,
+                name,
+                "control_rejected",
+                Some(&detail),
+            );
             ControlProgress::Complete
         }
         Standing::Session => {
@@ -1356,7 +1375,8 @@ pub fn reject_control(app: &AppHandle, session_id: u64) -> bool {
 /// The deliberate way back from a sticky refusal.
 pub fn resume_control(session_id: u64) -> bool {
     use super::control_gate::{clear_refusal, AnswerOutcome};
-    super::control_gate::with_state(|state| clear_refusal(state, session_id)) == AnswerOutcome::Applied
+    super::control_gate::with_state(|state| clear_refusal(state, session_id))
+        == AnswerOutcome::Applied
 }
 
 /// Run an approved action on its own thread.
@@ -1408,14 +1428,16 @@ fn run_execution(app: &AppHandle, pending: super::control_gate::PendingRequest) 
     // takeover were re-read fresh below and session-alive/publication were
     // not. Re-fetch both HERE, after the wait, alongside the frame read that
     // already correctly accounts for the window moving during it.
-    let Some(handles) = control_handles().filter(|h| {
-        h.window_id == pending.window_id && h.control_session_id == pending.session_id
-    }) else {
+    let Some(handles) = control_handles()
+        .filter(|h| h.window_id == pending.window_id && h.control_session_id == pending.session_id)
+    else {
         report_execution(app, &pending, None, false, "session_ended");
         return;
     };
     let publication_live = (handles.is_shared)();
-    let window_frame = crate::window_registry::global().map(|r| r.frame_fresh(pending.window_id)).unwrap_or_else(|| crate::platform::cg::frame_for_window_id(pending.window_id));
+    let window_frame = crate::window_registry::global()
+        .map(|r| r.frame_fresh(pending.window_id))
+        .unwrap_or_else(|| crate::platform::cg::frame_for_window_id(pending.window_id));
 
     let ctx = ExecContext {
         control_enabled: super::control_gate::control_enabled(),
@@ -1449,8 +1471,7 @@ fn run_execution(app: &AppHandle, pending: super::control_gate::PendingRequest) 
             generation,
             element_index,
         } => {
-            let (_, resolution) =
-                resolve_click(&handles.digest_state, *generation, *element_index);
+            let (_, resolution) = resolve_click(&handles.digest_state, *generation, *element_index);
             match control_exec::plan_click(&resolution, frame) {
                 Ok(point) => Some(point),
                 Err(code) => {
@@ -1719,7 +1740,9 @@ pub fn ptt_start(speaker: &str, source: PttSource) -> bool {
         {
             return false; // floor already held
         }
-        let _ = session.outbound.try_send(protocol::activity_start_message());
+        let _ = session
+            .outbound
+            .try_send(protocol::activity_start_message());
         let _ = session
             .outbound
             .try_send(protocol::speaker_label_message(speaker));
@@ -1919,7 +1942,10 @@ mod tests {
             })
             .collect();
         assert!(queue_control_calls(&mut session, calls));
-        assert!(session.control_busy, "the batch did not claim the controller lane");
+        assert!(
+            session.control_busy,
+            "the batch did not claim the controller lane"
+        );
         assert_eq!(
             session
                 .control_queue
@@ -2121,7 +2147,10 @@ mod tests {
             .filter(|h| h.window_id == 9 && h.control_session_id == 7)
             .expect("session should be found while it's running");
         let stale_publication_live = (handles_before.is_shared)();
-        assert!(stale_publication_live, "publication should read live at first");
+        assert!(
+            stale_publication_live,
+            "publication should read live at first"
+        );
 
         // Something happens DURING the simulated wait: the share stops.
         shared.store(false, Ordering::SeqCst);
@@ -2219,7 +2248,10 @@ mod tests {
     #[test]
     fn connect_url_uses_plain_endpoint_for_api_keys() {
         let url = Credential::ApiKey("AIzaTest".into()).connect_url();
-        assert!(url.contains("GenerativeService.BidiGenerateContent?"), "{url}");
+        assert!(
+            url.contains("GenerativeService.BidiGenerateContent?"),
+            "{url}"
+        );
         assert!(!url.contains("Constrained"), "{url}");
         assert!(url.contains("key=AIzaTest"), "{url}");
     }

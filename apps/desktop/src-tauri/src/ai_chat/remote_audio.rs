@@ -87,7 +87,10 @@ pub fn frames_forwarded() -> u64 {
 
 /// Whose track is currently being forwarded, if anyone.
 pub fn tapped_identity() -> Option<String> {
-    tap().lock().ok().and_then(|g| g.as_ref().map(|t| t.identity.clone()))
+    tap()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|t| t.identity.clone()))
 }
 
 /// Pick which of a participant's audio publications to tap.

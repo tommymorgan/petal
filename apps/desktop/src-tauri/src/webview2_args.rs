@@ -22,7 +22,8 @@
 //! This module is compiled only on Windows (`additional_browser_args` is
 //! unsupported on macOS/Linux — see `tauri::WebviewWindowBuilder`).
 
-pub(crate) const WEBVIEW2_ACCEL_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+pub(crate) const WEBVIEW2_ACCEL_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
 --ignore-gpu-blocklist \
 --enable-gpu \
 --enable-gpu-compositing \

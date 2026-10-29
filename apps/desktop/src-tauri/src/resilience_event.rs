@@ -106,7 +106,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(mic["kind"], "micPublicationRepairFailed");
-        assert_eq!(mic["message"], "Reconnect could not restore your microphone");
+        assert_eq!(
+            mic["message"],
+            "Reconnect could not restore your microphone"
+        );
 
         let camera = serde_json::to_value(ResilienceEvent::CameraPublicationRepairFailed {
             message: "Reconnect could not restore your camera".into(),

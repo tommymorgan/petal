@@ -189,8 +189,10 @@ fn top_center_origin(app: &AppHandle) -> (f64, f64) {
     let ax = work_area.position.x as f64 / scale;
     let ay = work_area.position.y as f64 / scale;
     let aw = work_area.size.width as f64 / scale;
-    let (x, _) =
-        crate::window_picker::centered_origin_in_work_area((ax, ay, aw, 0.0), (SHARE_NOTICE_WIDTH, 0.0));
+    let (x, _) = crate::window_picker::centered_origin_in_work_area(
+        (ax, ay, aw, 0.0),
+        (SHARE_NOTICE_WIDTH, 0.0),
+    );
     (x, ay + SHARE_NOTICE_TOP_MARGIN)
 }
 
@@ -203,8 +205,7 @@ fn top_center_origin(app: &AppHandle) -> (f64, f64) {
 /// `set_size`'s own anchor behavior.
 #[tauri::command]
 pub fn share_notice_present(app: AppHandle, height: f64) {
-    let height = height
-        .clamp(SHARE_NOTICE_DEFAULT_HEIGHT, SHARE_NOTICE_MAX_HEIGHT);
+    let height = height.clamp(SHARE_NOTICE_DEFAULT_HEIGHT, SHARE_NOTICE_MAX_HEIGHT);
     let app_main = app.clone();
     crate::platform::on_main(&app, "share_notice: present", move || {
         let (x, y) = top_center_origin(&app_main);

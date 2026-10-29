@@ -302,7 +302,10 @@ fn toggle_window_picker_window_on_main(app: &AppHandle) -> Result<bool, String> 
 /// to get pure horizontal centering out of the same formula (the `y` term
 /// collapses to `ay` when both height terms are zero) instead of
 /// reimplementing this math a second time.
-pub(crate) fn centered_origin_in_work_area(work_area: (f64, f64, f64, f64), size: (f64, f64)) -> (f64, f64) {
+pub(crate) fn centered_origin_in_work_area(
+    work_area: (f64, f64, f64, f64),
+    size: (f64, f64),
+) -> (f64, f64) {
     let (ax, ay, aw, ah) = work_area;
     let (w, h) = size;
     ((ax + (aw - w) / 2.0).max(ax), (ay + (ah - h) / 2.0).max(ay))
@@ -392,8 +395,7 @@ fn open_window_picker_window_on_main(app: &AppHandle) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let picker_builder =
         picker_builder.additional_browser_args(crate::webview2_args::WEBVIEW2_ACCEL_ARGS);
-    match picker_builder.build()
-    {
+    match picker_builder.build() {
         Ok(win) => {
             // Windows: opaque window with DWM-native corners (same as the main
             // window); macOS keeps its transparent + CSS-rounded panel.

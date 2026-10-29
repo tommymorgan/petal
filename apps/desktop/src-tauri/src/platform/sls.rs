@@ -101,8 +101,7 @@ fn main_connection() -> Option<i32> {
 
 /// Whether the SLS read primitives resolve on this machine (canary input).
 pub fn sls_reads_available() -> bool {
-    main_connection().is_some()
-        && dlsym_fn!("SLSGetWindowBounds", SlsGetWindowBoundsFn).is_some()
+    main_connection().is_some() && dlsym_fn!("SLSGetWindowBounds", SlsGetWindowBoundsFn).is_some()
 }
 
 /// One window's RAW frame in **0.1 µs** (§9.2), global top-left points — the
@@ -276,7 +275,6 @@ fn note_hit_test(hit: Option<(u32, i32)>) {
     }
 }
 
-
 // ============================================================================
 // Event stream (#748 increment 2). Gated by Screen Recording (§9.5) — which
 // production Petal always holds; without it registration succeeds but no
@@ -316,8 +314,7 @@ pub fn payload_wid(data: &[u8]) -> Option<u32> {
     (wid != 0).then_some(wid)
 }
 
-type SlsRegisterNotifyFn =
-    unsafe extern "C" fn(i32, *const c_void, u32, *mut c_void) -> i32;
+type SlsRegisterNotifyFn = unsafe extern "C" fn(i32, *const c_void, u32, *mut c_void) -> i32;
 /// `SLSRemoveConnectionNotifyProc(cid, proc, event, ctx)`. FOUR parameters,
 /// same shape as the register — verified against the SkyLight prologue on
 /// macOS 26.5, which moves x0..x3 into callee-saved registers exactly like
@@ -336,8 +333,7 @@ static EVENTS_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64:
 /// Per-capability delivery counters (§3 "tiers per capability, not global"):
 /// moves (806/807) and lifecycle (811/804) can degrade independently.
 static MOVE_EVENTS_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static LIFECYCLE_EVENTS_SEEN: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static LIFECYCLE_EVENTS_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static FIRST_EVENT_LOGGED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
@@ -346,13 +342,11 @@ static FIRST_EVENT_LOGGED: std::sync::atomic::AtomicBool =
 /// screen ... N times"), and the registry it feeds is itself idle-gated, so
 /// an always-on registration is pure user-visible privacy cost for zero
 /// product value. Off by default; `set_enabled(true)` on room join.
-static STREAM_ENABLED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static STREAM_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Events that arrived while disabled and were dropped before touching any
 /// Screen-Recording-gated API. Non-zero means WindowServer is still
 /// delivering after an unregister — the signature the #88 regression guards.
-static SUPPRESSED_WHILE_IDLE: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static SUPPRESSED_WHILE_IDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Gated CoreGraphics reads (`CGWindowListCreateDescriptionFromArray`) this
 /// callback has performed. The #88 seam: a test drives the REAL callback and
 /// asserts this does not move while idle.
@@ -389,12 +383,7 @@ pub fn sls_lifecycle_live() -> bool {
     LIFECYCLE_EVENTS_SEEN.load(std::sync::atomic::Ordering::Relaxed) > 0
 }
 
-extern "C" fn sls_notify_callback(
-    code: u32,
-    data: *const c_void,
-    len: usize,
-    _ctx: *mut c_void,
-) {
+extern "C" fn sls_notify_callback(code: u32, data: *const c_void, len: usize, _ctx: *mut c_void) {
     // #88: hard guard. `SLSRemoveConnectionNotifyProc` is the primary stop,
     // but a delivery already in flight (or a future macOS that ignores the
     // remove) must still never reach the gated CG read below while the app is
@@ -544,8 +533,7 @@ pub fn start_event_stream() {
         return;
     }
     let Some(cid) = main_connection() else { return };
-    let Some(register) = dlsym_fn!("SLSRegisterConnectionNotifyProc", SlsRegisterNotifyFn)
-    else {
+    let Some(register) = dlsym_fn!("SLSRegisterConnectionNotifyProc", SlsRegisterNotifyFn) else {
         log::info!("winsrv: SLSRegisterConnectionNotifyProc unavailable -- T0 events off");
         return;
     };
@@ -738,7 +726,10 @@ mod tests {
 
         // Out of a room: the production entry point the ingest loop calls.
         crate::window_registry::ingest::apply_room_membership(false);
-        assert!(!stream_enabled(), "leaving a room must disarm the SLS stream");
+        assert!(
+            !stream_enabled(),
+            "leaving a room must disarm the SLS stream"
+        );
 
         let before_reads = gated_cg_reads();
         let before_suppressed = suppressed_while_idle();
@@ -797,7 +788,12 @@ mod tests {
         let _guard = IDLE_GUARD.lock().unwrap_or_else(|p| p.into_inner());
         crate::window_registry::ingest::apply_room_membership(false);
         let before = sls_events_seen();
-        sls_notify_callback(SLS_EVENT_DESTROYED, std::ptr::null(), 0, std::ptr::null_mut());
+        sls_notify_callback(
+            SLS_EVENT_DESTROYED,
+            std::ptr::null(),
+            0,
+            std::ptr::null_mut(),
+        );
         assert_eq!(
             sls_events_seen(),
             before,
@@ -874,7 +870,10 @@ mod tests {
     #[test]
     fn sls_event_codes_map_to_actions() {
         assert_eq!(classify_sls_event(SLS_EVENT_CREATED), SlsAction::Lifecycle);
-        assert_eq!(classify_sls_event(SLS_EVENT_DESTROYED), SlsAction::Lifecycle);
+        assert_eq!(
+            classify_sls_event(SLS_EVENT_DESTROYED),
+            SlsAction::Lifecycle
+        );
         assert_eq!(classify_sls_event(SLS_EVENT_MOVED), SlsAction::Geometry);
         assert_eq!(classify_sls_event(SLS_EVENT_RESIZED), SlsAction::Geometry);
         assert_eq!(classify_sls_event(808), SlsAction::Ignore);
@@ -923,9 +922,16 @@ mod tests {
         // parity over the raw CG list is not a valid oracle.
         let mut compared = 0;
         let mut placeholders = 0;
-        for e in entries.iter().filter(|e| e.layer == 0 && e.w >= 40.0 && e.h >= 40.0) {
-            let Ok(wid) = u32::try_from(e.number) else { continue };
-            let Some((x, y, w, h)) = window_bounds(wid) else { continue };
+        for e in entries
+            .iter()
+            .filter(|e| e.layer == 0 && e.w >= 40.0 && e.h >= 40.0)
+        {
+            let Ok(wid) = u32::try_from(e.number) else {
+                continue;
+            };
+            let Some((x, y, w, h)) = window_bounds(wid) else {
+                continue;
+            };
             if (x, y, w, h) == (0.0, 0.0, 1.0, 1.0) {
                 placeholders += 1; // §9.15 placeholder -- counted, not compared
                 continue;

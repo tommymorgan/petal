@@ -90,7 +90,12 @@ pub fn bundle_path_for_executable(executable: &Path) -> Option<PathBuf> {
 pub fn registered_bundle_paths(identifier: &str) -> Option<Vec<PathBuf>> {
     type LsCopyUrlsFn = unsafe extern "C" fn(*const c_void, *mut *const c_void) -> *const c_void;
 
-    let symbol = unsafe { dlsym(RTLD_DEFAULT, c"LSCopyApplicationURLsForBundleIdentifier".as_ptr()) };
+    let symbol = unsafe {
+        dlsym(
+            RTLD_DEFAULT,
+            c"LSCopyApplicationURLsForBundleIdentifier".as_ptr(),
+        )
+    };
     if symbol.is_null() {
         return None;
     }
@@ -112,15 +117,14 @@ pub fn registered_bundle_paths(identifier: &str) -> Option<Vec<PathBuf>> {
 
     // The Copy rule: the returned CFArrayRef is +1 and ours to release.
     // `CFArrayRef` of `CFURLRef` is toll-free bridged to `NSArray<NSURL>`.
-    let array: objc2::rc::Retained<objc2_foundation::NSArray<objc2_foundation::NSURL>> =
-        match unsafe {
-            objc2::rc::Retained::from_raw(
-                array_ptr as *mut objc2_foundation::NSArray<objc2_foundation::NSURL>,
-            )
-        } {
-            Some(array) => array,
-            None => return Some(Vec::new()),
-        };
+    let array: objc2::rc::Retained<objc2_foundation::NSArray<objc2_foundation::NSURL>> = match unsafe {
+        objc2::rc::Retained::from_raw(
+            array_ptr as *mut objc2_foundation::NSArray<objc2_foundation::NSURL>,
+        )
+    } {
+        Some(array) => array,
+        None => return Some(Vec::new()),
+    };
 
     let mut paths = Vec::new();
     for url in array.iter() {
@@ -136,7 +140,8 @@ pub fn registered_bundle_paths(identifier: &str) -> Option<Vec<PathBuf>> {
 /// Compared after canonicalization so `/tmp` vs `/private/tmp` and symlinked
 /// paths do not read as a mismatch and trigger a pointless re-register.
 pub fn registration_points_at(bundle: &Path, registered: &[PathBuf]) -> bool {
-    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let target = canonical(bundle);
     registered.iter().any(|path| canonical(path) == target)
 }
@@ -234,11 +239,13 @@ fn register_via_ls_register_url(bundle: &Path) -> Result<(), String> {
 pub fn repair_registration_if_missing() {
     let bundle = running_bundle_path();
     let identifier = main_bundle_identifier();
-    let registered = identifier
-        .as_deref()
-        .and_then(registered_bundle_paths);
+    let registered = identifier.as_deref().and_then(registered_bundle_paths);
 
-    if !startup_repair_needed(bundle.as_deref(), identifier.as_deref(), registered.as_deref()) {
+    if !startup_repair_needed(
+        bundle.as_deref(),
+        identifier.as_deref(),
+        registered.as_deref(),
+    ) {
         log::debug!(
             "launch_services: registration OK (bundle={:?}, identifier={:?}, registered={:?})",
             bundle.as_ref().map(|path| path.display().to_string()),
@@ -354,7 +361,11 @@ mod tests {
         ));
         // Unbundled dev binary -- nothing to repair, in any state.
         assert!(!startup_repair_needed(None, None, Some(&none)));
-        assert!(!startup_repair_needed(None, Some("com.petal.app"), Some(&none)));
+        assert!(!startup_repair_needed(
+            None,
+            Some("com.petal.app"),
+            Some(&none)
+        ));
         assert!(!startup_repair_needed(Some(&bundle), None, Some(&none)));
     }
 }

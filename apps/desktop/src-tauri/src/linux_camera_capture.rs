@@ -75,13 +75,16 @@ impl CameraCaptureStatus {
     }
 }
 
-/// One bounded GStreamer capture on the portal's restricted remote. Frames
-/// land in a single latest-wins slot; the owning coordinator pumps them.
+/// One bounded GStreamer capture. With a portal remote the capture rides the
+/// restricted fd; without one (direct-daemon mode) pipewiresrc connects to
+/// the session manager itself and the registry node id still addresses the
+/// same global. Frames land in a single latest-wins slot; the owning
+/// coordinator pumps them.
 pub(super) struct CameraCapturePipeline {
     pipeline: gst::Pipeline,
     bus: gst::Bus,
     // The exact remote outlives pipewiresrc, including its NULL transition.
-    _remote: OwnedFd,
+    _remote: Option<OwnedFd>,
     samples: watch::Receiver<Option<gst::Sample>>,
     status: Arc<CameraCaptureStatus>,
     sequence: u64,
@@ -90,11 +93,13 @@ pub(super) struct CameraCapturePipeline {
 }
 
 impl CameraCapturePipeline {
-    /// Open the pipeline for one selected node on its granted remote. The
-    /// preferred mode, when supplied, must come from that node's advertised
-    /// EnumFormat modes; it pins the negotiated size and rate.
+    /// Open the pipeline for one selected node. `remote` is the Camera
+    /// portal's restricted fd when present; `None` captures through the
+    /// session daemon directly. The preferred mode, when supplied, must
+    /// come from that node's advertised EnumFormat modes; it pins the
+    /// negotiated size and rate.
     pub fn open(
-        remote: OwnedFd,
+        remote: Option<OwnedFd>,
         node: u32,
         preferred: Option<PreferredCameraMode>,
         status: Arc<CameraCaptureStatus>,
@@ -113,8 +118,10 @@ impl CameraCapturePipeline {
             })
         };
         let source = element("pipewiresrc")?;
-        source.set_property("fd", remote.as_raw_fd());
-        // Registry node ids are scoped to this remote's server connection.
+        if let Some(remote) = remote.as_ref() {
+            source.set_property("fd", remote.as_raw_fd());
+        }
+        // Node ids address the same registry on both transports.
         source.set_property("path", node.to_string());
         source.set_property_from_str("on-disconnect", "error");
         source.set_property("always-copy", true);
@@ -337,7 +344,7 @@ mod tests {
         CameraCapturePipeline {
             pipeline,
             bus,
-            _remote: std::fs::File::open("/dev/null").unwrap().into(),
+            _remote: Some(std::fs::File::open("/dev/null").unwrap().into()),
             samples,
             status: CameraCaptureStatus::new(),
             sequence: 0,

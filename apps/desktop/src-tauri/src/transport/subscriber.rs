@@ -1500,7 +1500,8 @@ pub(crate) fn start_compositor_feed(
                         // the same way as the Windows decode loop's
                         // equivalent tick (`spawn_windows_decode_loop`).
                         let mut watchdog_tick = tokio::time::interval(STARVATION_CHECK_INTERVAL);
-                        watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        watchdog_tick
+                            .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         loop {
                             let frame = tokio::select! {
                                 _ = watchdog_tick.tick() => {
@@ -2244,8 +2245,10 @@ pub(crate) fn start_compositor_feed(
                             crate::transport::publisher::shared_window_kind_from_metadata(
                                 &metadata, window_id,
                             );
-                        let share_instance_id = crate::transport::publisher::
-                            shared_window_share_instance_from_metadata(&metadata, window_id);
+                        let share_instance_id =
+                            crate::transport::publisher::shared_window_share_instance_from_metadata(
+                                &metadata, window_id,
+                            );
                         let source_title = source_title_for_kind(source_kind, &source_title);
                         let source_url =
                             crate::transport::publisher::shared_window_url_from_metadata(
@@ -4015,16 +4018,40 @@ mod tests {
         let subscribed = Instant::now();
         let hard_stale = subscribed + STALE_PUBLICATION_RETIRE_AFTER;
         assert_eq!(
-            no_frame_decision(hard_stale, subscribed, Some(subscribed), false, false, true, false),
+            no_frame_decision(
+                hard_stale,
+                subscribed,
+                Some(subscribed),
+                false,
+                false,
+                true,
+                false
+            ),
             NoFrameDecision::Retire
         );
         assert_eq!(
-            no_frame_decision(hard_stale, subscribed, Some(subscribed), true, false, false, false),
+            no_frame_decision(
+                hard_stale,
+                subscribed,
+                Some(subscribed),
+                true,
+                false,
+                false,
+                false
+            ),
             NoFrameDecision::Retire
         );
         // A reconnect is never terminal, at any silence.
         assert_eq!(
-            no_frame_decision(hard_stale, subscribed, Some(subscribed), false, true, false, false),
+            no_frame_decision(
+                hard_stale,
+                subscribed,
+                Some(subscribed),
+                false,
+                true,
+                false,
+                false
+            ),
             NoFrameDecision::Keep
         );
     }
@@ -4315,7 +4342,9 @@ mod tests {
             );
         }
         assert!(quality_downgrade_due(QUALITY_DOWNGRADE_SUSTAINED_SAMPLES));
-        assert!(quality_downgrade_due(QUALITY_DOWNGRADE_SUSTAINED_SAMPLES + 5));
+        assert!(quality_downgrade_due(
+            QUALITY_DOWNGRADE_SUSTAINED_SAMPLES + 5
+        ));
     }
 
     #[test]
@@ -4391,7 +4420,10 @@ mod tests {
                 _ = tokio::time::sleep(Duration::from_millis(33)) => { fast_ticks += 1; }
             }
         }
-        assert!(fast_ticks > 0, "the fast branch must actually be racing, or this test proves nothing");
+        assert!(
+            fast_ticks > 0,
+            "the fast branch must actually be racing, or this test proves nothing"
+        );
         assert!(
             watchdog_fires >= 3,
             "a persistent `Interval` created once outside the loop must keep firing on its own \
@@ -4883,7 +4915,15 @@ mod tests {
         let subscribed = Instant::now();
         let now = subscribed + NO_FRAME_RETIRE_AFTER + Duration::from_secs(1);
         assert_eq!(
-            no_frame_decision(now, subscribed, Some(subscribed), false, false, false, false),
+            no_frame_decision(
+                now,
+                subscribed,
+                Some(subscribed),
+                false,
+                false,
+                false,
+                false
+            ),
             NoFrameDecision::Retire
         );
     }
@@ -4893,16 +4933,40 @@ mod tests {
         let subscribed = Instant::now();
         let recent = subscribed + Duration::from_secs(10);
         assert_eq!(
-            no_frame_decision(recent, subscribed, Some(subscribed), false, false, false, false),
+            no_frame_decision(
+                recent,
+                subscribed,
+                Some(subscribed),
+                false,
+                false,
+                false,
+                false
+            ),
             NoFrameDecision::Keep
         );
         let stale = subscribed + NO_FRAME_RETIRE_AFTER + Duration::from_secs(1);
         assert_eq!(
-            no_frame_decision(stale, subscribed, Some(subscribed), true, false, false, false),
+            no_frame_decision(
+                stale,
+                subscribed,
+                Some(subscribed),
+                true,
+                false,
+                false,
+                false
+            ),
             NoFrameDecision::Keep
         );
         assert_eq!(
-            no_frame_decision(stale, subscribed, Some(subscribed), false, true, false, false),
+            no_frame_decision(
+                stale,
+                subscribed,
+                Some(subscribed),
+                false,
+                true,
+                false,
+                false
+            ),
             NoFrameDecision::Keep
         );
     }
@@ -5116,12 +5180,28 @@ mod tests {
         let subscribed = Instant::now();
         let stale = subscribed + NO_FRAME_RETIRE_AFTER + Duration::from_secs(1);
         assert_eq!(
-            no_frame_decision(stale, subscribed, Some(subscribed), false, false, true, false),
+            no_frame_decision(
+                stale,
+                subscribed,
+                Some(subscribed),
+                false,
+                false,
+                true,
+                false
+            ),
             NoFrameDecision::Keep
         );
         // ...and still fires the first time.
         assert_eq!(
-            no_frame_decision(stale, subscribed, Some(subscribed), false, false, false, false),
+            no_frame_decision(
+                stale,
+                subscribed,
+                Some(subscribed),
+                false,
+                false,
+                false,
+                false
+            ),
             NoFrameDecision::Retire
         );
     }
@@ -5158,7 +5238,15 @@ mod tests {
         // the hold + repair request happen at NO_FRAME_RETIRE_AFTER as before.
         let first_stall = subscribed + NO_FRAME_RETIRE_AFTER + Duration::from_secs(1);
         assert_eq!(
-            no_frame_decision(first_stall, subscribed, Some(subscribed), false, false, false, true),
+            no_frame_decision(
+                first_stall,
+                subscribed,
+                Some(subscribed),
+                false,
+                false,
+                false,
+                true
+            ),
             NoFrameDecision::Retire
         );
     }

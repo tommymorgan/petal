@@ -1312,7 +1312,10 @@ fn display_enqueue_paused() -> bool {
 /// 100% drop by construction, which is the sleep gate doing its job, not
 /// display-layer distress (adversarial-review finding 1 on the #878 batch).
 pub(crate) fn display_enqueue_sleep_paused() -> bool {
-    matches!(*DISPLAY_ENQUEUE_GATE.lock_unpoisoned(), DisplayEnqueueGate::Paused)
+    matches!(
+        *DISPLAY_ENQUEUE_GATE.lock_unpoisoned(),
+        DisplayEnqueueGate::Paused
+    )
 }
 
 pub fn set_display_enqueue_paused(paused: bool) {
@@ -2841,7 +2844,10 @@ pub(crate) fn open_pointer_family_meta(app: &AppHandle) -> Option<Vec<PointerFam
     receiver.recv_timeout(Duration::from_millis(150)).ok()
 }
 
-fn pointer_family_meta_on_main(app: &AppHandle, keys: &[RemoteWindowKey]) -> Vec<PointerFamilyMeta> {
+fn pointer_family_meta_on_main(
+    app: &AppHandle,
+    keys: &[RemoteWindowKey],
+) -> Vec<PointerFamilyMeta> {
     keys.iter()
         .filter_map(|key| {
             let panel = app.get_webview_window(&panel_label_for_key(key))?;
@@ -4291,10 +4297,7 @@ fn logical_size_matches(a: (f64, f64), b: (f64, f64)) -> bool {
 
 /// Region frames have no lower simulcast geometry to preserve: a valid decoded
 /// size different from the current canonical size is a live ROI resize.
-fn region_frame_is_new_source_size(
-    canonical: Option<(u32, u32)>,
-    decoded: (u32, u32),
-) -> bool {
+fn region_frame_is_new_source_size(canonical: Option<(u32, u32)>, decoded: (u32, u32)) -> bool {
     decoded.0 > 0 && decoded.1 > 0 && canonical != Some(decoded)
 }
 
@@ -9119,7 +9122,8 @@ mod tests {
         // window starts with no rank" fixture pattern used elsewhere in this
         // module's #875 tests.
         with_state(|s| {
-            s.windows.insert(key.clone(), test_window(owner, "F1 window"));
+            s.windows
+                .insert(key.clone(), test_window(owner, "F1 window"));
         });
         assert_eq!(
             window_z_rank_for_test(owner, window_id),
@@ -9132,9 +9136,7 @@ mod tests {
         crate::compositor::update_window_z_rank(
             owner,
             window_id,
-            crate::transport::publisher::shared_window_z_rank_from_metadata(
-                &metadata, window_id,
-            ),
+            crate::transport::publisher::shared_window_z_rank_from_metadata(&metadata, window_id),
         );
 
         assert_eq!(
@@ -9229,7 +9231,8 @@ mod tests {
         // now reaches.
         update_window_z_rank(owner, retired_key.window_id, Some(0));
 
-        let stored_retired_rank = with_state(|s| s.retired.get(&retired_key).and_then(|w| w.z_rank));
+        let stored_retired_rank =
+            with_state(|s| s.retired.get(&retired_key).and_then(|w| w.z_rank));
         assert_eq!(
             stored_retired_rank,
             Some(0),
@@ -10134,7 +10137,8 @@ mod tests {
 
     #[test]
     fn header_query_exports_same_border_treatment_as_parent_panel() {
-        let query = header_query_string(7, "marco-id", "Marco", "Terminal", None, false, false, None);
+        let query =
+            header_query_string(7, "marco-id", "Marco", "Terminal", None, false, false, None);
         assert!(query.contains("ownerIdentity=marco%2Did"));
         // Border color keys on the owner IDENTITY (mirrors the header's
         // colorForIdentity(ownerIdentity || ownerName)), not the display name.
@@ -10173,7 +10177,16 @@ mod tests {
 
     #[test]
     fn header_query_exports_remote_control_only_when_available() {
-        let query = header_query_string(7, "marco-id", "Marco", "Terminal", None, true, false, Some(3));
+        let query = header_query_string(
+            7,
+            "marco-id",
+            "Marco",
+            "Terminal",
+            None,
+            true,
+            false,
+            Some(3),
+        );
         assert!(query.contains("remoteControl=1"));
         assert!(query.contains("ownerPaletteIndex=3"));
     }
@@ -10390,7 +10403,10 @@ mod tests {
     fn auto_raise_fires_again_for_a_deliberate_reshare_after_the_debounce() {
         let t0 = std::time::Instant::now();
         assert!(
-            !auto_raise_on_reveal_due(Some(t0), t0 + AUTO_RAISE_DEBOUNCE - std::time::Duration::from_millis(1)),
+            !auto_raise_on_reveal_due(
+                Some(t0),
+                t0 + AUTO_RAISE_DEBOUNCE - std::time::Duration::from_millis(1)
+            ),
             "one millisecond short of the gap is still churn"
         );
         assert!(

@@ -1332,7 +1332,12 @@ fn windows_share_audio_state_locked(
     let Some(session) = joined.as_ref() else {
         return ShareAudioState::inactive(window_id);
     };
-    let Some(share) = session.media.shares.iter().find(|share| share.token == window_id) else {
+    let Some(share) = session
+        .media
+        .shares
+        .iter()
+        .find(|share| share.token == window_id)
+    else {
         return ShareAudioState::inactive(window_id);
     };
     let publishing = share.audio_source.is_some_and(|source| {
@@ -1357,19 +1362,13 @@ fn windows_share_audio_state_locked(
 }
 
 #[tauri::command]
-pub fn share_audio_state(
-    state: tauri::State<'_, SessionState>,
-    window_id: u32,
-) -> ShareAudioState {
+pub fn share_audio_state(state: tauri::State<'_, SessionState>, window_id: u32) -> ShareAudioState {
     share_audio_state_for_state(&state, window_id)
 }
 
 /// Token-addressed audio state for native surfaces that already resolved a
 /// live token from a selector label, so no token crosses into their payloads.
-pub(crate) fn share_audio_state_for_state(
-    state: &SessionState,
-    window_id: u32,
-) -> ShareAudioState {
+pub(crate) fn share_audio_state_for_state(state: &SessionState, window_id: u32) -> ShareAudioState {
     windows_share_audio_state_locked(&state.joined.lock_unpoisoned(), window_id)
 }
 
@@ -1459,16 +1458,12 @@ async fn apply_windows_audio_transitions(
                                             share.audio_enabled
                                                 && share.audio_source == Some(source)
                                         })
-                                        && session
-                                            .media
-                                            .screen_audio_sources
-                                            .is_active(source)
+                                        && session.media.screen_audio_sources.is_active(source)
                                         && !session.media.screen_audio.contains_key(&source) =>
                                 {
                                     session.media.screen_audio.insert(source, track.clone());
                                     for share in &mut session.media.shares {
-                                        if share.audio_enabled
-                                            && share.audio_source == Some(source)
+                                        if share.audio_enabled && share.audio_source == Some(source)
                                         {
                                             share.audio_available = true;
                                             share.audio_error = None;

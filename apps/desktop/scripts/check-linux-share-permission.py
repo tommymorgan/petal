@@ -3,14 +3,14 @@
 
 Import run_s06_cancel into the parent's retained, already-muted native room.
 The original DP-1 selection and Windows VM must already be explicitly authorized.
-This opens the real native monitor-selection command while that share is active;
-the caller cancels the actual owned GNOME dialog. It never stops the original
-share, changes mute, edits permission stores, locks the host or restarts services.
+This uses the actual Add share control while that share is active; the caller
+cancels the actual owned GNOME dialog. It observes production picker events and
+real Windows pixels without replacing the native invocation. It never stops
+the original share, changes mute, edits permission stores, locks the host or
+restarts services.
 
-Current Linux UI calls this selection 'Change monitor', not the plan's 'Add
-share'. This witness proves the shared native selection/cancellation boundary;
-it does not assert that the planned Add share affordance exists. GNOME exposes
-Cancel/Share, not Deny: no runtime Deny claim is made by this witness.
+GNOME exposes Cancel/Share, not Deny: no runtime Deny claim is made by this
+witness, and the complete S06 outline requires separate denial evidence.
 """
 import importlib.util
 import math
@@ -23,6 +23,11 @@ _spec = importlib.util.spec_from_file_location(
 monitor = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(monitor)
 audio = monitor.audio
+
+_picture_spec = importlib.util.spec_from_file_location(
+    'permission_picture_witness', Path(__file__).with_name('check-linux-picture-publication.py'))
+picture = importlib.util.module_from_spec(_picture_spec)
+_picture_spec.loader.exec_module(picture)
 
 
 def run_s06_cancel(app, observe_participant, cancel_share, windows_vm, evidence_dir, timeout=90):
@@ -62,37 +67,36 @@ def run_s06_cancel(app, observe_participant, cancel_share, windows_vm, evidence_
                 'Original Windows picture stopped following the owned counter ' + str(value)
             time.sleep(.2)
 
-    attempted = False
-    try:
-        with monitor.owned_counter() as (nonce, marker):
+    with picture.native_picker_events(app) as events, monitor.owned_counter() as (nonce, marker):
+        attempted = False
+        attempt_id = None
+
+        def completed():
+            return attempt_id is not None and any(
+                event.get('attemptId') == attempt_id and event.get('open') is False
+                for event in events())
+
+        try:
             read_counter(nonce, 10, evidence_dir / 'before-cancel.png')
             unchanged()
-            audio.evaluate(app, """(() => {
-                window.__linuxPermissionPreservation = null;
-                window.__TAURI_INTERNALS__.invoke('open_window_picker_window', {}).then(
-                    () => { window.__linuxPermissionPreservation = {resolved: true}; },
-                    error => { window.__linuxPermissionPreservation = {rejected: String(error)}; });
-                return true;
-            })()""")
+            picture.click_add_share(app)
             attempted = True
-            # A command-level denial is not evidence of cancelling a real
-            # permission flow. Observe early failure before asking for Cancel.
             deadline = time.monotonic() + timeout
-            grace = time.monotonic() + .5
-            while time.monotonic() < grace:
+            while attempt_id is None:
                 unchanged()
-                early = audio.evaluate(app, 'window.__linuxPermissionPreservation')
-                assert early is None, 'Selection settled before the native permission Cancel action'
-                time.sleep(.05)
-            cancel_share('S06-cancel')
-            while True:
-                unchanged()
-                outcome = audio.evaluate(app, 'window.__linuxPermissionPreservation')
-                if outcome is not None:
-                    assert outcome.get('rejected'), 'Cancelling permission must reject, never publish a selected replacement'
+                opened = [event for event in events() if event.get('open') is True]
+                if opened:
+                    assert len(opened) == 1, 'Add share created ambiguous native selection attempts'
+                    attempt_id = opened[0]['attemptId']
                     break
+                assert time.monotonic() < deadline, 'Add share did not begin an actual native permission attempt'
+                time.sleep(.05)
+            assert not completed(), 'Selection settled before the real native Cancel action'
+            cancel_share('S06-cancel')
+            while not completed():
+                unchanged()
                 assert time.monotonic() < deadline, 'Cancelled native selection did not retire'
-                time.sleep(.2)
+                time.sleep(.1)
             settled = witness.settled(True, timeout=timeout)
             assert settled == original, 'Cancellation changed the settled original publication identity'
             marker.stdin.write('11\n')
@@ -104,18 +108,17 @@ def run_s06_cancel(app, observe_participant, cancel_share, windows_vm, evidence_
                 'originalNativeShareId': original_id, 'originalVideoSid': original_sid,
                 'originalPublicationRetained': True, 'counters': [10, 11],
                 'realWindowsPixels': True, 'audioSamples': witness.samples,
-                'nativeRejection': outcome['rejected'],
-                'runtimeDenyObserved': False, 'plannedAddShareAffordanceVerified': False,
+                'actualNativeAttemptClosed': True,
+                'runtimeDenyObserved': False, 'plannedAddShareAffordanceVerified': True,
             }
-    finally:
-        if attempted and audio.evaluate(app, 'window.__linuxPermissionPreservation') is None:
-            # Do not use stop_all_shares: the original belongs to the caller
-            # and must not be destroyed to clean up our pending selector.
-            cancel_share('S06-owned-attempt-cleanup')
-            deadline = time.monotonic() + 20
-            while audio.evaluate(app, 'window.__linuxPermissionPreservation') is None:
-                assert time.monotonic() < deadline, 'Owned permission attempt still needs native cancellation cleanup'
-                time.sleep(.2)
+        finally:
+            if attempted and not completed():
+                # The original belongs to the caller; retire only this chooser.
+                cancel_share('S06-owned-attempt-cleanup')
+                deadline = time.monotonic() + 20
+                while not completed():
+                    assert time.monotonic() < deadline, 'Owned Add share attempt still needs native cleanup'
+                    time.sleep(.1)
 
 
 if __name__ == '__main__':

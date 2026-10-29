@@ -69,6 +69,7 @@
     CameraPublishState,
     CameraPublishStateSnapshot,
     DrawUpdate,
+    LinuxPictureShare,
     MenubarPillState,
     RemoteControlStatus,
     MicMuteChanged,
@@ -108,6 +109,9 @@
   let shareCount = $state(0);
   let sharePickerOpen = $state(false);
   let sharePickerRevision = 0;
+  let pictureShares = $state<LinuxPictureShare[]>([]);
+  let shareStateRevision = 0;
+  let shareStateRetired = false;
   let remoteControlAllowed = $state(session.remoteControlPolicy !== 'off');
 
   // In-meeting bug report (#786) — same build-time gate as MainMenu's home
@@ -303,16 +307,19 @@
         void refreshShareState();
       });
       unlistenShareState = await listen<{ windowId: number; shared: boolean; error?: string | null }>(
-        EVENTS.shareStateChanged,
+        isLinux() ? EVENTS.linuxShareStateChanged : EVENTS.shareStateChanged,
         (event) => {
           void refreshShareState();
+          if (shareStateRetired) return;
           if (event.payload.error) showShareToast(event.payload.error);
         }
       );
       unlistenSharePickerVisibility = await listen<{ open: boolean; attemptId?: number }>(
-        EVENTS.sharePickerVisibilityChanged,
+        isLinux() ? EVENTS.linuxSharePickerOpen : EVENTS.sharePickerVisibilityChanged,
         (event) => {
+          if (shareStateRetired) return;
           const attempt = event.payload.attemptId;
+          if (isLinux() && attempt === undefined) return;
           if (attempt !== undefined) {
             // Completion wins even if this attempt's admission event was delayed.
             const revision = attempt * 2 + (event.payload.open ? 0 : 1);
@@ -320,6 +327,7 @@
             sharePickerRevision = revision;
           }
           sharePickerOpen = event.payload.open;
+          if (isLinux() && !event.payload.open) void refreshShareState();
         }
       );
       unlistenMicMute = await listen<MicMuteChanged>(EVENTS.micMuteChanged, (event) => {
@@ -371,6 +379,7 @@
   });
 
   onDestroy(() => {
+    retireShareState();
     if (elapsedTimer) clearInterval(elapsedTimer);
     unlistenSharePicker?.();
     unlistenShareState?.();
@@ -404,6 +413,8 @@
     camActive = false;
     dismissCameraToast();
     if (hasTauri && isWindows()) stopNativeSelfView();
+    // Linux self-view is a native room-owned window (ADR 0003): nothing is
+    // acquired from this webview, so nothing needs releasing here.
   }
 
   // Stop the self-view camera and release the device (camera light must go
@@ -423,6 +434,12 @@
   // against a timeout so the control never silently wedges. In native mode
   // this is only local preview; native publication is the source of truth.
   async function acquireSelfView(): Promise<boolean> {
+    if (hasTauri && isLinux()) {
+      // The native self-view window opens with the publication (C01) and
+      // retires with it; this webview never acquires camera media.
+      camActive = true;
+      return true;
+    }
     if (localCameraStream) {
       // Already holding a live self-view (e.g. Retry after a publish-only
       // failure) — never open a second stream on top of it.
@@ -475,6 +492,23 @@
   // The native snapshot declares whether this platform needs its WebView
   // preview before publication (macOS) or treats it as best-effort (Windows).
   async function turnCameraOn() {
+    if (hasTauri && isLinux()) {
+      // Permission is the real Camera portal flow inside the native publish
+      // path; denial/cancel surface as the invoke error below (C03).
+      try {
+        const result = await invoke<StartCameraPublishResult>(COMMANDS.startCameraPublish);
+        if (result.published) {
+          camActive = true;
+          dismissCameraToast();
+        }
+        // published:false -> the bounded self-heal is running; the terminal
+        // camera-publish-state event owns the retry surface.
+      } catch (e) {
+        console.error('native camera publish failed', e);
+        showCameraRetryToast(String(e).replace(/^Error:\s*/, '') || 'Camera is unavailable');
+      }
+      return;
+    }
     const status = await ensureCameraAccess();
     if (status === 'denied' || status === 'restricted') {
       showCameraToast('Camera access is off — enable Petal in Privacy & Security → Camera');
@@ -524,38 +558,75 @@
     if (plan.acquirePreview && !localCameraStream) void acquireSelfView();
   }
 
-  // Keep the control bar's "Sharing" lit state honest by reading the real
-  // shared-window set (updated whenever the picker is closed).
+  // Native snapshots, never individual event payloads, own the current rows.
+  // Qualify responses so an older read cannot undo a newer state transition.
   async function refreshShareState() {
+    if (shareStateRetired) return;
+    const revision = ++shareStateRevision;
     try {
-      const ids = await invoke<number[]>(COMMANDS.sharedWindowIds);
-      shareActive = ids.length > 0;
-      shareCount = ids.length;
+      if (isLinux()) {
+        const shares = await invoke<LinuxPictureShare[]>(COMMANDS.linuxPictureShares);
+        if (shareStateRetired || revision !== shareStateRevision) return;
+        pictureShares = shares;
+        shareActive = shares.length > 0;
+        shareCount = shares.length;
+      } else {
+        const ids = await invoke<number[]>(COMMANDS.sharedWindowIds);
+        if (shareStateRetired || revision !== shareStateRevision) return;
+        shareActive = ids.length > 0;
+        shareCount = ids.length;
+      }
     } catch {
       // No Tauri backend (plain browser preview) — leave as-is.
     }
   }
 
-  async function openSharePicker(changeMonitor = false) {
+  function retireShareState() {
+    shareStateRetired = true;
+    shareStateRevision += 1;
+    pictureShares = [];
+    shareActive = false;
+    shareCount = 0;
+    sharePickerOpen = false;
+  }
+
+  async function openSharePicker(replaceWindowId?: number, add = false) {
+    if (shareStateRetired) return;
     if (hasTauri) {
       try {
-        if (changeMonitor) {
-          await invoke<void>(COMMANDS.openWindowPickerWindow, { color: localShareColor });
+        if (isLinux() && (add || replaceWindowId !== undefined)) {
+          await invoke<void>(COMMANDS.openWindowPickerWindow, {
+            color: localShareColor,
+            ...(replaceWindowId === undefined ? {} : { replaceWindowId })
+          });
         } else {
           const open = await invoke<boolean>(COMMANDS.toggleWindowPickerWindow);
-          // Linux completions can belong to superseded permission attempts;
-          // only the native attempt-qualified events own picker visibility.
-          if (!isLinux()) sharePickerOpen = open;
+          // Only native attempt-qualified events own Linux picker visibility.
+          if (!isLinux() && !shareStateRetired) sharePickerOpen = open;
         }
-        return;
       } catch (e) {
-        console.error('native share selection failed', e);
-        showShareToast(typeof e === 'string' ? e : "Couldn't open the share picker window. Relaunch Petal and try again.");
-        return;
+        if (!shareStateRetired) {
+          console.error('native share selection failed', e);
+          showShareToast(typeof e === 'string' ? e : "Couldn't open the share picker window. Relaunch Petal and try again.");
+        }
+      } finally {
+        if (isLinux()) void refreshShareState();
       }
+      return;
     }
     const picker = window.open('/window-picker', 'petal-window-picker', 'width=820,height=700');
     sharePickerOpen = picker !== null;
+  }
+
+  async function stopPictureShare(windowId: number) {
+    if (shareStateRetired) return;
+    try {
+      await invoke<void>(COMMANDS.stopLinuxPictureShare, { windowId });
+    } catch (e) {
+      if (!shareStateRetired) showShareToast(typeof e === 'string' ? e : "Couldn't stop the selected share.");
+    } finally {
+      void refreshShareState();
+    }
   }
 
   async function handleScreenshareControl() {
@@ -649,6 +720,7 @@
       // menu means expanding first, or nothing would appear.
       if (chat.open && !pill.expanded) pill.expanded = true;
     } else if (icon === 'leave') {
+      retireShareState();
       await meeting.handleLeave();
     }
   }
@@ -745,7 +817,10 @@
         stateTone={meeting.galleryStateTone}
         bind:expanded={pill.expanded}
         onControl={handleControl}
-        onChangeShare={hasTauri && isLinux() ? () => void openSharePicker(true) : undefined}
+        {pictureShares}
+        onAddShare={hasTauri && isLinux() ? () => void openSharePicker(undefined, true) : undefined}
+        onChangeShare={hasTauri && isLinux() ? (windowId) => void openSharePicker(windowId) : undefined}
+        onStopShare={hasTauri && isLinux() ? (windowId) => void stopPictureShare(windowId) : undefined}
         {inviteAriaLabel}
         {inviteTooltip}
         onInviteLinkCopy={copyInviteLink}

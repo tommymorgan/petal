@@ -295,8 +295,7 @@ mod macos {
             regions += 1;
             let user_tag = info.user_tag;
             let resident = u64::from(info.pages_resident) * page;
-            let dirty =
-                (u64::from(info.pages_dirtied) + u64::from(info.pages_swapped_out)) * page;
+            let dirty = (u64::from(info.pages_dirtied) + u64::from(info.pages_swapped_out)) * page;
             let owner = super::VmOwner::from_user_tag(user_tag);
             let slot = &mut totals[owner.index()];
             slot.0 += resident;
@@ -385,10 +384,10 @@ mod stub {
 
 #[cfg(target_os = "macos")]
 pub use macos::process_footprint_bytes;
-#[cfg(target_os = "windows")]
-pub use windows_impl::process_footprint_bytes;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub use stub::process_footprint_bytes;
+#[cfg(target_os = "windows")]
+pub use windows_impl::process_footprint_bytes;
 
 #[cfg(target_os = "macos")]
 pub use macos::memory_pressure_level;
@@ -434,7 +433,9 @@ fn throttled_read(
     interval: Duration,
     probe: impl FnOnce() -> Option<u64>,
 ) -> Option<u64> {
-    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Some((last_at, last_value)) = *guard {
         if now.duration_since(last_at) < interval {
             return last_value;
@@ -470,7 +471,9 @@ fn forced_read(
     probe: impl FnOnce() -> Option<u64>,
 ) -> Option<u64> {
     let value = probe();
-    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut guard = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     *guard = Some((now, value));
     value
 }
@@ -998,9 +1001,8 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn process_footprint_bytes_is_nonzero_and_not_absurd_for_the_test_process() {
-        let bytes = process_footprint_bytes().expect(
-            "task_info(TASK_VM_INFO) must succeed for this process's own mach_task_self()",
-        );
+        let bytes = process_footprint_bytes()
+            .expect("task_info(TASK_VM_INFO) must succeed for this process's own mach_task_self()");
         assert!(bytes > 0, "a running process must have nonzero footprint");
         // Sanity ceiling, not a real limit -- catches a garbage/uninitialized
         // read (e.g. an offset bug) without pretending to know the real
@@ -1069,7 +1071,10 @@ mod tests {
         let interval = Duration::from_secs(5);
         let t0 = Instant::now();
 
-        assert_eq!(throttled_read(&cache, t0, interval, || Some(100)), Some(100));
+        assert_eq!(
+            throttled_read(&cache, t0, interval, || Some(100)),
+            Some(100)
+        );
 
         let one_second_later = t0 + Duration::from_secs(1);
         assert_eq!(
@@ -1322,7 +1327,10 @@ mod tests {
         );
         let line = vm_attribution_fields(Some(&attribution));
         assert!(line.contains("vm_walk=truncated"), "{line}");
-        assert!(line.contains(&format!("vm_regions={VM_REGION_WALK_LIMIT}")), "{line}");
+        assert!(
+            line.contains(&format!("vm_regions={VM_REGION_WALK_LIMIT}")),
+            "{line}"
+        );
     }
 
     #[test]

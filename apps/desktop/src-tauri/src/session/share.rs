@@ -11,9 +11,7 @@ use crate::logging::{
     CaptureLayoutDiagnostic, CaptureLayoutStage, DiagnosticRole, EncoderImplementationClass,
     GeometryBucket, PixelFormatClass, ScaleBucket, SentryDiagnosticEvent, SourceSelectionClass,
 };
-use crate::screen_audio::{
-    AudioSourceKey, AudioSourceTransition, ShareAudioState,
-};
+use crate::screen_audio::{AudioSourceKey, AudioSourceTransition, ShareAudioState};
 use crate::share_priority::SharePriority;
 use crate::time_util::now_us;
 use crate::transport::publisher::{
@@ -3164,9 +3162,7 @@ async fn apply_audio_transitions(
                     }
                     Err(error) => {
                         let mut inner = state.inner.lock_unpoisoned();
-                        if generation.is_current()
-                            && inner.screen_audio_sources.is_active(source)
-                        {
+                        if generation.is_current() && inner.screen_audio_sources.is_active(source) {
                             for share in inner.shares.values_mut() {
                                 if share.audio_enabled
                                     && audio_source_for_share(share) == Some(source)
@@ -3192,7 +3188,8 @@ pub(crate) async fn set_share_audio_enabled(
     state: &SessionState,
     window_id: u32,
     enabled: bool,
-) -> ShareAudioState {    let generation = state.current_room_generation();
+) -> ShareAudioState {
+    let generation = state.current_room_generation();
     // Record intent BEFORE waiting for an in-flight native start. Off therefore
     // invalidates that start's commit immediately, even though it still waits
     // for serialized cleanup before returning.
@@ -3211,7 +3208,10 @@ pub(crate) async fn set_share_audio_enabled(
             return ShareAudioState::inactive(window_id);
         };
         if source.is_none() || (enabled && crate::transport::audio::audio_disabled_by_env()) {
-            let share = inner.shares.get_mut(&window_id).expect("share still active");
+            let share = inner
+                .shares
+                .get_mut(&window_id)
+                .expect("share still active");
             share.audio_enabled = false;
             share.audio_available = false;
             share.audio_error = enabled.then(|| {
@@ -3224,7 +3224,10 @@ pub(crate) async fn set_share_audio_enabled(
             return share_audio_state_locked(&inner, window_id);
         }
         let source = source.expect("checked eligible active share audio source");
-        let share = inner.shares.get_mut(&window_id).expect("share still active");
+        let share = inner
+            .shares
+            .get_mut(&window_id)
+            .expect("share still active");
         share.audio_enabled = enabled;
         share.audio_available = true;
         share.audio_error = None;
@@ -3235,9 +3238,10 @@ pub(crate) async fn set_share_audio_enabled(
     let transitions = {
         let mut inner = state.inner.lock_unpoisoned();
         let current = generation.is_current()
-            && inner.joined.as_ref().is_some_and(|joined| {
-                Arc::ptr_eq(&joined.room_connection, &prepared.0)
-            })
+            && inner
+                .joined
+                .as_ref()
+                .is_some_and(|joined| Arc::ptr_eq(&joined.room_connection, &prepared.0))
             && inner.shares.get(&window_id).is_some_and(|share| {
                 share.started_seq == prepared.1 && share.audio_enabled == enabled
             });
@@ -5085,11 +5089,7 @@ async fn start_share_with_capture_source(
 /// against its latched display, persist the state, and emit `region-warning`
 /// with the selector's native label only on transitions. The frontend banner
 /// routes by that label because capture tokens diverge from selector numbers.
-fn sync_region_outside_display(
-    app: &tauri::AppHandle,
-    window_id: u32,
-    last: &mut Option<bool>,
-) {
+fn sync_region_outside_display(app: &tauri::AppHandle, window_id: u32, last: &mut Option<bool>) {
     use tauri::Emitter;
 
     let Some(source) = crate::region_window::resolve(window_id) else {
@@ -5191,9 +5191,7 @@ fn spawn_share_pump(
         // Crisp mode (#384 Phase 1 spike) -- see crisp_still.rs.
         let mut crisp_still_gate = crate::crisp_still::StillSendGate::default();
         let mut adaptive_idle_tick = AdaptiveIdleTick::default();
-        let mut region_tick = tokio::time::interval(
-            crate::region_window::REGION_GEOMETRY_INTERVAL,
-        );
+        let mut region_tick = tokio::time::interval(crate::region_window::REGION_GEOMETRY_INTERVAL);
         region_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let is_region_share = crate::region_window::resolve(window_id).is_some();
         // Outside-display warning lifecycle (Windows parity): deduplicated at
@@ -5304,11 +5302,7 @@ fn spawn_share_pump(
                         );
                     }
                 }
-                sync_region_outside_display(
-                    &pump_app,
-                    window_id,
-                    &mut last_region_warning,
-                );
+                sync_region_outside_display(&pump_app, window_id, &mut last_region_warning);
             }
 
             let mut interaction_pull_epoch = None;
@@ -6606,8 +6600,7 @@ fn spawn_pump_failure_recovery(
                     // Preserve the per-share lock across a republish: re-seeding
                     // from the global default here would silently undo a
                     // mid-share denial on the next quality/wake restart.
-                    let allow_remote_control =
-                        current.allow_remote_control.load(Ordering::Relaxed);
+                    let allow_remote_control = current.allow_remote_control.load(Ordering::Relaxed);
                     let demand_resolution = *current.demand_resolution.lock_unpoisoned();
                     guard.shares.insert(
                         window_id,
@@ -6881,7 +6874,12 @@ async fn stop_share_with_started_seq_inner(
         } else {
             None
         };
-        (share, promote_id, room_connection_at_removal, audio_transitions)
+        (
+            share,
+            promote_id,
+            room_connection_at_removal,
+            audio_transitions,
+        )
     };
     let Some(share) = share else {
         // Idempotent no-op -- but LOG it (issue #13): the crash-evidence
@@ -8939,7 +8937,10 @@ mod tests {
     /// and a window absent everywhere is Closed.
     #[test]
     fn hidden_window_reads_as_off_screen_and_gone_window_as_closed_for_the_gate() {
-        use super::{screen_status_from_flags, stalled_capture_action, SharedWindowScreenStatus, StalledCaptureAction};
+        use super::{
+            screen_status_from_flags, stalled_capture_action, SharedWindowScreenStatus,
+            StalledCaptureAction,
+        };
         let frame = crate::hover_tab::WindowFrame {
             x: 0,
             y: 0,
@@ -8948,7 +8949,10 @@ mod tests {
         };
         let hidden = screen_status_from_flags(frame, false, false);
         assert_eq!(hidden, SharedWindowScreenStatus::OffScreen);
-        assert_eq!(stalled_capture_action(hidden), StalledCaptureAction::HoldOffScreen);
+        assert_eq!(
+            stalled_capture_action(hidden),
+            StalledCaptureAction::HoldOffScreen
+        );
         let gone = screen_status_from_flags(frame, false, true);
         assert_eq!(gone, SharedWindowScreenStatus::Closed);
         assert_eq!(stalled_capture_action(gone), StalledCaptureAction::Recover);
@@ -8979,7 +8983,10 @@ mod tests {
                 return rest[..end].to_string();
             }
         }
-        line.split_whitespace().take(4).collect::<Vec<_>>().join(" ")
+        line.split_whitespace()
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// No single message signature may exceed this share of a meeting's log
@@ -9106,9 +9113,18 @@ mod tests {
 
         // Suppression must not become silence -- each family has to leave a
         // counted record behind.
-        assert!(!webrtc_lines.is_empty(), "the encoder warning must still be visible");
-        assert!(capture_lines > 0, "the no-image-buffer episode must still be visible");
-        assert!(quality_lines > 0, "the quality evaluator must still prove it is alive");
+        assert!(
+            !webrtc_lines.is_empty(),
+            "the encoder warning must still be visible"
+        );
+        assert!(
+            capture_lines > 0,
+            "the no-image-buffer episode must still be visible"
+        );
+        assert!(
+            quality_lines > 0,
+            "the quality evaluator must still prove it is alive"
+        );
     }
 
     // -- #108: quality-decision line throttle -----------------------------
@@ -9123,7 +9139,9 @@ mod tests {
     fn quality_decision_throttle_always_logs_the_first_evaluation() {
         let mut throttle = QualityDecisionLogThrottle::default();
         assert!(
-            throttle.observe(quality_line("Full", true), true, 0).is_some(),
+            throttle
+                .observe(quality_line("Full", true), true, 0)
+                .is_some(),
             "the first evaluation for a window must never be suppressed"
         );
     }
@@ -9147,7 +9165,10 @@ mod tests {
             emitted <= 12,
             "611 identical no-op evaluations over 611s must collapse to the first line plus ~1 heartbeat/minute, got {emitted}"
         );
-        assert!(emitted >= 10, "the heartbeat must still prove the evaluator is alive, got {emitted}");
+        assert!(
+            emitted >= 10,
+            "the heartbeat must still prove the evaluator is alive, got {emitted}"
+        );
     }
 
     #[test]
@@ -9172,7 +9193,9 @@ mod tests {
         // state moved, so the line carries information again.
         let mut throttle = QualityDecisionLogThrottle::default();
         throttle.observe(quality_line("Full", true), true, 0);
-        assert!(throttle.observe(quality_line("Full", true), true, 1_000).is_none());
+        assert!(throttle
+            .observe(quality_line("Full", true), true, 1_000)
+            .is_none());
         assert!(
             throttle
                 .observe(quality_line("DataSaver", true), true, 2_000)
@@ -9552,7 +9575,10 @@ vm_resident_mb=n/a vm_mapped_dirty_mb=n/a vm_top=n/a vm_other_tag=n/a"
             crate::capture::CAPTURE_QUEUE_DEPTH,
         )
         .total_mb();
-        assert!(expected_5k > expected_2560, "a 5K source must report a larger ceiling");
+        assert!(
+            expected_5k > expected_2560,
+            "a 5K source must report a larger ceiling"
+        );
         assert!(share_memory_mark_line(
             1,
             "s",
@@ -9567,7 +9593,10 @@ vm_resident_mb=n/a vm_mapped_dirty_mb=n/a vm_top=n/a vm_other_tag=n/a"
     #[test]
     fn effective_title_prefers_live_and_falls_back_to_start() {
         assert_eq!(
-            effective_title(Some("Live Tab — Chrome".to_string()), Some("Start Tab — Chrome")),
+            effective_title(
+                Some("Live Tab — Chrome".to_string()),
+                Some("Start Tab — Chrome")
+            ),
             Some("Live Tab — Chrome".to_string()),
             "a live title must win so the freshness-skip check can see a real change"
         );

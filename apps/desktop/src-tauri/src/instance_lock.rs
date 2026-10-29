@@ -276,7 +276,9 @@ mod tests {
 
     #[test]
     fn acquire_creates_missing_parent_directories() {
-        let path = temp_lock_path("nested").join("nested").join("instance.lock");
+        let path = temp_lock_path("nested")
+            .join("nested")
+            .join("instance.lock");
         let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 
         let result = acquire(&path).unwrap();
@@ -325,10 +327,7 @@ mod tests {
         // `identifier.replace(['.', '-'], '_')`. Pinned verbatim so a future
         // edit here can't silently drift from what the plugin actually
         // listens on.
-        assert_eq!(
-            "com.petal.app".replace(['.', '-'], "_"),
-            "com_petal_app"
-        );
+        assert_eq!("com.petal.app".replace(['.', '-'], "_"), "com_petal_app");
         assert_eq!(
             "com.petal.app.testpeer".replace(['.', '-'], "_"),
             "com_petal_app_testpeer"
@@ -350,7 +349,10 @@ mod tests {
         // puts its socket under a short, fixed `/tmp/...` path rather than
         // the system temp dir. Mirror that here, both to fix the overflow
         // and to test the same path shape production actually uses.
-        let socket_path = PathBuf::from(format!("/tmp/petal-notify-test-{}.sock", std::process::id()));
+        let socket_path = PathBuf::from(format!(
+            "/tmp/petal-notify-test-{}.sock",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&socket_path);
         let listener = UnixListener::bind(&socket_path).unwrap();
 

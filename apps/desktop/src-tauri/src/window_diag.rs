@@ -155,10 +155,7 @@ mod tests {
             // Next candidate: a foreign, qualifying normal window.
             entry(2, 999, 0, 1.0, 400.0, 300.0),
         ];
-        assert_eq!(
-            select_frontmost_normal_anchor(&entries, SELF_PID),
-            Some(2)
-        );
+        assert_eq!(select_frontmost_normal_anchor(&entries, SELF_PID), Some(2));
     }
 
     #[test]
@@ -169,10 +166,7 @@ mod tests {
             entry(2, SELF_PID, 0, 1.0, 200.0, 200.0),
             entry(3, 777, 0, 1.0, 500.0, 500.0),
         ];
-        assert_eq!(
-            select_frontmost_normal_anchor(&entries, SELF_PID),
-            Some(3)
-        );
+        assert_eq!(select_frontmost_normal_anchor(&entries, SELF_PID), Some(3));
     }
 
     #[test]
@@ -187,10 +181,7 @@ mod tests {
             entry(4, 111, 0, 0.0, 400.0, 300.0),
             entry(5, 111, 0, 1.0, 400.0, 300.0),
         ];
-        assert_eq!(
-            select_frontmost_normal_anchor(&entries, SELF_PID),
-            Some(5)
-        );
+        assert_eq!(select_frontmost_normal_anchor(&entries, SELF_PID), Some(5));
     }
 
     #[test]

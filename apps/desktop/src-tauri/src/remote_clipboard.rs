@@ -298,12 +298,12 @@ pub(crate) fn clear_paste_operations_for_sender(sender_identity: &str) {
 
 pub(crate) fn prune_paste_operations(now: Instant) {
     let mut state = operation_state().lock_unpoisoned();
-    state
-        .recent_copy_operations
-        .retain(|_, seen_at| now.saturating_duration_since(*seen_at) <= REMOTE_CLIPBOARD_OPERATION_TTL);
-    state
-        .recent_paste_operations
-        .retain(|_, seen_at| now.saturating_duration_since(*seen_at) <= REMOTE_CLIPBOARD_OPERATION_TTL);
+    state.recent_copy_operations.retain(|_, seen_at| {
+        now.saturating_duration_since(*seen_at) <= REMOTE_CLIPBOARD_OPERATION_TTL
+    });
+    state.recent_paste_operations.retain(|_, seen_at| {
+        now.saturating_duration_since(*seen_at) <= REMOTE_CLIPBOARD_OPERATION_TTL
+    });
 }
 
 pub(crate) fn try_clipboard_operation_lock() -> Option<MutexGuard<'static, ()>> {

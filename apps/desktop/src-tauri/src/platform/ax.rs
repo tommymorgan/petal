@@ -194,7 +194,7 @@ pub fn window_read_canary() -> bool {
         return false;
     }
     let get_window = ax_get_window_fn(); // None -> correlation-mode criterion
-    // SAFETY: same lifecycle rules as `resolve_window_kinds_for_app`, own pid.
+                                         // SAFETY: same lifecycle rules as `resolve_window_kinds_for_app`, own pid.
     unsafe {
         let app = AXUIElementCreateApplication(std::process::id() as i32);
         if app.is_null() {
@@ -352,18 +352,14 @@ pub(crate) enum WindowIdentityError {
 /// entire pure-test battery, because those tests construct their own correct
 /// arguments. The type distinction kills that whole mutation class at
 /// compile time instead.
-pub(crate) struct CandidateFrames(
-    pub(crate) std::collections::HashMap<u32, (f64, f64, f64, f64)>,
-);
+pub(crate) struct CandidateFrames(pub(crate) std::collections::HashMap<u32, (f64, f64, f64, f64)>);
 
 /// The COMPLETE same-pid window universe (CG `OptionAll`), including
 /// minimised/off-Space windows. Correlation uniqueness is decided against
 /// this set, so a sibling absent from the on-screen list still participates
 /// in ambiguity and can never be silently mis-resolved onto an authorized
 /// window (#779 review finding 2).
-pub(crate) struct UniverseFrames(
-    pub(crate) std::collections::HashMap<u32, (f64, f64, f64, f64)>,
-);
+pub(crate) struct UniverseFrames(pub(crate) std::collections::HashMap<u32, (f64, f64, f64, f64)>);
 
 /// # Safety
 /// `element` must be a valid AXUIElementRef.
@@ -580,7 +576,12 @@ unsafe fn cfstring_to_string(s: *const c_void) -> Option<String> {
         return None;
     }
     let mut buf = [0u8; 256];
-    if CFStringGetCString(s, buf.as_mut_ptr(), buf.len() as isize, KCF_STRING_ENCODING_UTF8) {
+    if CFStringGetCString(
+        s,
+        buf.as_mut_ptr(),
+        buf.len() as isize,
+        KCF_STRING_ENCODING_UTF8,
+    ) {
         let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
         std::str::from_utf8(&buf[..end]).ok().map(|s| s.to_string())
     } else {
@@ -634,8 +635,8 @@ pub fn resolve_window_kinds_for_app(
         return AppKindsOutcome::AppUnavailable;
     }
     let get_window = ax_get_window_fn(); // None -> correlation fallback
-    // SAFETY: standard AX app-element lifecycle; every returned CF value is
-    // released exactly once. Messaging timeout bounds a hung app.
+                                         // SAFETY: standard AX app-element lifecycle; every returned CF value is
+                                         // released exactly once. Messaging timeout bounds a hung app.
     unsafe {
         let app = AXUIElementCreateApplication(pid);
         if app.is_null() {
@@ -723,15 +724,27 @@ mod tests {
 
     #[test]
     fn standard_window_is_standard() {
-        assert_eq!(classify_from_subrole("AXStandardWindow", true), AxKind::Standard);
-        assert_eq!(classify_from_subrole("AXStandardWindow", false), AxKind::Standard);
+        assert_eq!(
+            classify_from_subrole("AXStandardWindow", true),
+            AxKind::Standard
+        );
+        assert_eq!(
+            classify_from_subrole("AXStandardWindow", false),
+            AxKind::Standard
+        );
     }
 
     #[test]
     fn dialogs_and_floats_are_dialog() {
         assert_eq!(classify_from_subrole("AXDialog", true), AxKind::Dialog);
-        assert_eq!(classify_from_subrole("AXSystemDialog", false), AxKind::Dialog);
-        assert_eq!(classify_from_subrole("AXFloatingWindow", true), AxKind::Dialog);
+        assert_eq!(
+            classify_from_subrole("AXSystemDialog", false),
+            AxKind::Dialog
+        );
+        assert_eq!(
+            classify_from_subrole("AXFloatingWindow", true),
+            AxKind::Dialog
+        );
     }
 
     #[test]
@@ -754,10 +767,19 @@ mod tests {
         .into_iter()
         .collect();
         // exact + within-epsilon matches
-        assert_eq!(correlate_frame_to_wid((100.0, 200.0, 300.0, 200.0), &wanted), Some(10));
-        assert_eq!(correlate_frame_to_wid((501.0, 199.0, 300.5, 200.0), &wanted), Some(11));
+        assert_eq!(
+            correlate_frame_to_wid((100.0, 200.0, 300.0, 200.0), &wanted),
+            Some(10)
+        );
+        assert_eq!(
+            correlate_frame_to_wid((501.0, 199.0, 300.5, 200.0), &wanted),
+            Some(11)
+        );
         // out of epsilon -> no match
-        assert_eq!(correlate_frame_to_wid((110.0, 200.0, 300.0, 200.0), &wanted), None);
+        assert_eq!(
+            correlate_frame_to_wid((110.0, 200.0, 300.0, 200.0), &wanted),
+            None
+        );
         // ambiguous (two same-frame candidates) -> refuse
         let dup: std::collections::HashMap<u32, (f64, f64, f64, f64)> = [
             (10, (100.0, 200.0, 300.0, 200.0)),
@@ -765,7 +787,10 @@ mod tests {
         ]
         .into_iter()
         .collect();
-        assert_eq!(correlate_frame_to_wid((100.0, 200.0, 300.0, 200.0), &dup), None);
+        assert_eq!(
+            correlate_frame_to_wid((100.0, 200.0, 300.0, 200.0), &dup),
+            None
+        );
     }
 
     #[test]

@@ -208,7 +208,9 @@ mod tests {
         );
         assert_eq!(
             classify(
-                Some(p("/private/var/folders/d8/hvxv/T/AppTranslocation/6B1C-4F2A/d/Petal.app")),
+                Some(p(
+                    "/private/var/folders/d8/hvxv/T/AppTranslocation/6B1C-4F2A/d/Petal.app"
+                )),
                 true
             ),
             LaunchLocationClass::Translocated

@@ -413,7 +413,9 @@ mod tests {
             return;
         };
         let started = std::time::Instant::now();
-        let error = bounded_send_with_retry(client().post(&url)).await.unwrap_err();
+        let error = bounded_send_with_retry(client().post(&url))
+            .await
+            .unwrap_err();
 
         assert!(
             error.is_timeout(),

@@ -2378,8 +2378,14 @@ mod tests {
         let state = value
             .get("shareState")
             .expect("shareState is reported alongside the stack positions");
-        assert_eq!(state.get("share").and_then(|v| v.as_str()), Some("onScreen"));
-        assert_eq!(state.get("registered").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            state.get("share").and_then(|v| v.as_str()),
+            Some("onScreen")
+        );
+        assert_eq!(
+            state.get("registered").and_then(|v| v.as_bool()),
+            Some(true)
+        );
         assert_eq!(
             state.get("trackerHidden").and_then(|v| v.as_bool()),
             Some(true)

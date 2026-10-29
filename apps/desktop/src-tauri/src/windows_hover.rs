@@ -2265,7 +2265,8 @@ mod tests {
                 .frame
                 .y,
             430
-        );    }
+        );
+    }
 
     #[test]
     fn native_hover_attachment_rejects_detached_or_stale_generation_and_replaces_token() {

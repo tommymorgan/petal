@@ -64,15 +64,15 @@ pub fn maybe_start(app: &tauri::AppHandle) {
     // trust returns redacted AX window elements on Darwin 25.2 (#747 §9.14).
     if std::env::var_os("PETAL_AUTOTEST_REQUEST_AX").is_some() {
         let outcome = crate::permissions::request_accessibility();
-        log::warn!("autotest: PETAL_AUTOTEST_REQUEST_AX set -- request_accessibility() -> {outcome:?}");
+        log::warn!(
+            "autotest: PETAL_AUTOTEST_REQUEST_AX set -- request_accessibility() -> {outcome:?}"
+        );
     }
 
     let Some(room) = autotest_room_from_env(std::env::var("PETAL_AUTOTEST_ROOM").ok()) else {
         return; // startup sequence off -- command socket may still be on
     };
-    let fresh_room = autotest_fresh_room_from_env(
-        std::env::var("PETAL_AUTOTEST_FRESH_ROOM").ok(),
-    );
+    let fresh_room = autotest_fresh_room_from_env(std::env::var("PETAL_AUTOTEST_FRESH_ROOM").ok());
     // Must match the backend's GENERATED_PARTICIPANT_ID shape
     // (`^p-[a-z0-9]+-[a-z0-9]+$`) -- found live verifying this session's other
     // autotest.rs changes: the old "native-autotest" default has never
@@ -495,9 +495,8 @@ mod join_result_tests {
             "successful autotest join must emit one authoritative terminal"
         );
         assert!(
-            production_source.contains(
-                "log::warn!(\n                    \"autotest: join succeeded;"
-            ),
+            production_source
+                .contains("log::warn!(\n                    \"autotest: join succeeded;"),
             "successful autotest terminal must survive RUST_LOG=warn"
         );
         assert_eq!(
@@ -570,7 +569,10 @@ mod command_server {
         },
         /// Consent flow (ask policy): answer the parked request for one
         /// controller as the sharer would from the prompt.
-        #[serde(rename = "remote-control-consent-answer", alias = "remote_control_consent_answer")]
+        #[serde(
+            rename = "remote-control-consent-answer",
+            alias = "remote_control_consent_answer"
+        )]
         RemoteControlConsentAnswer {
             window_id: u32,
             controller_id: String,
@@ -827,7 +829,11 @@ mod command_server {
                 );
                 Ok(serde_json::json!({ "windowId": window_id, "disabled": true }))
             }
-            Command::RemoteControlConsentAnswer { window_id, controller_id, approve } => {
+            Command::RemoteControlConsentAnswer {
+                window_id,
+                controller_id,
+                approve,
+            } => {
                 let answered = crate::remote_control::answer_consent(
                     app,
                     window_id,
@@ -934,8 +940,7 @@ mod command_server {
                 let app = app.clone();
                 tauri::async_runtime::block_on(async move {
                     let session = app.state::<crate::session::SessionState>();
-                    crate::camera_session::stop_camera_publish_intent(&app, session.inner())
-                        .await;
+                    crate::camera_session::stop_camera_publish_intent(&app, session.inner()).await;
                     Ok(serde_json::json!({ "stopped": true }))
                 })
             }
@@ -1216,14 +1221,20 @@ mod command_server {
         #[test]
         fn remote_control_lifecycle_commands_parse_with_hyphenated_names() {
             let disable: Command =
-                serde_json::from_str(r#"{"cmd":"remote-control-disable","window_id":17}"#)
-                    .unwrap();
-            assert!(matches!(disable, Command::RemoteControlDisable { window_id: 17 }));
+                serde_json::from_str(r#"{"cmd":"remote-control-disable","window_id":17}"#).unwrap();
+            assert!(matches!(
+                disable,
+                Command::RemoteControlDisable { window_id: 17 }
+            ));
 
             let status: Command =
-                serde_json::from_str(r#"{"cmd":"remote-control-status","window_id":17}"#)
-                    .unwrap();
-            assert!(matches!(status, Command::RemoteControlStatus { window_id: Some(17) }));
+                serde_json::from_str(r#"{"cmd":"remote-control-status","window_id":17}"#).unwrap();
+            assert!(matches!(
+                status,
+                Command::RemoteControlStatus {
+                    window_id: Some(17)
+                }
+            ));
         }
 
         #[test]
@@ -1241,9 +1252,10 @@ mod command_server {
                 assert_eq!(format!("{command:?}"), expected, "{wire}");
             }
             let switch: Command =
-                serde_json::from_str(r#"{"cmd":"set_camera_device","device_id":"cam-2"}"#)
-                    .unwrap();
-            assert!(matches!(switch, Command::SetCameraDevice { device_id } if device_id == "cam-2"));
+                serde_json::from_str(r#"{"cmd":"set_camera_device","device_id":"cam-2"}"#).unwrap();
+            assert!(
+                matches!(switch, Command::SetCameraDevice { device_id } if device_id == "cam-2")
+            );
             assert!(serde_json::from_str::<Command>(r#"{"cmd":"set_camera_device"}"#).is_err());
         }
 

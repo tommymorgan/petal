@@ -136,7 +136,10 @@ impl CameraStatusSource for DelegateShared {
         // Runtime AVFoundation failures are not surfaced today; the
         // session's first-frame timeout covers startup failure, and this
         // stays `None` to preserve macOS behavior exactly.
-        self.terminal_error.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.terminal_error
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn frames_delivered(&self) -> u64 {
@@ -525,9 +528,7 @@ pub(super) fn list_devices() -> Result<Vec<CameraDeviceInfo>, CameraError> {
             }
             let devices: *mut AnyObject = msg_send![session, devices];
             if devices.is_null() {
-                return Err(CameraError::Operation(
-                    "camera devices unavailable".into(),
-                ));
+                return Err(CameraError::Operation("camera devices unavailable".into()));
             }
             let count: usize = msg_send![devices, count];
             let mut result = Vec::with_capacity(count);

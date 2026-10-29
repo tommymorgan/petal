@@ -91,9 +91,7 @@ pub(crate) fn open_settings_window_with<O: SettingsWindowOps>(ops: &O) -> Result
         return Ok(());
     }
     ops.build()?;
-    if let Some((x, y)) =
-        ops.centered_position(SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT)
-    {
+    if let Some((x, y)) = ops.centered_position(SETTINGS_WINDOW_WIDTH, SETTINGS_WINDOW_HEIGHT) {
         ops.set_position(x, y);
     }
     Ok(())
@@ -180,8 +178,7 @@ impl SettingsWindowOps for TauriSettingsWindow<'_> {
 
     fn set_position(&self, x: f64, y: f64) {
         if let Some(window) = self.window.borrow().as_ref() {
-            let _ = window
-                .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+            let _ = window.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
         }
     }
 }

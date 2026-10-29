@@ -717,7 +717,8 @@ const CAMERA_HEALTH_MESSAGE_TAGS: &[&str] = &[
     "stall_cause",
 ];
 
-const SHARE_OVERLAY_CURSOR_CAPTURE_MESSAGE_TAGS: &[&str] = &["session_role", "overlay_clear_reason"];
+const SHARE_OVERLAY_CURSOR_CAPTURE_MESSAGE_TAGS: &[&str] =
+    &["session_role", "overlay_clear_reason"];
 const WINSRV_PORT_DEAD_MESSAGE_TAGS: &[&str] = &["session_role"];
 const PREVIOUS_SESSION_VANISHED_MESSAGE_TAGS: &[&str] = &["crash_report_status"];
 const WINDOW_SERVER_RESTART_DETECTED_MESSAGE_TAGS: &[&str] = &["session_role"];
@@ -851,7 +852,10 @@ impl KeyedRateWindow {
     }
 
     fn record(&mut self, key: u64, now: Instant) -> bool {
-        let index = if let Some(index) = self.keys.iter().position(|(candidate, _)| *candidate == key)
+        let index = if let Some(index) = self
+            .keys
+            .iter()
+            .position(|(candidate, _)| *candidate == key)
         {
             index
         } else {
@@ -2509,7 +2513,9 @@ impl<L: log::Log> RepeatSuppressingLog<L> {
             // Sweep streaks that have gone quiet, so their tail is reported
             // promptly instead of waiting for a `flush()`.
             guard.retain(|other, state| {
-                if *other == key || now.duration_since(state.last_seen) < NATIVE_WEBRTC_REPEAT_SUMMARY_INTERVAL {
+                if *other == key
+                    || now.duration_since(state.last_seen) < NATIVE_WEBRTC_REPEAT_SUMMARY_INTERVAL
+                {
                     return true;
                 }
                 if state.repeat_count > 0 {
@@ -2778,7 +2784,9 @@ pub fn init() -> PathBuf {
         {
             sentry_log::LogFilter::Ignore
         } else if metadata.target() == NATIVE_WEBRTC_LOG_TARGET
-            || metadata.target().starts_with(NATIVE_WEBRTC_LOG_TARGET_PREFIX)
+            || metadata
+                .target()
+                .starts_with(NATIVE_WEBRTC_LOG_TARGET_PREFIX)
         {
             // #787 mapped native WebRTC severities so its lines reach the log
             // at all -- but SentryLogger's capture branch runs on every record
@@ -3041,7 +3049,8 @@ fn collect_log_files(log_dir: &Path, days: Option<i64>) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(log_dir) else {
         return Vec::new();
     };
-    let cutoff = days.map(|d| chrono::Utc::now().date_naive() - chrono::Duration::days(d.max(1) - 1));
+    let cutoff =
+        days.map(|d| chrono::Utc::now().date_naive() - chrono::Duration::days(d.max(1) - 1));
     let mut files: Vec<(PathBuf, std::time::SystemTime)> = entries
         .flatten()
         .map(|entry| entry.path())
@@ -5549,7 +5558,11 @@ fn valid_diagnostic_tag(key: &str, value: &str) -> bool {
         "pointer_button" => matches!(value, "primary" | "right" | "middle" | "not_applicable"),
         "wgc_border_failure" => matches!(
             value,
-            "show_no_interface" | "show_other" | "hide_no_interface" | "hide_other" | "not_applicable"
+            "show_no_interface"
+                | "show_other"
+                | "hide_no_interface"
+                | "hide_other"
+                | "not_applicable"
         ),
         "pointer_release_failure_cause" => matches!(
             value,
@@ -5596,7 +5609,7 @@ fn valid_diagnostic_tag(key: &str, value: &str) -> bool {
         "recovery_action" => matches!(value, "reanchor" | "letterbox" | "not_applicable"),
         "playout_transition" => {
             matches!(value, "repointed" | "unavailable" | "not_applicable")
-        },
+        }
         "storm_scope" => matches!(
             value,
             "window_share" | "camera" | "remote_window" | "unknown" | "not_applicable"
@@ -6050,8 +6063,16 @@ mod tests {
             "desktop::remote_control::input"
         ));
         // ...while everything else stays at the global `info` level.
-        assert!(enabled(&resolved.filter, log::Level::Info, "desktop::session"));
-        assert!(!enabled(&resolved.filter, log::Level::Debug, "desktop::session"));
+        assert!(enabled(
+            &resolved.filter,
+            log::Level::Info,
+            "desktop::session"
+        ));
+        assert!(!enabled(
+            &resolved.filter,
+            log::Level::Debug,
+            "desktop::session"
+        ));
         // Noisy third-party crates are still denylisted under the `info` global.
         assert!(!enabled(&resolved.filter, log::Level::Info, "livekit"));
     }
@@ -6071,8 +6092,7 @@ mod tests {
         // typo used to fail `str::parse::<log::LevelFilter>()` and silently
         // become `info` with no warning at all. Assert the warning path,
         // not just that SOME level got applied.
-        let resolved =
-            resolve_log_filter(Some("info,desktop::remote_control=notalevel"));
+        let resolved = resolve_log_filter(Some("info,desktop::remote_control=notalevel"));
         let warning = resolved
             .parse_warning
             .as_deref()
@@ -6257,7 +6277,6 @@ mod tests {
         assert!(!spec_has_directive_covering("info/livekit", ADM_TARGET));
     }
 
-
     /// #787: `adm_proxy.cpp` logs its playout failures with
     /// `RTC_LOG(LS_ERROR)` -- the whole point being that a meeting nobody can
     /// hear should name its own mechanism in `petal.log` and in Sentry. Those
@@ -6321,11 +6340,21 @@ mod tests {
         // installed sink is wired to that mapping at all, and that the C++ we
         // compile ourselves still emits #787's failure at LS_ERROR. Either
         // one silently reverting on a vendor bump puts the log back to empty.
-        let vendor = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("vendor");
+        let vendor = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("vendor");
 
-        let sink_source = vendor.join("libwebrtc").join("src").join("native").join("peer_connection_factory.rs");
-        let sink = std::fs::read_to_string(&sink_source)
-            .unwrap_or_else(|e| panic!("{} installs the only native WebRTC log sink; could not read it ({e})", sink_source.display()));
+        let sink_source = vendor
+            .join("libwebrtc")
+            .join("src")
+            .join("native")
+            .join("peer_connection_factory.rs");
+        let sink = std::fs::read_to_string(&sink_source).unwrap_or_else(|e| {
+            panic!(
+                "{} installs the only native WebRTC log sink; could not read it ({e})",
+                sink_source.display()
+            )
+        });
         assert!(
             sink.contains("new_log_sink(emit_webrtc_log)"),
             "{} must install the severity-mapping sink; upstream's form discards \
@@ -6339,8 +6368,12 @@ mod tests {
         );
 
         let adm_source = vendor.join("webrtc-sys").join("src").join("adm_proxy.cpp");
-        let adm = std::fs::read_to_string(&adm_source)
-            .unwrap_or_else(|e| panic!("{} is #787's evidence source; could not read it ({e})", adm_source.display()));
+        let adm = std::fs::read_to_string(&adm_source).unwrap_or_else(|e| {
+            panic!(
+                "{} is #787's evidence source; could not read it ({e})",
+                adm_source.display()
+            )
+        });
         for needle in [
             "platform playout could not be started",
             "platform StartPlayout failed",
@@ -6348,7 +6381,10 @@ mod tests {
             let at = adm
                 .find(needle)
                 .unwrap_or_else(|| panic!("{} no longer logs {needle:?}", adm_source.display()));
-            let macro_call = adm[..at].rfind("RTC_LOG(").map(|start| &adm[start..]).unwrap_or("");
+            let macro_call = adm[..at]
+                .rfind("RTC_LOG(")
+                .map(|start| &adm[start..])
+                .unwrap_or("");
             assert!(
                 macro_call.starts_with("RTC_LOG(LS_ERROR)"),
                 "{needle:?} must stay at LS_ERROR -- LS_WARNING is a Sentry \
@@ -7449,7 +7485,10 @@ mod tests {
         );
 
         assert_eq!(rolled, vec![dir.join("petal.log.2026-08-31")]);
-        assert!(pruned.is_empty(), "a date-change roll must never trigger the backstop's prune callback");
+        assert!(
+            pruned.is_empty(),
+            "a date-change roll must never trigger the backstop's prune callback"
+        );
         assert_eq!(
             std::fs::read_to_string(dir.join("petal.log.2026-08-31")).unwrap(),
             "line one\nline two\n"
@@ -7471,7 +7510,10 @@ mod tests {
         };
         let mut rolled: Vec<PathBuf> = Vec::new();
         let mut pruned: Vec<PathBuf> = Vec::new();
-        let big_line = format!("{}\n", "x".repeat((SAME_DAY_SIZE_BACKSTOP_BYTES as usize) + 1));
+        let big_line = format!(
+            "{}\n",
+            "x".repeat((SAME_DAY_SIZE_BACKSTOP_BYTES as usize) + 1)
+        );
 
         daily_log_write(
             &dir,
@@ -7603,14 +7645,20 @@ mod tests {
 
     #[test]
     fn daily_log_date_from_name_extracts_a_valid_date_and_rejects_everything_else() {
-        assert_eq!(daily_log_date_from_name("petal.log.2026-09-02"), Some("2026-09-02"));
+        assert_eq!(
+            daily_log_date_from_name("petal.log.2026-09-02"),
+            Some("2026-09-02")
+        );
         assert_eq!(
             daily_log_date_from_name("petal.log.2026-09-02.gz"),
             Some("2026-09-02")
         );
         assert_eq!(daily_log_date_from_name("petal.log"), None);
         assert_eq!(daily_log_date_from_name("petal.log.gz"), None);
-        assert_eq!(daily_log_date_from_name("petal-20260902-154132676.log"), None);
+        assert_eq!(
+            daily_log_date_from_name("petal-20260902-154132676.log"),
+            None
+        );
         assert_eq!(daily_log_date_from_name("petal.log.notadate"), None);
         // #905 review Finding 1: a partial/orphaned compression temp file
         // (left behind by a killed process, or read mid-write by a racing
@@ -7652,7 +7700,9 @@ mod tests {
         prune_old_logs(&dir, MAX_LOG_AGE_DAYS);
 
         assert!(!dir.join(daily_log_file_name(&old_date)).exists());
-        assert!(!dir.join(format!("{}.gz", daily_log_file_name(&old_date))).exists());
+        assert!(!dir
+            .join(format!("{}.gz", daily_log_file_name(&old_date)))
+            .exists());
         assert!(dir.join(daily_log_file_name(&recent_date)).exists());
         assert!(
             dir.join(daily_log_file_name(&today)).exists(),
@@ -7717,7 +7767,11 @@ mod tests {
         // silently conclude a clean shutdown / 24h fallback every single
         // morning. They must resolve the newest EXISTING file instead.
         let dir = temp_dir("detector-boundary");
-        std::fs::write(dir.join("petal.log.2026-08-31"), "session: joined room 'ops'\n").unwrap();
+        std::fs::write(
+            dir.join("petal.log.2026-08-31"),
+            "session: joined room 'ops'\n",
+        )
+        .unwrap();
         // "Today" (2026-09-01) hasn't started writing yet -- no such file
         // exists at this point, exactly like right after a fresh UTC
         // midnight boot.
@@ -7786,7 +7840,12 @@ mod tests {
         fn flush(&self) {}
     }
 
-    fn log_via(wrapped: &RepeatSuppressingLog<RecordingLog>, target: &str, level: log::Level, msg: &str) {
+    fn log_via(
+        wrapped: &RepeatSuppressingLog<RecordingLog>,
+        target: &str,
+        level: log::Level,
+        msg: &str,
+    ) {
         wrapped.log(
             &log::Record::builder()
                 .args(format_args!("{msg}"))
@@ -7970,14 +8029,36 @@ mod tests {
         let base = Instant::now();
 
         log_via_at(&wrapped, "libwebrtc", log::Level::Warn, "(a.cc:1): x", base);
-        log_via_at(&wrapped, "libwebrtc", log::Level::Warn, "(a.cc:1): x", base + Duration::from_secs(1));
-        log_via_at(&wrapped, "libwebrtc", log::Level::Warn, "(a.cc:1): x", base + Duration::from_secs(2));
+        log_via_at(
+            &wrapped,
+            "libwebrtc",
+            log::Level::Warn,
+            "(a.cc:1): x",
+            base + Duration::from_secs(1),
+        );
+        log_via_at(
+            &wrapped,
+            "libwebrtc",
+            log::Level::Warn,
+            "(a.cc:1): x",
+            base + Duration::from_secs(2),
+        );
         // `a.cc:1` goes quiet; a different site keeps firing past the
         // interval, which is what triggers the sweep.
-        log_via_at(&wrapped, "libwebrtc", log::Level::Warn, "(b.cc:9): y", base + Duration::from_secs(40));
+        log_via_at(
+            &wrapped,
+            "libwebrtc",
+            log::Level::Warn,
+            "(b.cc:9): y",
+            base + Duration::from_secs(40),
+        );
 
         let recorded = lines.lock().unwrap();
-        assert_eq!(recorded.len(), 3, "expected: first a.cc, a.cc's swept rollup, first b.cc: {recorded:?}");
+        assert_eq!(
+            recorded.len(),
+            3,
+            "expected: first a.cc, a.cc's swept rollup, first b.cc: {recorded:?}"
+        );
         assert!(recorded[0].contains("(a.cc:1)"));
         assert!(
             recorded[1].contains("(a.cc:1)") && recorded[1].contains("repeated 2x"),
@@ -8038,7 +8119,11 @@ mod tests {
         wrapped.flush();
 
         let recorded = lines.lock().unwrap();
-        assert_eq!(recorded.len(), 2, "expected: first A, then a flush rollup: {recorded:?}");
+        assert_eq!(
+            recorded.len(),
+            2,
+            "expected: first A, then a flush rollup: {recorded:?}"
+        );
         assert_eq!(recorded[0], "A");
         assert!(
             recorded[1].contains('A') && recorded[1].contains("repeated 2x"),
@@ -9059,7 +9144,10 @@ mod tests {
         assert_eq!(event.direction, CameraDirection::Receive);
         assert_eq!(event.capture_cadence, CadenceBucket::Severe);
         assert_eq!(event.encode_cadence, CadenceBucket::NotApplicable);
-        assert_eq!(event.queue_backpressure, QueueBackpressureBucket::NotApplicable);
+        assert_eq!(
+            event.queue_backpressure,
+            QueueBackpressureBucket::NotApplicable
+        );
         assert_eq!(event.decoder_render, DecoderRenderHealth::DecoderDegraded);
         assert_eq!(event.stall_cause, CameraStallCauseTag::NotApplicable);
 
@@ -9387,18 +9475,18 @@ mod tests {
             assert_eq!(event.tags.len(), DIAGNOSTIC_TAGS.len());
             assert_eq!(event.fingerprint.as_ref(), ["descriptor-pressure"]);
             assert_eq!(
-                event.tags.get("descriptor_pressure_stage").map(String::as_str),
+                event
+                    .tags
+                    .get("descriptor_pressure_stage")
+                    .map(String::as_str),
                 Some(stage.tag())
             );
             assert!(
-                event
-                    .message
-                    .as_deref()
-                    .is_some_and(|message| message
-                        == format!(
-                            "diagnostic: descriptor-pressure descriptor_pressure_stage={}",
-                            stage.tag()
-                        )),
+                event.message.as_deref().is_some_and(|message| message
+                    == format!(
+                        "diagnostic: descriptor-pressure descriptor_pressure_stage={}",
+                        stage.tag()
+                    )),
                 "descriptor-pressure must ship with a title naming its stage: {:?}",
                 event.message
             );
@@ -9558,15 +9646,30 @@ mod tests {
             }),
             "1",
         );
-        assert_eq!(event.tags.get("event_name").map(String::as_str), Some("remote-video-stalled"));
-        assert_eq!(event.tags.get("sharer_kind").map(String::as_str), Some("web"));
         assert_eq!(
-            event.tags.get("remote_video_hold_reason").map(String::as_str),
+            event.tags.get("event_name").map(String::as_str),
+            Some("remote-video-stalled")
+        );
+        assert_eq!(
+            event.tags.get("sharer_kind").map(String::as_str),
+            Some("web")
+        );
+        assert_eq!(
+            event
+                .tags
+                .get("remote_video_hold_reason")
+                .map(String::as_str),
             Some("no_frame_watchdog")
         );
-        assert_eq!(event.tags.get("probe_failure_bucket").map(String::as_str), Some("at_cap"));
         assert_eq!(
-            event.tags.get("since_last_frame_bucket").map(String::as_str),
+            event.tags.get("probe_failure_bucket").map(String::as_str),
+            Some("at_cap")
+        );
+        assert_eq!(
+            event
+                .tags
+                .get("since_last_frame_bucket")
+                .map(String::as_str),
             Some("1_5m")
         );
         assert_eq!(
@@ -9593,8 +9696,16 @@ mod tests {
             }),
             "1",
         );
-        for key in ["sharer_kind", "remote_video_hold_reason", "probe_failure_bucket", "since_last_frame_bucket"] {
-            assert_eq!(event.tags.get(key).map(String::as_str), Some("not_applicable"));
+        for key in [
+            "sharer_kind",
+            "remote_video_hold_reason",
+            "probe_failure_bucket",
+            "since_last_frame_bucket",
+        ] {
+            assert_eq!(
+                event.tags.get(key).map(String::as_str),
+                Some("not_applicable")
+            );
         }
         assert!(valid_sentry_diagnostic_event(&event));
     }
@@ -10047,7 +10158,10 @@ mod tests {
             }
         }
 
-        assert!(detector_trips > 1, "the detector must see a repeating storm");
+        assert!(
+            detector_trips > 1,
+            "the detector must see a repeating storm"
+        );
         assert_eq!(sentry_bound, 1, "the first 60 s must page exactly once");
     }
 
@@ -10078,11 +10192,9 @@ mod tests {
         }
 
         assert!(note_window_creation_watchdog_stall_at(22, start).is_none());
-        assert!(note_window_creation_watchdog_stall_at(
-            22,
-            start + Duration::from_secs(20)
-        )
-        .is_none());
+        assert!(
+            note_window_creation_watchdog_stall_at(22, start + Duration::from_secs(20)).is_none()
+        );
     }
 
     #[test]
@@ -10186,5 +10298,4 @@ mod tests {
             "a drifted format must read as unknown, not zero"
         );
     }
-
 }

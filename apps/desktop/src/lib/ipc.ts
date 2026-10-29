@@ -192,7 +192,11 @@ export const COMMANDS = {
   setShareRemoteControlAllowed: 'set_share_remote_control_allowed',
   shareRemoteControlAllowed: 'share_remote_control_allowed',
   sharedWindowIds: 'shared_window_ids',
+  linuxPictureShares: 'linux_picture_shares',
+  stopLinuxPictureShare: 'stop_linux_picture_share',
   startTestCockpit: 'start_test_cockpit',
+  linuxCameraPreviewOpen: 'linux_camera_preview_open',
+  linuxCameraPreviewClose: 'linux_camera_preview_close',
   startCameraPublish: 'start_camera_publish_command',
   stopCameraPublish: 'stop_camera_publish_command',
   cameraPublishState: 'camera_publish_state',
@@ -250,6 +254,8 @@ export const EVENTS = {
    * told to let go. The Settings window's preview needs exactly that edge.
    */
   cameraIntentChanged: 'camera-intent-changed',
+  /** Native Linux camera owner state (preview lease, device loss). */
+  linuxCameraPreviewState: 'linux-camera-preview-state',
   /**
    * Debug mode (#669) changed, from `set_debug_mode`. The belt half of
    * "ask AND listen" -- an already-open remote-window surface webview reads
@@ -309,6 +315,8 @@ export const EVENTS = {
   shareAudioStateChanged: 'share-audio-state-changed',
   shareControlModeChanged: 'share-control-mode-changed',
   sharePickerChanged: 'share-picker-changed',
+  linuxShareStateChanged: 'linux-share-state-changed',
+  linuxSharePickerOpen: 'linux-share-picker-open',
   /**
    * The frontend session store (name/color/devices/policies) changed in
    * SOME webview. Settings runs in its own window, so every other webview's
@@ -890,6 +898,21 @@ export interface CameraDeviceInfo {
 
 /** One (width, height, frame-rate) mode a camera can deliver (camelCase from
  * the Rust `CameraMode`); used to grey out unsupported resolution/FPS presets. */
+/** Mirrors native `PreviewOpened` (linux_camera.rs): the preview lease's
+ * selected device, from the real portal enumeration. */
+export interface LinuxCameraPreviewOpened {
+  deviceId: string;
+  label: string;
+}
+
+/** Mirrors the native `linux-camera-preview-state` event payload. */
+export interface LinuxCameraPreviewState {
+  open: boolean;
+  deviceId: string | null;
+  label: string | null;
+  error: string | null;
+}
+
 export interface CameraMode {
   width: number;
   height: number;
@@ -1614,7 +1637,9 @@ export interface CommandArgs {
   [COMMANDS.openMainRoute]: { route: string };
   [COMMANDS.setDisplayName]: { name: string };
   [COMMANDS.openTestCockpitResultsFolder]: { path: string };
-  [COMMANDS.openWindowPickerWindow]: { color?: string };
+  [COMMANDS.openWindowPickerWindow]: { color?: string; replaceWindowId?: number };
+  [COMMANDS.linuxPictureShares]: Record<string, never>;
+  [COMMANDS.stopLinuxPictureShare]: { windowId: number };
   [COMMANDS.toggleWindowPickerWindow]: Record<string, never>;
   [COMMANDS.recordVideoStreamState]: {
     participantIdentity: string;
@@ -1799,6 +1824,8 @@ export interface CommandArgs {
 export interface CommandReturns {
   [COMMANDS.autotestJoinResult]: AutotestJoinResult | null;
   [COMMANDS.startCameraPublish]: StartCameraPublishResult;
+  [COMMANDS.linuxCameraPreviewOpen]: LinuxCameraPreviewOpened;
+  [COMMANDS.linuxCameraPreviewClose]: void;
   [COMMANDS.cameraPublishState]: CameraPublishStateSnapshot;
   [COMMANDS.animateMainWindowResize]: AnimatedResizeOutcome;
   [COMMANDS.captureWindowThumbnail]: string;
@@ -1939,6 +1966,8 @@ export interface CommandReturns {
   [COMMANDS.setRegionShareCursorInVideo]: ShareCaptureOptions;
   [COMMANDS.setShareAudioEnabled]: ShareAudioState;
   [COMMANDS.sharedWindowIds]: number[];
+  [COMMANDS.linuxPictureShares]: LinuxPictureShare[];
+  [COMMANDS.stopLinuxPictureShare]: void;
   [COMMANDS.toggleMenubarMic]: boolean;
   [COMMANDS.toggleWindowShare]: boolean;
 }
@@ -1955,6 +1984,7 @@ export interface EventPayloads {
   [EVENTS.autotestJoinResult]: AutotestJoinResult;
   [EVENTS.cameraPublishState]: CameraPublishState;
   [EVENTS.cameraIntentChanged]: CameraIntentChanged;
+  [EVENTS.linuxCameraPreviewState]: LinuxCameraPreviewState;
   [EVENTS.debugModeChanged]: DebugModeSettings;
   [EVENTS.desktopWindowsChanged]: void;
   [EVENTS.hoverTabHide]: void;
@@ -1982,10 +2012,18 @@ export interface EventPayloads {
   [EVENTS.shareStateChanged]: ShareStateChanged;
   [EVENTS.shareAudioStateChanged]: ShareAudioState;
   [EVENTS.shareControlModeChanged]: ShareControlModeChanged;
+  [EVENTS.linuxShareStateChanged]: { windowId: number; shared: boolean; error?: string | null };
+  [EVENTS.linuxSharePickerOpen]: { attemptId: number; open: boolean };
   [EVENTS.sharePickerChanged]: void;
   [EVENTS.sessionChanged]: { origin: string; session: Record<string, unknown> };
   [EVENTS.sharePickerOpened]: void;
   [EVENTS.sharePickerVisibilityChanged]: { open: boolean };
   [EVENTS.telepointerUpdate]: TelepointerUpdate;
   [EVENTS.testProgress]: TestProgressEvent;
+}
+
+export interface LinuxPictureShare {
+  windowId: number;
+  title: string;
+  sourceKind: 'display' | 'window';
 }

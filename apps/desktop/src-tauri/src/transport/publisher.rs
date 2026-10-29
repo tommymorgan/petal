@@ -575,7 +575,7 @@ mod share_encode_fps_tests {
         assert_eq!(share_encode_fps_for(30, Some(" 60 ")), (60.0, false));
         // 0 disables the override rather than encoding at zero fps.
         assert_eq!(share_encode_fps_for(30, Some("0")), (30.0, false));
-        assert_eq!(share_encode_fps_for(4, Some("")) , (4.0, false));
+        assert_eq!(share_encode_fps_for(4, Some("")), (4.0, false));
         // An unparseable value must not silently read as "off" AND must not
         // become a nonsense frame rate -- it is reported.
         assert_eq!(share_encode_fps_for(30, Some("60fps")), (30.0, true));
@@ -923,15 +923,27 @@ mod share_fps_geometry_tests {
     fn the_effective_cadence_is_what_the_geometry_can_afford() {
         // The default tier asks 30, which every published shape affords, so the
         // cap is inert there and the tier default is what comes out.
-        assert_eq!(effective_share_cadence(ShareQuality::Full, 1920, 1080), share_encode_fps(30));
+        assert_eq!(
+            effective_share_cadence(ShareQuality::Full, 1920, 1080),
+            share_encode_fps(30)
+        );
         // A 5K-class frame's ceiling is 30, so a higher configured cadence
         // cannot survive it -- this is what keeps the SPS inside Level 5.2.
-        assert_eq!(effective_share_cadence(ShareQuality::Full, 4096, 2304), 30.0);
+        assert_eq!(
+            effective_share_cadence(ShareQuality::Full, 4096, 2304),
+            30.0
+        );
         // The reduced tier is a deliberate low-cadence mode, not a budget knob,
         // so no source moves it.
-        assert_eq!(effective_share_cadence(ShareQuality::Reduced, 4096, 2304), 4.0);
+        assert_eq!(
+            effective_share_cadence(ShareQuality::Reduced, 4096, 2304),
+            4.0
+        );
         // And the cap is a ratchet on the request, never a raise.
-        assert_eq!(effective_share_cadence(ShareQuality::Full, 3840, 2160), share_encode_fps(30));
+        assert_eq!(
+            effective_share_cadence(ShareQuality::Full, 3840, 2160),
+            share_encode_fps(30)
+        );
     }
 }
 impl ShareQuality {
@@ -2833,10 +2845,8 @@ fn window_publish_options_for_region(
                 layers.iter().map(|layer| layer.encoding.max_bitrate).sum();
             livekit::options::VideoEncoding {
                 max_bitrate: {
-                    let budgeted = budgeted_top_bitrate(
-                        raw_top_encoding.max_bitrate,
-                        lower_rungs_bitrate_bps,
-                    );
+                    let budgeted =
+                        budgeted_top_bitrate(raw_top_encoding.max_bitrate, lower_rungs_bitrate_bps);
                     if simulcast_ladder == FullShareSimulcastLadder::ReducedQ {
                         budgeted.min(budgeted_top_bitrate(
                             raw_top_encoding.max_bitrate,
@@ -3144,8 +3154,10 @@ fn share_simulcast_layers(
     let mut layers = full_share_simulcast_layers(width, height, ladder);
     if ladder == FullShareSimulcastLadder::ReducedQ {
         for layer in &mut layers {
-            layer.encoding.max_bitrate =
-                layer.encoding.max_bitrate.min(FULL_SIMULCAST_REDUCED_Q_MAX_BITRATE_BPS);
+            layer.encoding.max_bitrate = layer
+                .encoding
+                .max_bitrate
+                .min(FULL_SIMULCAST_REDUCED_Q_MAX_BITRATE_BPS);
         }
     }
     if quality == ShareQuality::Full {
@@ -4985,7 +4997,11 @@ mod track_name_tests {
                 )],
             ),
             (FullShareSimulcastLadder::HighOnly, false, vec![]),
-            (FullShareSimulcastLadder::ReducedQ, true, vec![(960, 540, 400_000, 30.0)]),
+            (
+                FullShareSimulcastLadder::ReducedQ,
+                true,
+                vec![(960, 540, 400_000, 30.0)],
+            ),
         ] {
             let options = window_publish_options(1920, 1080, ShareQuality::Full, ladder);
 
@@ -5026,18 +5042,23 @@ mod track_name_tests {
 
             // Every ladder's combined ask must fit the budget it was computed
             // against; only the top rung's own ceiling may bind earlier.
-            let lower_sum: u64 = options
-                .simulcast_layers
-                .as_ref()
-                .map_or(0, |layers| layers.iter().map(|l| l.encoding.max_bitrate).sum());
+            let lower_sum: u64 = options.simulcast_layers.as_ref().map_or(0, |layers| {
+                layers.iter().map(|l| l.encoding.max_bitrate).sum()
+            });
             assert!(
                 lower_sum + full_encoding.max_bitrate <= FULL_SIMULCAST_TOTAL_BUDGET_BPS,
                 "{ladder:?} asks more than the total budget"
             );
 
             let layers = options.simulcast_layers.as_ref();
-            assert_eq!(layers.map_or(0, Vec::len), expected_layers.len(), "{ladder:?}");
-            for (layer, (width, height, bitrate, fps)) in layers.into_iter().flatten().zip(expected_layers) {
+            assert_eq!(
+                layers.map_or(0, Vec::len),
+                expected_layers.len(),
+                "{ladder:?}"
+            );
+            for (layer, (width, height, bitrate, fps)) in
+                layers.into_iter().flatten().zip(expected_layers)
+            {
                 assert_eq!(layer.width, width, "{ladder:?}");
                 assert_eq!(layer.height, height, "{ladder:?}");
                 assert_eq!(layer.encoding.max_bitrate, bitrate, "{ladder:?}");
@@ -5430,7 +5451,10 @@ mod track_name_tests {
                 RungFundingState::GivenUp,
                 "sample {sample} must still be holding, not probing"
             );
-            assert_eq!(next_failures, failures, "the failure count must not drift while holding");
+            assert_eq!(
+                next_failures, failures,
+                "the failure count must not drift while holding"
+            );
         }
         // ...and then probes of its own initiative.
         let (_, _, probing) = rung_starvation_next_state(state, true, true, count, failures);
@@ -5442,7 +5466,10 @@ mod track_name_tests {
         let (_, more_failures, back_to_given_up) =
             rung_starvation_next_state(RungFundingState::Probing, true, true, 0, failures);
         assert_eq!(back_to_given_up, RungFundingState::GivenUp);
-        assert!(more_failures > failures, "failures keep accumulating, saturating");
+        assert!(
+            more_failures > failures,
+            "failures keep accumulating, saturating"
+        );
 
         // A SUCCESSFUL slow probe fully recovers, failures reset to zero.
         let (_, reset, recovered) =
@@ -5478,16 +5505,32 @@ mod track_name_tests {
         let guarded = "h";
         // #107 field case: `q` flat zero on every axis, all session.
         let dark = [
-            RungSample { rid: "h".into(), target_bitrate_bps: 681_000.0, frames_per_second: 1.0 },
-            RungSample { rid: "q".into(), target_bitrate_bps: 0.0, frames_per_second: 0.0 },
+            RungSample {
+                rid: "h".into(),
+                target_bitrate_bps: 681_000.0,
+                frames_per_second: 1.0,
+            },
+            RungSample {
+                rid: "q".into(),
+                target_bitrate_bps: 0.0,
+                frames_per_second: 0.0,
+            },
         ];
         assert_eq!(lower_rung_activity(&dark, guarded), DARK_LOWER);
         assert!(!lower_rung_activity(&dark, guarded).worth_protecting());
 
         // #907 field case: `q` funded and delivering.
         let funded = [
-            RungSample { rid: "h".into(), target_bitrate_bps: 288_000.0, frames_per_second: 4.0 },
-            RungSample { rid: "q".into(), target_bitrate_bps: 2_580_000.0, frames_per_second: 30.0 },
+            RungSample {
+                rid: "h".into(),
+                target_bitrate_bps: 288_000.0,
+                frames_per_second: 4.0,
+            },
+            RungSample {
+                rid: "q".into(),
+                target_bitrate_bps: 2_580_000.0,
+                frames_per_second: 30.0,
+            },
         ];
         assert!(lower_rung_activity(&funded, guarded).worth_protecting());
 
@@ -5495,12 +5538,23 @@ mod track_name_tests {
         // useful diagnostic evidence, but not enough to justify reducing the
         // only rung that is actually delivering.
         let funded_only = [
-            RungSample { rid: "h".into(), target_bitrate_bps: 288_000.0, frames_per_second: 0.0 },
-            RungSample { rid: "q".into(), target_bitrate_bps: 900_000.0, frames_per_second: 0.0 },
+            RungSample {
+                rid: "h".into(),
+                target_bitrate_bps: 288_000.0,
+                frames_per_second: 0.0,
+            },
+            RungSample {
+                rid: "q".into(),
+                target_bitrate_bps: 900_000.0,
+                frames_per_second: 0.0,
+            },
         ];
         assert_eq!(
             lower_rung_activity(&funded_only, guarded),
-            LowerRungActivity { funded: true, delivering: false }
+            LowerRungActivity {
+                funded: true,
+                delivering: false
+            }
         );
         assert!(!lower_rung_activity(&funded_only, guarded).worth_protecting());
 
@@ -5543,17 +5597,23 @@ mod track_name_tests {
             frames_per_second: fps,
         };
         assert_eq!(
-            guard.observe(&starved(30.0), FUNDED_LOWER, configured_bitrate_bps).state_change,
+            guard
+                .observe(&starved(30.0), FUNDED_LOWER, configured_bitrate_bps)
+                .state_change,
             None,
             "sample 1: not yet sustained"
         );
         assert_eq!(
-            guard.observe(&starved(30.0), FUNDED_LOWER, configured_bitrate_bps).state_change,
+            guard
+                .observe(&starved(30.0), FUNDED_LOWER, configured_bitrate_bps)
+                .state_change,
             None,
             "sample 2: not yet sustained"
         );
         assert_eq!(
-            guard.observe(&starved(30.0), FUNDED_LOWER, configured_bitrate_bps).state_change,
+            guard
+                .observe(&starved(30.0), FUNDED_LOWER, configured_bitrate_bps)
+                .state_change,
             Some(RungFundingState::Throttled),
             "sample 3: sustained -- transitions and reports it"
         );
@@ -5572,7 +5632,9 @@ mod track_name_tests {
             frames_per_second: 30.0,
         };
         assert_eq!(
-            guard.observe(&throttled, FUNDED_LOWER, configured_bitrate_bps).state_change,
+            guard
+                .observe(&throttled, FUNDED_LOWER, configured_bitrate_bps)
+                .state_change,
             None
         );
     }
@@ -5591,20 +5653,28 @@ mod track_name_tests {
             frames_per_second: 0.0,
         };
         assert_eq!(
-            guard.observe(&funded_but_dead, FUNDED_LOWER, configured).delivery_change,
+            guard
+                .observe(&funded_but_dead, FUNDED_LOWER, configured)
+                .delivery_change,
             None
         );
         assert_eq!(
-            guard.observe(&funded_but_dead, FUNDED_LOWER, configured).delivery_change,
+            guard
+                .observe(&funded_but_dead, FUNDED_LOWER, configured)
+                .delivery_change,
             None
         );
         assert_eq!(
-            guard.observe(&funded_but_dead, FUNDED_LOWER, configured).delivery_change,
+            guard
+                .observe(&funded_but_dead, FUNDED_LOWER, configured)
+                .delivery_change,
             Some(RungDelivery::DegradedFunded),
             "3 sustained samples: reported, and reported as FUNDED-but-not-delivering"
         );
         assert_eq!(
-            guard.observe(&funded_but_dead, FUNDED_LOWER, configured).delivery_change,
+            guard
+                .observe(&funded_but_dead, FUNDED_LOWER, configured)
+                .delivery_change,
             None,
             "an episode is reported once, never per sample (#905)"
         );
@@ -5615,10 +5685,17 @@ mod track_name_tests {
             frames_per_second: 29.0,
         };
         assert_eq!(
-            guard.observe(&healthy, FUNDED_LOWER, configured).delivery_change,
+            guard
+                .observe(&healthy, FUNDED_LOWER, configured)
+                .delivery_change,
             Some(RungDelivery::Healthy)
         );
-        assert_eq!(guard.observe(&healthy, FUNDED_LOWER, configured).delivery_change, None);
+        assert_eq!(
+            guard
+                .observe(&healthy, FUNDED_LOWER, configured)
+                .delivery_change,
+            None
+        );
 
         // The unfunded flavour is a DIFFERENT condition with its own report.
         let starved_and_dead = RungSample {
@@ -5692,7 +5769,10 @@ mod track_name_tests {
         }
 
         fn ceilings(&self) -> Vec<u64> {
-            self.applied.iter().map(|(_, bitrate, _)| *bitrate).collect()
+            self.applied
+                .iter()
+                .map(|(_, bitrate, _)| *bitrate)
+                .collect()
         }
     }
 
@@ -5785,7 +5865,10 @@ mod track_name_tests {
         );
         // ...but the degradation is NOT silent.
         assert!(harness.guard.consecutive_low_fps_samples >= RUNG_STARVATION_GUARD_TRIGGER_SAMPLES);
-        assert_eq!(harness.guard.reported_delivery, RungDelivery::DegradedUnfunded);
+        assert_eq!(
+            harness.guard.reported_delivery,
+            RungDelivery::DegradedUnfunded
+        );
         assert!(harness.guard.reported_premise_refusal);
     }
 
@@ -5799,7 +5882,11 @@ mod track_name_tests {
         let starved_top = (681_000.0, 1.0);
         let funded_lower = (2_580_000.0, 30.0);
 
-        harness.poll_n(RUNG_STARVATION_GUARD_TRIGGER_SAMPLES, starved_top, funded_lower);
+        harness.poll_n(
+            RUNG_STARVATION_GUARD_TRIGGER_SAMPLES,
+            starved_top,
+            funded_lower,
+        );
         assert_eq!(harness.guard.state, RungFundingState::Throttled);
 
         // Three failed probes on the 30s/60s/120s schedule.
@@ -5854,7 +5941,11 @@ mod track_name_tests {
         let mut harness = GuardHarness::new(3_000_000);
         let starved_top = (681_000.0, 1.0);
         let funded_lower = (2_580_000.0, 30.0);
-        harness.poll_n(RUNG_STARVATION_GUARD_TRIGGER_SAMPLES, starved_top, funded_lower);
+        harness.poll_n(
+            RUNG_STARVATION_GUARD_TRIGGER_SAMPLES,
+            starved_top,
+            funded_lower,
+        );
         for failures in 0..RUNG_STARVATION_GUARD_PROBE_FAILURE_CAP {
             harness.poll_n(
                 rung_starvation_probe_interval_samples(failures),
@@ -8832,9 +8923,11 @@ fn lower_rung_activity(samples: &[RungSample], guarded_rid: &str) -> LowerRungAc
     samples
         .iter()
         .filter(|sample| sample.rid != guarded_rid)
-        .fold(LowerRungActivity::default(), |acc, sample| LowerRungActivity {
-            funded: acc.funded || sample.is_funded(),
-            delivering: acc.delivering || sample.is_delivering(),
+        .fold(LowerRungActivity::default(), |acc, sample| {
+            LowerRungActivity {
+                funded: acc.funded || sample.is_funded(),
+                delivering: acc.delivering || sample.is_delivering(),
+            }
         })
 }
 
@@ -9088,7 +9181,8 @@ impl RungStarvationGuard {
         } else {
             self.consecutive_low_fps_samples = 0;
         }
-        let delivery = if self.consecutive_low_fps_samples >= RUNG_STARVATION_GUARD_TRIGGER_SAMPLES {
+        let delivery = if self.consecutive_low_fps_samples >= RUNG_STARVATION_GUARD_TRIGGER_SAMPLES
+        {
             // A zero target is intentionally not `starved` (it means no
             // current demand), but it is still not funded. Keep the bounded
             // diagnostic honest instead of reporting "funded at 0kbps".
@@ -9170,8 +9264,11 @@ fn apply_rung_starvation_guard_sample(
     }
 
     if let Some(new_state) = observation.state_change {
-        let (max_bitrate, max_framerate) =
-            RungStarvationGuard::live_parameters_for(new_state, *configured_bitrate_bps, *configured_framerate);
+        let (max_bitrate, max_framerate) = RungStarvationGuard::live_parameters_for(
+            new_state,
+            *configured_bitrate_bps,
+            *configured_framerate,
+        );
         let result = apply(&guard.rid, max_bitrate, max_framerate);
         match new_state {
             RungFundingState::Throttled => log::warn!(
@@ -9319,8 +9416,7 @@ fn selected_pair_estimate(stats: &[livekit::webrtc::stats::RtcStats]) -> Option<
 /// good configuration never survived a normal launch. The floor is now held until
 /// the path shows evidence it cannot take it, and this is only the final backstop
 /// if that evidence never arrives.
-const STARTUP_MIN_BITRATE_MAX_HOLD: std::time::Duration =
-    std::time::Duration::from_secs(300);
+const STARTUP_MIN_BITRATE_MAX_HOLD: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// Milliseconds of RTT above the first observation, sustained for
 /// [`STARTUP_FLOOR_RTT_POLLS`], that count as "the floor is queueing the path".
@@ -9645,7 +9741,9 @@ async fn log_window_share_encoder_stats(
             );
         }
 
-        let Some(guard) = guard.as_mut() else { continue };
+        let Some(guard) = guard.as_mut() else {
+            continue;
+        };
         let mut apply = |rid: &str, max_bitrate: u64, max_framerate: f64| {
             format!(
                 "{:?}",

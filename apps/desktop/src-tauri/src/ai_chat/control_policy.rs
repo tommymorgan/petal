@@ -90,9 +90,15 @@ pub enum Action {
     /// `generation`. Citing the generation is what lets a stale reference be
     /// DETECTED rather than silently resolved to whatever now sits at that
     /// index.
-    Click { generation: u64, element_index: usize },
+    Click {
+        generation: u64,
+        element_index: usize,
+    },
     PressKey(SafeKey),
-    Scroll { direction: ScrollDirection, amount: i64 },
+    Scroll {
+        direction: ScrollDirection,
+        amount: i64,
+    },
 }
 
 impl Action {
@@ -180,7 +186,10 @@ pub(crate) fn is_unicode_format_character(c: char) -> bool {
 pub fn parse_action(tool: &str, args: &serde_json::Value) -> Result<Action, ArgError> {
     match tool {
         "window_type" | "send_to_window" => {
-            let text = args.get("text").and_then(|v| v.as_str()).ok_or(ArgError::MissingArgument)?;
+            let text = args
+                .get("text")
+                .and_then(|v| v.as_str())
+                .ok_or(ArgError::MissingArgument)?;
             Ok(Action::Type(validate_text(text)?))
         }
         "window_click" => {
@@ -198,15 +207,21 @@ pub fn parse_action(tool: &str, args: &serde_json::Value) -> Result<Action, ArgE
             })
         }
         "window_press_key" => {
-            let key = args.get("key").and_then(|v| v.as_str()).ok_or(ArgError::MissingArgument)?;
-            SafeKey::parse(key).map(Action::PressKey).ok_or(ArgError::KeyNotAllowed)
+            let key = args
+                .get("key")
+                .and_then(|v| v.as_str())
+                .ok_or(ArgError::MissingArgument)?;
+            SafeKey::parse(key)
+                .map(Action::PressKey)
+                .ok_or(ArgError::KeyNotAllowed)
         }
         "window_scroll" => {
             let direction = args
                 .get("direction")
                 .and_then(|v| v.as_str())
                 .ok_or(ArgError::MissingArgument)?;
-            let direction = ScrollDirection::parse(direction).ok_or(ArgError::DirectionNotAllowed)?;
+            let direction =
+                ScrollDirection::parse(direction).ok_or(ArgError::DirectionNotAllowed)?;
             let amount = args
                 .get("amount")
                 .and_then(|v| v.as_i64())
@@ -344,13 +359,19 @@ pub enum Decision {
 /// unknown or unavailable input refuses.
 pub fn grant_decision(action: &Action, ctx: &GrantContext<'_>) -> Decision {
     if !ctx.ai_chat_enabled {
-        return Decision::Refuse { code: "ai_chat_disabled" };
+        return Decision::Refuse {
+            code: "ai_chat_disabled",
+        };
     }
     if !ctx.remote_control_allowed {
-        return Decision::Refuse { code: "remote_control_disabled" };
+        return Decision::Refuse {
+            code: "remote_control_disabled",
+        };
     }
     if !ctx.window_present {
-        return Decision::Refuse { code: "window_unavailable" };
+        return Decision::Refuse {
+            code: "window_unavailable",
+        };
     }
     if let Some(code) = blocklist_reason(ctx.bundle_id) {
         return Decision::Refuse { code };
@@ -359,11 +380,15 @@ pub fn grant_decision(action: &Action, ctx: &GrantContext<'_>) -> Decision {
         SecureInput::Inactive => {}
         // Unknown denies: a password field may hold the keyboard right now.
         SecureInput::Active | SecureInput::Unknown => {
-            return Decision::Refuse { code: "secure_input_active" }
+            return Decision::Refuse {
+                code: "secure_input_active",
+            }
         }
     }
     if action.requires_takeover_detection() && !ctx.takeover_detection_healthy {
-        return Decision::Refuse { code: "input_tap_unavailable" };
+        return Decision::Refuse {
+            code: "input_tap_unavailable",
+        };
     }
     Decision::AskUser
 }
@@ -424,8 +449,14 @@ mod tests {
         // The whole point: a leading tab would be replayed as a real Tab press,
         // moving focus off the approved field before the rest is typed.
         assert_eq!(validate_text("\tsecret"), Err(ArgError::ControlCharacter));
-        assert_eq!(validate_text("line\nbreak"), Err(ArgError::ControlCharacter));
-        assert_eq!(validate_text("carriage\rreturn"), Err(ArgError::ControlCharacter));
+        assert_eq!(
+            validate_text("line\nbreak"),
+            Err(ArgError::ControlCharacter)
+        );
+        assert_eq!(
+            validate_text("carriage\rreturn"),
+            Err(ArgError::ControlCharacter)
+        );
         assert_eq!(validate_text("nul\0byte"), Err(ArgError::ControlCharacter));
         // Ordinary text, including non-ASCII, is fine.
         assert_eq!(validate_text("héllo wörld 👋").unwrap(), "héllo wörld 👋");
@@ -436,13 +467,13 @@ mod tests {
         // The exact production entry point: parse_action calls validate_text
         // before an Action (and therefore an approval card) can exist.
         for format in [
-            '\u{00ad}', // soft hyphen
-            '\u{200b}', // zero-width space
-            '\u{200f}', // right-to-left mark
-            '\u{202e}', // right-to-left override
-            '\u{2066}', // left-to-right isolate
-            '\u{2069}', // pop directional isolate
-            '\u{feff}', // zero-width no-break space / BOM
+            '\u{00ad}',  // soft hyphen
+            '\u{200b}',  // zero-width space
+            '\u{200f}',  // right-to-left mark
+            '\u{202e}',  // right-to-left override
+            '\u{2066}',  // left-to-right isolate
+            '\u{2069}',  // pop directional isolate
+            '\u{feff}',  // zero-width no-break space / BOM
             '\u{e007f}', // cancel tag
         ] {
             let text = format!("Allow harmless action {format}txt.exe");
@@ -502,7 +533,10 @@ mod tests {
 
     #[test]
     fn unknown_tools_and_missing_args_refuse() {
-        assert_eq!(parse_action("rm_rf", &json!({})), Err(ArgError::UnknownTool));
+        assert_eq!(
+            parse_action("rm_rf", &json!({})),
+            Err(ArgError::UnknownTool)
+        );
         assert_eq!(
             parse_action("window_type", &json!({})),
             Err(ArgError::MissingArgument)
@@ -518,7 +552,10 @@ mod tests {
         // Without the generation a stale index silently resolves to whatever
         // now occupies that slot — clicking Delete where Cancel used to be.
         assert_eq!(
-            parse_action("window_click", &json!({"generation": 4, "element_index": 9})),
+            parse_action(
+                "window_click",
+                &json!({"generation": 4, "element_index": 9})
+            ),
             Ok(Action::Click {
                 generation: 4,
                 element_index: 9
@@ -687,7 +724,10 @@ mod tests {
 
     #[test]
     fn grant_scope_defaults_are_explicit_on_the_wire() {
-        assert_eq!(serde_json::to_string(&GrantScope::Once).unwrap(), "\"once\"");
+        assert_eq!(
+            serde_json::to_string(&GrantScope::Once).unwrap(),
+            "\"once\""
+        );
         assert_eq!(
             serde_json::to_string(&GrantScope::Session).unwrap(),
             "\"session\""

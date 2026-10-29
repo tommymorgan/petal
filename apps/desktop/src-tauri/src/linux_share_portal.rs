@@ -1,4 +1,4 @@
-//! One private portal connection/session per explicitly selected monitor.
+//! One private portal connection/session per explicitly selected picture.
 //! Dropping the connection also retires requests that have not returned yet.
 
 use std::collections::HashMap;
@@ -8,6 +8,7 @@ use futures_util::StreamExt;
 use tokio_util::sync::CancellationToken;
 use zbus::zvariant::{DynamicType, OwnedObjectPath, OwnedValue, Value};
 
+use crate::transport::publisher::SharedSourceKind;
 const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 const DESKTOP: &str = "/org/freedesktop/portal/desktop";
 const SCREENCAST: &str = "org.freedesktop.portal.ScreenCast";
@@ -15,9 +16,34 @@ const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 type Properties = HashMap<String, OwnedValue>;
 
-pub(super) struct MonitorStream {
+pub(super) struct PictureStream {
     pub node: u32,
-    pub logical_size: Option<(i32, i32)>,
+    pub source_kind: SharedSourceKind,
+}
+
+fn validate_streams(mut streams: Vec<(u32, Properties)>) -> Result<PictureStream, String> {
+    if streams.len() != 1 {
+        return Err("Select exactly one monitor or window for this share".to_string());
+    }
+    let (node, properties) = streams
+        .pop()
+        .ok_or("ScreenCast returned no picture stream")?;
+    let source_kind = match properties
+        .get("source_type")
+        .and_then(|v| u32::try_from(v).ok())
+    {
+        Some(1) => SharedSourceKind::Display,
+        Some(2) => SharedSourceKind::Window,
+        _ => {
+            return Err(
+                "ScreenCast did not identify an explicitly selected monitor or window".to_string(),
+            );
+        }
+    };
+    if node == 0 {
+        return Err("ScreenCast returned an invalid picture node".to_string());
+    }
+    Ok(PictureStream { node, source_kind })
 }
 
 pub(super) struct PortalSession {
@@ -40,7 +66,7 @@ impl PortalSession {
             .replace('.', "_");
         Ok(Self {
             connection: Some(connection),
-            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_monitor"),
+            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_picture"),
             request_serial: 0,
         })
     }
@@ -135,12 +161,12 @@ impl PortalSession {
         outcome
     }
 
-    pub async fn select_monitor(
+    pub async fn select_picture(
         &mut self,
         cancel: &CancellationToken,
-    ) -> Result<MonitorStream, String> {
+    ) -> Result<PictureStream, String> {
         let mut options = self.options();
-        options.insert("session_handle_token", Value::from("petal_monitor"));
+        options.insert("session_handle_token", Value::from("petal_picture"));
         let mut created = self.request("CreateSession", &(options,), cancel).await?;
         // Some portal backends encode this as a string rather than an object path.
         let handle = created
@@ -160,20 +186,21 @@ impl PortalSession {
         let sources: u32 = proxy
             .get_property("AvailableSourceTypes")
             .await
-            .map_err(|e| format!("ScreenCast monitor support unavailable: {e}"))?;
+            .map_err(|e| format!("ScreenCast picture support unavailable: {e}"))?;
         let cursors: u32 = proxy
             .get_property("AvailableCursorModes")
             .await
             .map_err(|e| format!("ScreenCast cursor support unavailable: {e}"))?;
-        if sources & 1 == 0 || cursors & 2 == 0 {
+        if sources & 3 == 0 || cursors & 2 == 0 {
             return Err(
-                "ScreenCast portal needs monitor capture with an embedded cursor".to_string(),
+                "ScreenCast portal needs monitor or window capture with an embedded cursor"
+                    .to_string(),
             );
         }
         drop(proxy);
         let session = OwnedObjectPath::try_from(self.path.clone()).map_err(|e| e.to_string())?;
         let mut options = self.options();
-        options.insert("types", Value::from(1u32)); // Monitor only; never request a window/input device.
+        options.insert("types", Value::from(sources & 3)); // Picture only, never virtual sources/input.
         options.insert("multiple", Value::from(false));
         options.insert("cursor_mode", Value::from(2u32)); // Embedded in the selected picture.
         options.insert("persist_mode", Value::from(0u32)); // No restore token or silent reacquisition.
@@ -185,29 +212,20 @@ impl PortalSession {
             .await?;
         let streams = response
             .remove("streams")
-            .ok_or("ScreenCast returned no monitor stream")?;
-        let mut streams: Vec<(u32, Properties)> = streams
+            .ok_or("ScreenCast returned no picture stream")?;
+        let streams: Vec<(u32, Properties)> = streams
             .try_into()
             .map_err(|e| format!("Invalid ScreenCast streams: {e}"))?;
-        if streams.len() != 1 {
-            return Err("Select exactly one monitor for this share".to_string());
+        let stream = validate_streams(streams)?;
+        let selected_type = match stream.source_kind {
+            SharedSourceKind::Display => 1,
+            SharedSourceKind::Window => 2,
+            _ => return Err("Unexpected ScreenCast source kind".to_string()),
+        };
+        if sources & selected_type == 0 {
+            return Err("ScreenCast returned a source type it did not offer".to_string());
         }
-        let (node, properties) = streams
-            .pop()
-            .ok_or("ScreenCast returned no monitor stream")?;
-        if node == 0
-            || properties
-                .get("source_type")
-                .and_then(|v| u32::try_from(v).ok())
-                != Some(1)
-        {
-            return Err("ScreenCast did not return the explicitly selected monitor".to_string());
-        }
-        let logical_size = properties
-            .get("size")
-            .and_then(|v| v.try_clone().ok())
-            .and_then(|v| <(i32, i32)>::try_from(v).ok());
-        Ok(MonitorStream { node, logical_size })
+        Ok(stream)
     }
 
     pub async fn remote(&self) -> Result<std::os::fd::OwnedFd, String> {
@@ -270,6 +288,30 @@ impl Drop for PortalSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn returned_stream_validation_never_substitutes_unidentified_or_multiple_content() {
+        fn properties(kind: Option<u32>) -> Properties {
+            kind.map(|kind| HashMap::from([("source_type".to_string(), OwnedValue::from(kind))]))
+                .unwrap_or_default()
+        }
+        for (kind, expected) in [
+            (1, SharedSourceKind::Display),
+            (2, SharedSourceKind::Window),
+        ] {
+            let stream = validate_streams(vec![(42, properties(Some(kind)))]).unwrap();
+            assert_eq!(stream.node, 42);
+            assert_eq!(stream.source_kind, expected);
+        }
+        for kind in [None, Some(0), Some(3), Some(4), Some(255)] {
+            assert!(validate_streams(vec![(42, properties(kind))]).is_err());
+        }
+        assert!(validate_streams(vec![(0, properties(Some(2)))]).is_err());
+        assert!(validate_streams(Vec::new()).is_err());
+        assert!(
+            validate_streams(vec![(42, properties(Some(2))), (43, properties(Some(1)))]).is_err()
+        );
+    }
     use std::io::{BufRead, BufReader, Read, Write};
     use std::os::unix::fs::OpenOptionsExt;
     use std::process::{Child, Command, Stdio};
@@ -355,7 +397,9 @@ mod tests {
                     if let Some(mut pipe) = bus.child.stderr.take() {
                         let _ = pipe.read_to_string(&mut stderr);
                     }
-                    panic!("private bus startup failed: {outcome:?}; status={status:?}; stderr={stderr}");
+                    panic!(
+                        "private bus startup failed: {outcome:?}; status={status:?}; stderr={stderr}"
+                    );
                 }
             }
         }
@@ -447,7 +491,7 @@ mod tests {
             .replace('.', "_");
         let mut portal = PortalSession {
             connection: Some(connection),
-            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_monitor"),
+            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_picture"),
             request_serial: 0,
         };
         for (status, expected) in [
@@ -516,18 +560,18 @@ mod tests {
             .replace('.', "_");
         let mut portal = PortalSession {
             connection: Some(connection),
-            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_monitor"),
+            path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_picture"),
             request_serial: 0,
         };
         let result = tokio::time::timeout(
             Duration::from_secs(5),
-            portal.select_monitor(&CancellationToken::new()),
+            portal.select_picture(&CancellationToken::new()),
         )
         .await
         .expect("missing portal must settle without a permission timeout");
         let error = match result {
             Err(error) => error,
-            Ok(_) => panic!("An unavailable portal must never select monitor content"),
+            Ok(_) => panic!("An unavailable portal must never select picture content"),
         };
         assert!(
             error.contains("ScreenCast"),

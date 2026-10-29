@@ -439,7 +439,11 @@ pub fn hover_tab_presentation_with_position_and_size(
         let frame_bottom = frame_top + frame.height as f64;
         match side {
             HoverTabSide::Top => HoverTabRect {
-                y: clamp_origin(frame_top, monitor.top, (monitor.bottom - height).max(monitor.top)),
+                y: clamp_origin(
+                    frame_top,
+                    monitor.top,
+                    (monitor.bottom - height).max(monitor.top),
+                ),
                 ..rect
             },
             HoverTabSide::Bottom => HoverTabRect {
@@ -451,7 +455,11 @@ pub fn hover_tab_presentation_with_position_and_size(
                 ..rect
             },
             HoverTabSide::Left => HoverTabRect {
-                x: clamp_origin(frame_left, monitor.left, (monitor.right - width).max(monitor.left)),
+                x: clamp_origin(
+                    frame_left,
+                    monitor.left,
+                    (monitor.right - width).max(monitor.left),
+                ),
                 ..rect
             },
             HoverTabSide::Right => HoverTabRect {
@@ -1246,7 +1254,10 @@ mod tests {
             hover_tab_position_for_side_offset(HoverTabSide::Top, 0.5),
         );
         assert_eq!(top.attachment, HoverTabAttachment::Inset);
-        assert_eq!(top.rect.y, 48.0, "flush with the window's top edge, from the inside");
+        assert_eq!(
+            top.rect.y, 48.0,
+            "flush with the window's top edge, from the inside"
+        );
         assert!(top.rect.y >= monitor.top, "never over the menu bar");
         assert_eq!(top.rect.bottom(), 48.0 + HOVER_TAB_COMPACT_HEIGHT);
 
@@ -1259,7 +1270,11 @@ mod tests {
             hover_tab_position_for_side_offset(HoverTabSide::Top, 0.5),
         );
         assert_eq!(outside.attachment, HoverTabAttachment::Outside);
-        assert_eq!(outside.rect.bottom(), 70.0, "hanging off the edge, seam at the titlebar");
+        assert_eq!(
+            outside.rect.bottom(),
+            70.0,
+            "hanging off the edge, seam at the titlebar"
+        );
 
         // A window whose top is itself under the menu bar: inset, and the
         // work area still wins so the tab stays visible.
@@ -1280,13 +1295,16 @@ mod tests {
             width: 1440,
             height: 875,
         };
-        let bottom = hover_tab_presentation_with_side_offset(7, flush, monitor, HoverTabSide::Bottom, 0.5);
+        let bottom =
+            hover_tab_presentation_with_side_offset(7, flush, monitor, HoverTabSide::Bottom, 0.5);
         assert_eq!(bottom.attachment, HoverTabAttachment::Inset);
         assert_eq!(bottom.rect.bottom(), 900.0);
-        let left = hover_tab_presentation_with_side_offset(7, flush, monitor, HoverTabSide::Left, 0.5);
+        let left =
+            hover_tab_presentation_with_side_offset(7, flush, monitor, HoverTabSide::Left, 0.5);
         assert_eq!(left.attachment, HoverTabAttachment::Inset);
         assert_eq!(left.rect.x, 0.0);
-        let right = hover_tab_presentation_with_side_offset(7, flush, monitor, HoverTabSide::Right, 0.5);
+        let right =
+            hover_tab_presentation_with_side_offset(7, flush, monitor, HoverTabSide::Right, 0.5);
         assert_eq!(right.attachment, HoverTabAttachment::Inset);
         assert_eq!(right.rect.right(), 1440.0);
     }

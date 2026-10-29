@@ -99,6 +99,8 @@
     type AiChatSettings,
     type BuildInfo,
     type CameraIntentChanged,
+  type LinuxCameraPreviewOpened,
+  type LinuxCameraPreviewState,
     type CameraPublishState,
     type CameraPublishStateSnapshot,
     type CockpitJourney,
@@ -110,7 +112,7 @@
     type TestProgressEvent
   } from '$lib/ipc';
   import { displayBuildVersion } from '$lib/buildInfo';
-  import { isMac } from '$lib/platform';
+  import { isLinux, isMac } from '$lib/platform';
   import { resetOnboarding, session, updateAudioDevices, updateCameraMode } from '$lib/stores/session.svelte';
   import { checkForUpdate } from '$lib/updater';
   import { clearLocalFactoryResetState, tccResetCommand } from '$lib/data/factoryReset';
@@ -965,6 +967,10 @@
   let previewVideo = $state<HTMLVideoElement | null>(null);
   let previewStream = $state<MediaStream | null>(null);
   let previewError = $state<string | null>(null);
+  // Native Linux preview (ADR 0003): a clearly titled transient GTK window
+  // fed by the same single camera capture as publication — never a second
+  // getUserMedia acquisition from this webview.
+  let nativePreview = $state<{ deviceId: string; label: string } | null>(null);
   // Settings runs in its own window, so a preview here competes with the
   // meeting's camera publish for the same device (on Windows the native
   // capture is a single client; on macOS a second getUserMedia knocked the
@@ -1083,6 +1089,10 @@
   function stopPreview(reason = 'teardown') {
     previewRequestId += 1;
     clearPreviewStream(reason);
+    if (nativePreview) {
+      nativePreview = null;
+      if (hasTauri && isLinux()) void invoke(COMMANDS.linuxCameraPreviewClose).catch(() => {});
+    }
   }
 
   async function acquirePreview(deviceId: string) {
@@ -1090,6 +1100,31 @@
     const requestId = previewRequestId;
     acquiredCameraId = deviceId;
     previewError = null;
+    if (hasTauri && isLinux()) {
+      // The preview is a native window sharing the real camera owner's one
+      // capture (C02); a meeting camera on means the same device is busy.
+      if (await meetingCameraActive()) {
+        if (requestId !== previewRequestId) return;
+        meetingCameraOn = true;
+        previewError = MEETING_CAMERA_REASON;
+        return;
+      }
+      meetingCameraOn = false;
+      try {
+        const opened = await invoke<LinuxCameraPreviewOpened>(COMMANDS.linuxCameraPreviewOpen);
+        if (requestId !== previewRequestId) {
+          void invoke(COMMANDS.linuxCameraPreviewClose).catch(() => {});
+          return;
+        }
+        nativePreview = { deviceId: opened.deviceId, label: opened.label };
+        logPreviewState('acquired', 'native-window');
+      } catch (e) {
+        if (requestId !== previewRequestId) return;
+        logPreviewState('failed', 'native-window');
+        previewError = String(e).replace(/^Error:\s*/, '') || 'camera preview unavailable';
+      }
+      return;
+    }
     if (await meetingCameraActive()) {
       if (requestId !== previewRequestId) return;
       meetingCameraOn = true;
@@ -1212,12 +1247,24 @@
     if (!hasTauri) return;
     let unlistenIntent: UnlistenFn | null = null;
     let unlistenPublish: UnlistenFn | null = null;
+    let unlistenPreviewState: UnlistenFn | null = null;
     let cancelled = false;
     listen<CameraIntentChanged>(EVENTS.cameraIntentChanged, (event) => {
       applyMeetingCameraState(event.payload.intended);
     }).then((fn) => {
       if (cancelled) fn();
       else unlistenIntent = fn;
+    });
+    listen<LinuxCameraPreviewState>(EVENTS.linuxCameraPreviewState, (event) => {
+      if (!event.payload.open && nativePreview) {
+        nativePreview = null;
+        // A null error is the user's own close (window or Settings); only a
+        // carried error means the preview was lost unexpectedly.
+        if (event.payload.error != null) previewError = event.payload.error;
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlistenPreviewState = fn;
     });
     listen<CameraPublishState>(EVENTS.cameraPublishState, (event) => {
       applyMeetingCameraState(event.payload.publishing);
@@ -1229,6 +1276,7 @@
       cancelled = true;
       unlistenIntent?.();
       unlistenPublish?.();
+      unlistenPreviewState?.();
     };
   });
 
@@ -1452,6 +1500,13 @@
                 <!-- Real camera feed via getUserMedia (see acquirePreview above). -->
                 <!-- svelte-ignore a11y_media_has_caption -->
                 <video class="preview-video" bind:this={previewVideo} autoplay playsinline muted></video>
+              {:else if nativePreview}
+                <!-- Native Linux preview window (one camera owner, ADR 0003). -->
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"></path>
+                  <path d="M16 10l5-3v10l-5-3"></path>
+                </svg>
+                <span class="preview-label">Camera preview open in the Petal window ({nativePreview.label})</span>
               {:else}
                 <!-- Fallback placeholder — shown until a stream is acquired, or
                      when acquisition fails (reason line below). -->

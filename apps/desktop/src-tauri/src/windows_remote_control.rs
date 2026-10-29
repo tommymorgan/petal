@@ -41,7 +41,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EnumChildWindows, GetAncestor, GetClassNameW, GetCursorPos, GetForegroundWindow,
     GetGUIThreadInfo, GetWindowLongPtrW, GetWindowThreadProcessId, IsChild, IsIconic, IsWindow,
     IsWindowVisible, PostMessageW, SendMessageTimeoutW, SetCursorPos, SetForegroundWindow,
-    WindowFromPoint, GA_ROOTOWNER, GUITHREADINFO, GWL_STYLE, SMTO_ABORTIFHUNG, WM_CHAR, WM_KEYDOWN, WM_KEYUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WindowFromPoint, GA_ROOTOWNER, GUITHREADINFO, GWL_STYLE, SMTO_ABORTIFHUNG, WM_CHAR, WM_KEYDOWN,
+    WM_KEYUP, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 use crate::platform::cg::WindowFrame;
@@ -809,10 +810,7 @@ fn replay_window(
     }
 }
 
-fn replay_display(
-    message: &RemoteControlMessage,
-    frame: WindowFrame,
-) -> Result<(), String> {
+fn replay_display(message: &RemoteControlMessage, frame: WindowFrame) -> Result<(), String> {
     match message.message_type {
         RemoteControlType::Key => with_global_input(|| {
             let pid = foreground_pid()?;
@@ -868,10 +866,7 @@ fn replay_display_pointer(
 /// point (display shares already use the global cursor for keyboard/pointer
 /// semantics), serialized through the global input lane. This is the ONE
 /// place global cursor movement is expected — window shares never reach it.
-fn replay_display_wheel(
-    message: &RemoteControlMessage,
-    frame: WindowFrame,
-) -> Result<(), String> {
+fn replay_display_wheel(message: &RemoteControlMessage, frame: WindowFrame) -> Result<(), String> {
     with_global_input(|| {
         let (px, py) = normalized_point(frame, message)?;
         // The point must lie inside the shared display's frame.
@@ -1197,7 +1192,9 @@ fn post_key_message(
     let post = |msg: u32, wparam: usize, lparam: isize| {
         let sent = unsafe { PostMessageW(Some(target), msg, WPARAM(wparam), LPARAM(lparam)) };
         if sent.is_err() {
-            log::warn!("remote-control: PostMessageW failed for key '{code}' up={key_up}: {sent:?}");
+            log::warn!(
+                "remote-control: PostMessageW failed for key '{code}' up={key_up}: {sent:?}"
+            );
         }
     };
     if key_up {
@@ -1295,10 +1292,7 @@ fn replay_window_key_cursor_preserving(
                     code,
                     key_up,
                     message.modifiers.alt,
-                    if message.modifiers.ctrl
-                        || message.modifiers.meta
-                        || message.modifiers.shift
-                    {
+                    if message.modifiers.ctrl || message.modifiers.meta || message.modifiers.shift {
                         None
                     } else {
                         message.key.as_deref()
@@ -1374,10 +1368,12 @@ fn replay_window_pointer_cursor_preserving(
     }
     let posted = normalized_point(frame, message).ok();
     let result = replay_window_pointer_global(message, frame, hwnd, pid);
-    if result.is_err() && matches!(
-        message.action,
-        Some(RemoteControlAction::Down) | Some(RemoteControlAction::Click)
-    ) {
+    if result.is_err()
+        && matches!(
+            message.action,
+            Some(RemoteControlAction::Down) | Some(RemoteControlAction::Click)
+        )
+    {
         // A rejected/failed gesture must not leave the takeover marker behind:
         // otherwise the next bare Move is mistaken for a drag and starts
         // moving the sharer's cursor as if full control were enabled.

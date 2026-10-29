@@ -81,8 +81,9 @@ pub enum ObserverAction {
 pub fn classify_notification(name: &str) -> ObserverAction {
     match name {
         "AXWindowCreated" | "AXUIElementDestroyed" => ObserverAction::Lifecycle,
-        "AXWindowMoved" | "AXWindowResized" | "AXWindowMiniaturized"
-        | "AXWindowDeminiaturized" => ObserverAction::StateRecheck,
+        "AXWindowMoved" | "AXWindowResized" | "AXWindowMiniaturized" | "AXWindowDeminiaturized" => {
+            ObserverAction::StateRecheck
+        }
         _ => ObserverAction::Ignore,
     }
 }
@@ -228,11 +229,7 @@ pub fn start() {
                     let (add, remove) = diff_observer_apps(&should, &have);
                     for pid in remove {
                         if let Some((obs, src, app)) = registered.remove(&pid) {
-                            CFRunLoopRemoveSource(
-                                rl,
-                                src as *const c_void,
-                                kCFRunLoopDefaultMode,
-                            );
+                            CFRunLoopRemoveSource(rl, src as *const c_void, kCFRunLoopDefaultMode);
                             CFRelease(obs as *const c_void);
                             CFRelease(app as *const c_void);
                         }
@@ -298,16 +295,34 @@ mod tests {
 
     #[test]
     fn notification_names_map_to_the_right_actions() {
-        assert_eq!(classify_notification("AXWindowCreated"), ObserverAction::Lifecycle);
-        assert_eq!(classify_notification("AXUIElementDestroyed"), ObserverAction::Lifecycle);
-        assert_eq!(classify_notification("AXWindowMoved"), ObserverAction::StateRecheck);
-        assert_eq!(classify_notification("AXWindowResized"), ObserverAction::StateRecheck);
-        assert_eq!(classify_notification("AXWindowMiniaturized"), ObserverAction::StateRecheck);
+        assert_eq!(
+            classify_notification("AXWindowCreated"),
+            ObserverAction::Lifecycle
+        );
+        assert_eq!(
+            classify_notification("AXUIElementDestroyed"),
+            ObserverAction::Lifecycle
+        );
+        assert_eq!(
+            classify_notification("AXWindowMoved"),
+            ObserverAction::StateRecheck
+        );
+        assert_eq!(
+            classify_notification("AXWindowResized"),
+            ObserverAction::StateRecheck
+        );
+        assert_eq!(
+            classify_notification("AXWindowMiniaturized"),
+            ObserverAction::StateRecheck
+        );
         assert_eq!(
             classify_notification("AXWindowDeminiaturized"),
             ObserverAction::StateRecheck
         );
-        assert_eq!(classify_notification("AXTitleChanged"), ObserverAction::Ignore);
+        assert_eq!(
+            classify_notification("AXTitleChanged"),
+            ObserverAction::Ignore
+        );
     }
 
     #[test]

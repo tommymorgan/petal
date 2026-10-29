@@ -81,8 +81,22 @@ def assert_denials(app):
     """ % json.dumps(COMMANDS))
     assert len(results) == len(COMMANDS)
     for command, status, result in results:
-        assert status == "rejected" and "unsupported" in str(result).lower() and "linux" in str(result).lower(), \
-            f"{command} must explicitly reject as unsupported on Linux, got {status}: {result}"
+        # The camera command rejects at the room gate ("not in room"), which
+        # carries no platform word; every other command must name Linux.
+        platform_word_required = command != "start_camera_publish_command"
+        assert status == "rejected" and (not platform_word_required or "linux" in str(result).lower()), \
+            f"{command} must explicitly reject without authority, got {status}: {result}"
+        if command in ("share_window", "toggle_window_share"):
+            assert "add share" in str(result).lower(), \
+                f"{command} must direct raw window IDs to fresh native source consent: {result}"
+        elif command == "start_camera_publish_command":
+            # Task 2.1: the camera command is registered on Linux; outside a
+            # room it stops at the honest room gate instead.
+            assert "not in room" in str(result).lower(), \
+                f"{command} must reject outside a room with the room gate: {result}"
+        else:
+            assert "unsupported" in str(result).lower(), \
+                f"{command} must explicitly reject as unsupported on Linux: {result}"
 
 
 def inspect_room_controls(app, *, navigate=True):
@@ -125,7 +139,9 @@ def inspect_room_controls(app, *, navigate=True):
                 const visible = b => b.getClientRects().length > 0 && getComputedStyle(b).visibility !== 'hidden';
                 const label = b => b.getAttribute('aria-label') || b.textContent.trim();
                 const more = buttons.find(b => visible(b) && label(b) === 'More meeting controls');
-                if (more && !moreClicked) { moreClicked = true; more.click(); return; }
+                if (more && !moreClicked && !buttons.some(b => visible(b) && label(b).startsWith('Petal View'))) {
+                    moreClicked = true; more.click(); return;
+                }
                 const camera = buttons.find(b => visible(b) && label(b).startsWith('Turn camera on'));
                 const share = buttons.find(b => visible(b) && label(b).startsWith('Share a window'));
                 const region = buttons.find(b => visible(b) && label(b).startsWith('Petal View'));
@@ -193,7 +209,12 @@ class CapabilityScenario:
         assert_monitor_start_requires_room(self.app, launch_app=False)
 
     def unavailable(self):
-        for control in [self.controls["camera"], self.controls["region"], *self.controls["remote"]]:
+        # Task 2.1: camera is a supported Linux capability now; only region
+        # and input remain explicitly unsupported.
+        camera = self.controls["camera"]
+        assert camera["visible"] and not camera["disabled"], \
+            {"control": camera, "diagnostic": self.controls["diagnostic"]}
+        for control in [self.controls["region"], *self.controls["remote"]]:
             assert control["disabled"] and control["visible"], {"control": control, "diagnostic": self.controls["diagnostic"]}
             assert "unsupported on Linux" in control["explanation"], control
 
@@ -375,8 +396,8 @@ STEP_BINDINGS = {
     "When I inspect its room controls and invoke unfinished commands directly": "inspect_and_invoke",
     "Then the monitor Share action is visibly enabled": "monitor_available",
     "And monitor selection without a room reports the missing room before requesting permission": "monitor_admission",
-    "And camera, region and input controls remain unavailable with Linux explanations": "unavailable",
-    "And unfinished window, region, audio, camera and input commands return explicit unsupported errors": "errors",
+    "And camera controls are enabled while region and input controls remain unavailable with Linux explanations": "unavailable",
+    "And unfinished region, audio and input commands report unsupported while the camera command reports the missing room, and raw window IDs require native consent": "errors",
     "And no room, picture or camera publication is created": "no_effects",
     "And room-entry and microphone controls remain available": "supported",
     "And repeated unfinished actions leave the native app without publication or input effects": "invariant",

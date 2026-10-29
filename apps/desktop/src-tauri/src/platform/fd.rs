@@ -165,7 +165,10 @@ const CLEAR_WATER_PCT: u64 = 70;
 pub fn is_descriptor_exhaustion(error: &std::io::Error) -> bool {
     #[cfg(unix)]
     {
-        matches!(error.raw_os_error(), Some(libc::EMFILE) | Some(libc::ENFILE))
+        matches!(
+            error.raw_os_error(),
+            Some(libc::EMFILE) | Some(libc::ENFILE)
+        )
     }
     #[cfg(windows)]
     {
@@ -372,17 +375,17 @@ mod non_unix_limits {
 
 #[cfg(target_os = "macos")]
 pub use macos_count::open_descriptor_count;
-#[cfg(target_os = "windows")]
-pub use windows_impl::open_descriptor_count;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub use stub_count::open_descriptor_count;
+#[cfg(target_os = "windows")]
+pub use windows_impl::open_descriptor_count;
 
+#[cfg(all(not(unix), not(target_os = "windows")))]
+pub use non_unix_limits::{descriptor_limits, raise_soft_limit};
 #[cfg(unix)]
 pub use unix_impl::{descriptor_limits, raise_soft_limit};
 #[cfg(target_os = "windows")]
 pub use windows_impl::{descriptor_limits, raise_soft_limit};
-#[cfg(all(not(unix), not(target_os = "windows")))]
-pub use non_unix_limits::{descriptor_limits, raise_soft_limit};
 
 /// Raise the soft descriptor limit and record before/after in the log, as one
 /// `startup:` line so every field log carries the value in force.
@@ -505,12 +508,12 @@ mod tests {
     fn exhaustion_errors_are_recognised_and_others_are_not() {
         #[cfg(unix)]
         {
-            assert!(is_descriptor_exhaustion(&std::io::Error::from_raw_os_error(
-                libc::EMFILE
-            )));
-            assert!(is_descriptor_exhaustion(&std::io::Error::from_raw_os_error(
-                libc::ENFILE
-            )));
+            assert!(is_descriptor_exhaustion(
+                &std::io::Error::from_raw_os_error(libc::EMFILE)
+            ));
+            assert!(is_descriptor_exhaustion(
+                &std::io::Error::from_raw_os_error(libc::ENFILE)
+            ));
             // The negative direction matters: a check whose "no" carries no
             // information is worth nothing (CLAUDE.md's gate rule).
             assert!(!is_descriptor_exhaustion(
@@ -520,7 +523,9 @@ mod tests {
                 &std::io::Error::from_raw_os_error(libc::ENOSPC)
             ));
         }
-        assert!(!is_descriptor_exhaustion(&std::io::Error::other("not an os error")));
+        assert!(!is_descriptor_exhaustion(&std::io::Error::other(
+            "not an os error"
+        )));
     }
 
     /// The gauge itself, measured against real descriptors -- an assertion on

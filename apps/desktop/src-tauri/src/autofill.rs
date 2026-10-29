@@ -27,8 +27,8 @@ pub(crate) fn disable_autofill(app: &tauri::AppHandle) {
                 let core = unsafe { controller.CoreWebView2()? };
                 // `Profile()` is exposed on ICoreWebView2_13 in webview2-com
                 // 0.38's bindings; the runtime object implements it.
-                let core_13 = core
-                    .cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_13>()?;
+                let core_13 =
+                    core.cast::<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_13>()?;
                 let profile = unsafe { core_13.Profile()? };
                 let profile6 = profile.cast::<
                     webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Profile6,

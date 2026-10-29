@@ -374,7 +374,8 @@ pub fn reconcile(discovered: &[WindowPublication], tracked: &[TrackedWindow]) ->
         });
     }
 
-    findings.sort_by(|a, b| (&a.owner_identity, a.window_id).cmp(&(&b.owner_identity, b.window_id)));
+    findings
+        .sort_by(|a, b| (&a.owner_identity, a.window_id).cmp(&(&b.owner_identity, b.window_id)));
     findings
 }
 
@@ -671,8 +672,7 @@ pub(crate) fn run_reconciliation_pass(
     // reintroduced by a later edit. The loop below is a no-op when empty, and
     // `by_key` stays lazy so the SDK walk is still skipped.
     let now = Instant::now();
-    let steps =
-        plan_recovery_steps_for_connection(reconnecting, &findings, &tracked, ledger, now);
+    let steps = plan_recovery_steps_for_connection(reconnecting, &findings, &tracked, ledger, now);
 
     let by_key: std::cell::OnceCell<HashMap<WindowKey, RemoteTrackPublication>> =
         std::cell::OnceCell::new();
@@ -942,7 +942,10 @@ mod tests {
         // deadline), never in count -- an absent publication is `Orphaned`,
         // which is the only terminal verdict.
         let divergence = Divergence::NotSubscribed;
-        assert_eq!(recovery_step(&divergence, None, None), RecoveryStep::Attempt);
+        assert_eq!(
+            recovery_step(&divergence, None, None),
+            RecoveryStep::Attempt
+        );
         assert_eq!(
             recovery_step(&divergence, Some(Duration::from_secs(1)), None),
             RecoveryStep::Wait,
@@ -1190,7 +1193,12 @@ mod tests {
         // Orphaned again much later: the first sighting of the NEW run must
         // hold rather than inherit the clock from the old one.
         assert_eq!(
-            steps_for(&pass(&[], &tiles, &mut ledger, start + ORPHANED_GRACE * 100)),
+            steps_for(&pass(
+                &[],
+                &tiles,
+                &mut ledger,
+                start + ORPHANED_GRACE * 100
+            )),
             vec![RecoveryStep::Wait]
         );
     }

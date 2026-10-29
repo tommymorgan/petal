@@ -507,7 +507,10 @@ mod macos {
         let previous = NSGraphicsContext::currentContext();
         NSGraphicsContext::setCurrentContext(Some(&context));
         icon.drawInRect_fromRect_operation_fraction(
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(px_w as f64, px_h as f64)),
+            NSRect::new(
+                NSPoint::new(0.0, 0.0),
+                NSSize::new(px_w as f64, px_h as f64),
+            ),
             // A zero-size `fromRect` means "the image's entire bounds" --
             // standard NSImage drawing usage, not a truncated/cropped draw.
             NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(0.0, 0.0)),
@@ -601,9 +604,9 @@ mod macos {
                 let Some(url) = super::app_icon_png_base64(pid) else {
                     continue;
                 };
-                let payload = url
-                    .strip_prefix("data:image/png;base64,")
-                    .expect("the picker binds this straight into an <img src>, so it must be a data URL");
+                let payload = url.strip_prefix("data:image/png;base64,").expect(
+                    "the picker binds this straight into an <img src>, so it must be a data URL",
+                );
                 let bytes = base64::engine::general_purpose::STANDARD
                     .decode(payload)
                     .expect("app icon payload must be valid base64");
@@ -666,7 +669,9 @@ mod macos {
         /// draws into a bitmap it allocated itself at the exact ceiling -- so
         /// the output must be 128x128 for every `native_px` tried here, on
         /// any display.
-        fn synthetic_icon_with_representation(native_px: usize) -> Retained<objc2_app_kit::NSImage> {
+        fn synthetic_icon_with_representation(
+            native_px: usize,
+        ) -> Retained<objc2_app_kit::NSImage> {
             use objc2::AnyThread;
             use objc2_app_kit::{NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage};
             use objc2_foundation::NSSize;
@@ -715,13 +720,17 @@ mod macos {
         fn synthetic_icon_rasterizes_to_the_ceiling_at_every_representation_scale() {
             let max = super::APP_ICON_MAX_EDGE as u32;
             for native_px in [64usize, 256, 512, 1024] {
-                let icon = objc2::rc::autoreleasepool(|_| synthetic_icon_with_representation(native_px));
+                let icon =
+                    objc2::rc::autoreleasepool(|_| synthetic_icon_with_representation(native_px));
                 let bitmap = objc2::rc::autoreleasepool(|_| {
                     super::rasterize_app_icon(&icon, super::APP_ICON_MAX_EDGE)
                         .unwrap_or_else(|| panic!("rasterize_app_icon must succeed for a {native_px}px representation"))
                 });
                 let properties: Retained<
-                    objc2_foundation::NSDictionary<objc2_foundation::NSString, objc2::runtime::AnyObject>,
+                    objc2_foundation::NSDictionary<
+                        objc2_foundation::NSString,
+                        objc2::runtime::AnyObject,
+                    >,
                 > = objc2_foundation::NSDictionary::new();
                 // SAFETY: `properties` is an empty dictionary; see
                 // `app_icon_png_base64`'s identical call for the same
@@ -784,7 +793,9 @@ mod macos {
         fn list_encloses_its_objc_work_in_an_autorelease_pool() {
             let source = include_str!("window_source.rs");
             let body = source
-                .split_once("    pub fn list() -> Result<Vec<ShareableWindow>, WindowSourceError> {")
+                .split_once(
+                    "    pub fn list() -> Result<Vec<ShareableWindow>, WindowSourceError> {",
+                )
                 .and_then(|(_, rest)| rest.split_once("\n    }\n"))
                 .map(|(body, _)| body)
                 .expect("macos::list must exist");
@@ -797,7 +808,9 @@ mod macos {
                 "#889/#106: list() touches ScreenCaptureKit before opening its pool"
             );
             assert!(
-                body[pool_at..].trim().ends_with("objc2::rc::autoreleasepool(|_| list_pooled())"),
+                body[pool_at..]
+                    .trim()
+                    .ends_with("objc2::rc::autoreleasepool(|_| list_pooled())"),
                 "#889/#106: nothing may run after the pool closes -- list() must return the \
                  pooled call's result directly"
             );
@@ -805,7 +818,9 @@ mod macos {
             // The pool must stay explained, or the next reader deletes it as
             // decoration. #889's comment is what kept the icon pool alive.
             let rationale = source
-                .split_once("    pub fn list() -> Result<Vec<ShareableWindow>, WindowSourceError> {")
+                .split_once(
+                    "    pub fn list() -> Result<Vec<ShareableWindow>, WindowSourceError> {",
+                )
                 .map(|(before, _)| before)
                 .expect("list() must exist");
             assert!(
@@ -825,7 +840,9 @@ mod macos {
         fn list_resolves_each_app_icon_once_and_enumerates_displays_once() {
             let source = include_str!("window_source.rs");
             let body = source
-                .split_once("    fn list_pooled() -> Result<Vec<ShareableWindow>, WindowSourceError> {")
+                .split_once(
+                    "    fn list_pooled() -> Result<Vec<ShareableWindow>, WindowSourceError> {",
+                )
                 .and_then(|(_, rest)| rest.split_once("\n    }\n"))
                 .map(|(body, _)| body)
                 .expect("macos::list_pooled must exist");

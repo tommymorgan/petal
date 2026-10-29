@@ -209,11 +209,13 @@ impl RoomsState {
         let (mut file, autotest_ownership_load_error) = match std::fs::read_to_string(&path) {
             Ok(contents) => {
                 let ownership_error = match serde_json::from_str::<serde_json::Value>(&contents) {
-                    Ok(serde_json::Value::Object(object)) => match object.get("autotestOwnership") {
-                        Some(serde_json::Value::Array(_)) => None,
-                        Some(_) => Some("autotestOwnership must be an array".to_string()),
-                        None => None,
-                    },
+                    Ok(serde_json::Value::Object(object)) => {
+                        match object.get("autotestOwnership") {
+                            Some(serde_json::Value::Array(_)) => None,
+                            Some(_) => Some("autotestOwnership must be an array".to_string()),
+                            None => None,
+                        }
+                    }
                     Ok(_) => Some("rooms file must be a JSON object".to_string()),
                     Err(error) => Some(format!("rooms file is invalid JSON: {error}")),
                 };
@@ -221,7 +223,10 @@ impl RoomsState {
                     Ok(file) => (file, None),
                     Err(error) => {
                         log::warn!("rooms: rooms.json exists but failed to parse ({error}), starting empty");
-                        (RoomsFile::default(), Some(format!("rooms file schema is invalid: {error}")))
+                        (
+                            RoomsFile::default(),
+                            Some(format!("rooms file schema is invalid: {error}")),
+                        )
                     }
                 };
                 (file, ownership_error.or(schema_error))
@@ -229,7 +234,10 @@ impl RoomsState {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (RoomsFile::default(), None),
             Err(e) => {
                 log::warn!("rooms: failed to read rooms.json ({e}), starting empty");
-                (RoomsFile::default(), Some(format!("rooms file could not be read: {e}")))
+                (
+                    RoomsFile::default(),
+                    Some(format!("rooms file could not be read: {e}")),
+                )
             }
         };
         let (rooms, migrated) = normalize_room_records(file.rooms);
@@ -456,16 +464,10 @@ impl RoomsState {
                 }
                 // This is conflict detection only.  It never selects or
                 // modifies a user room by its display label.
-                if guard
-                    .rooms
-                    .iter()
-                    .any(|room| {
-                        room.display_name
-                            .as_deref()
-                            .and_then(canonical_room_slug)
-                            == canonical_room_slug(qa_key)
-                    })
-                {
+                if guard.rooms.iter().any(|room| {
+                    room.display_name.as_deref().and_then(canonical_room_slug)
+                        == canonical_room_slug(qa_key)
+                }) {
                     return Err(RoomsError::AutotestOwnership(format!(
                         "QA key '{qa_key}' conflicts with an existing room label"
                     )));
@@ -476,11 +478,12 @@ impl RoomsState {
                     .filter_map(|room| room.access_code.clone())
                     .collect();
                 let access_code = generate_access_code(&existing_codes)?;
-                let credential = internal_credential_for_access_code(&access_code).ok_or_else(|| {
-                    RoomsError::AutotestOwnership(
-                        "could not derive a fresh autotest room capability".to_string(),
-                    )
-                })?;
+                let credential =
+                    internal_credential_for_access_code(&access_code).ok_or_else(|| {
+                        RoomsError::AutotestOwnership(
+                            "could not derive a fresh autotest room capability".to_string(),
+                        )
+                    })?;
                 let record = RoomRecord {
                     id: new_room_id(),
                     name: credential.clone(),
@@ -1133,9 +1136,7 @@ static LAST_LOGGED_OCCUPANCY: std::sync::OnceLock<
 fn occupancy_change_line(public_id: &str, previous: Option<usize>, next: usize) -> Option<String> {
     match previous {
         Some(previous) if previous == next => None,
-        Some(previous) => Some(format!(
-            "rooms: occupancy {public_id} {previous} -> {next}"
-        )),
+        Some(previous) => Some(format!("rooms: occupancy {public_id} {previous} -> {next}")),
         None => Some(format!("rooms: occupancy {public_id} unknown -> {next}")),
     }
 }
@@ -1636,10 +1637,17 @@ mod tests {
             let state = RoomsState::load(dir.clone());
             let rooms = state.list();
             assert_eq!(rooms.len(), 1, "load {load}");
-            assert_eq!(rooms[0].name, credential, "load {load}: credential rewritten");
+            assert_eq!(
+                rooms[0].name, credential,
+                "load {load}: credential rewritten"
+            );
             assert_eq!(rooms[0].slug, credential, "load {load}: slug rewritten");
             assert_eq!(rooms[0].access_code, None, "load {load}");
-            assert_eq!(rooms[0].display_name.as_deref(), Some("rctest"), "load {load}");
+            assert_eq!(
+                rooms[0].display_name.as_deref(),
+                Some("rctest"),
+                "load {load}"
+            );
             assert_eq!(
                 livekit_room_name(&rooms[0]),
                 livekit_room_name_for(&credential),
@@ -1669,8 +1677,9 @@ mod tests {
             let credential =
                 internal_credential_for_access_code(&code).expect("credential for generated code");
             assert_eq!(normalize_access_code(&code).as_deref(), Some(code.as_str()));
-            assert!(code.chars().all(|ch| ch == '-'
-                || ACCESS_CODE_ALPHABET.contains(&(ch as u8))));
+            assert!(code
+                .chars()
+                .all(|ch| ch == '-' || ACCESS_CODE_ALPHABET.contains(&(ch as u8))));
 
             // Every spelling a pasted code can arrive in resolves to the same
             // capability -- a joiner never lands in a different room.
@@ -2138,7 +2147,12 @@ mod tests {
     #[test]
     fn room_status_request_sends_credentials_and_held_access_codes_only() {
         let rooms = vec![
-            status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", Some("abc-defg-hjk"), false),
+            status_record(
+                "a",
+                "room-8535e993a1b76ed8a9ee59b265f53dfc",
+                Some("abc-defg-hjk"),
+                false,
+            ),
             status_record("b", "room-00000000000000000000000000000001", None, true),
         ];
         let json = serde_json::to_value(room_status_request(&rooms)).unwrap();
@@ -2156,12 +2170,23 @@ mod tests {
     #[test]
     fn room_status_request_matches_shared_contract_fixture() {
         let fixture = contract_fixture().room_status_request;
-        assert_eq!(fixture["maxRooms"], serde_json::json!(ROOM_STATUS_MAX_ROOMS));
+        assert_eq!(
+            fixture["maxRooms"],
+            serde_json::json!(ROOM_STATUS_MAX_ROOMS)
+        );
         let rooms = vec![
-            status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", Some("abc-defg-hjk"), false),
+            status_record(
+                "a",
+                "room-8535e993a1b76ed8a9ee59b265f53dfc",
+                Some("abc-defg-hjk"),
+                false,
+            ),
             status_record("b", "room-00000000000000000000000000000001", None, true),
         ];
-        assert_eq!(serde_json::to_value(room_status_request(&rooms)).unwrap(), fixture["request"]);
+        assert_eq!(
+            serde_json::to_value(room_status_request(&rooms)).unwrap(),
+            fixture["request"]
+        );
     }
 
     #[test]
@@ -2169,30 +2194,57 @@ mod tests {
         let rooms: Vec<RoomRecord> = (0..(ROOM_STATUS_MAX_ROOMS + 5))
             .map(|i| status_record(&i.to_string(), &format!("room-{i:032x}"), None, true))
             .collect();
-        assert_eq!(room_status_request(&rooms).rooms.len(), ROOM_STATUS_MAX_ROOMS);
+        assert_eq!(
+            room_status_request(&rooms).rooms.len(),
+            ROOM_STATUS_MAX_ROOMS
+        );
     }
 
     #[test]
     fn merge_room_status_only_enriches_rooms_the_backend_answered_for() {
-        let held = status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", Some("abc-defg-hjk"), true);
+        let held = status_record(
+            "a",
+            "room-8535e993a1b76ed8a9ee59b265f53dfc",
+            Some("abc-defg-hjk"),
+            true,
+        );
         let omitted = status_record("b", "room-00000000000000000000000000000001", None, true);
         let public_id = public_room_id_for_livekit_room(&livekit_room_name(&held));
         let backend = BackendRoomsResponse {
             rooms: vec![
-                BackendRoomView { id: public_id.clone(), name: "Eng meeting".into(), open: true, occupancy: 3, participants: None },
+                BackendRoomView {
+                    id: public_id.clone(),
+                    name: "Eng meeting".into(),
+                    open: true,
+                    occupancy: 3,
+                    participants: None,
+                },
                 // A row we never asked for must NOT become a local room.
-                BackendRoomView { id: "room_deadbeef".into(), name: "Stranger".into(), open: true, occupancy: 9, participants: None },
+                BackendRoomView {
+                    id: "room_deadbeef".into(),
+                    name: "Stranger".into(),
+                    open: true,
+                    occupancy: 9,
+                    participants: None,
+                },
             ],
         };
         let rows = merge_room_status(vec![held, omitted], backend);
-        assert_eq!(rows.len(), 2, "exactly the local records, nothing discovered");
+        assert_eq!(
+            rows.len(),
+            2,
+            "exactly the local records, nothing discovered"
+        );
         assert_eq!(rows[0].id.as_deref(), Some(public_id.as_str()));
         assert_eq!(rows[0].name.as_deref(), Some("Eng meeting"));
         assert_eq!(rows[0].occupancy, Some(3));
         assert!(rows[0].available);
         assert_eq!(rows[1].name, None);
         assert_eq!(rows[1].occupancy, None);
-        assert!(rows[1].available, "an omitted room renders empty, not errored");
+        assert!(
+            rows[1].available,
+            "an omitted room renders empty, not errored"
+        );
     }
 
     // #120 step 3: the card's number must reach the log, but only when it
@@ -2236,7 +2288,8 @@ mod tests {
     // unique (#121) and are user-authored text.
     #[test]
     fn occupancy_line_names_the_room_by_public_id_not_display_name() {
-        let record = labelled_status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", "Standup");
+        let record =
+            labelled_status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", "Standup");
         let public_id = public_room_id_for_livekit_room(&livekit_room_name(&record));
         let line = occupancy_change_line(&public_id, Some(1), 2).expect("a change must emit");
         assert!(line.contains(&public_id), "{line}");
@@ -2256,19 +2309,15 @@ mod tests {
     // each show their OWN row's occupancy, never the first name-match's.
     #[test]
     fn merge_room_status_binds_duplicate_display_names_to_their_own_backend_row() {
-        let first = labelled_status_record(
-            "a",
-            "room-8535e993a1b76ed8a9ee59b265f53dfc",
-            "Standup",
-        );
-        let second = labelled_status_record(
-            "b",
-            "room-00000000000000000000000000000001",
-            "Standup",
-        );
+        let first = labelled_status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", "Standup");
+        let second =
+            labelled_status_record("b", "room-00000000000000000000000000000001", "Standup");
         let first_id = public_room_id_for_livekit_room(&livekit_room_name(&first));
         let second_id = public_room_id_for_livekit_room(&livekit_room_name(&second));
-        assert_ne!(first_id, second_id, "fixture must exercise two distinct rooms");
+        assert_ne!(
+            first_id, second_id,
+            "fixture must exercise two distinct rooms"
+        );
         let backend = BackendRoomsResponse {
             rooms: vec![
                 BackendRoomView {
@@ -2350,7 +2399,12 @@ mod tests {
 
     #[test]
     fn merge_room_status_copies_the_roster_onto_the_matching_card_only() {
-        let held = status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", Some("abc-defg-hjk"), true);
+        let held = status_record(
+            "a",
+            "room-8535e993a1b76ed8a9ee59b265f53dfc",
+            Some("abc-defg-hjk"),
+            true,
+        );
         let unread = status_record("b", "room-00000000000000000000000000000001", None, true);
         let held_id = public_room_id_for_livekit_room(&livekit_room_name(&held));
         let unread_id = public_room_id_for_livekit_room(&livekit_room_name(&unread));
@@ -2363,7 +2417,9 @@ mod tests {
                     occupancy: 2,
                     participants: Some(vec![
                         RoomOccupancyParticipant { name: "Ada".into() },
-                        RoomOccupancyParticipant { name: String::new() },
+                        RoomOccupancyParticipant {
+                            name: String::new(),
+                        },
                     ]),
                 },
                 BackendRoomView {
@@ -2399,7 +2455,10 @@ mod tests {
     fn occupancy_log_line_never_carries_a_participant_name() {
         let line = occupancy_change_line("room_09abe457634f3c4848188932aa5070ed", Some(1), 2)
             .expect("a change emits a line");
-        assert_eq!(line, "rooms: occupancy room_09abe457634f3c4848188932aa5070ed 1 -> 2");
+        assert_eq!(
+            line,
+            "rooms: occupancy room_09abe457634f3c4848188932aa5070ed 1 -> 2"
+        );
         assert!(!line.contains("Ada"));
     }
 
@@ -2407,11 +2466,7 @@ mod tests {
     // to a different room must not bind at all.
     #[test]
     fn merge_room_status_ignores_a_foreign_row_that_shares_a_display_name() {
-        let local = labelled_status_record(
-            "a",
-            "room-8535e993a1b76ed8a9ee59b265f53dfc",
-            "Standup",
-        );
+        let local = labelled_status_record("a", "room-8535e993a1b76ed8a9ee59b265f53dfc", "Standup");
         let local_id = public_room_id_for_livekit_room(&livekit_room_name(&local));
         let backend = BackendRoomsResponse {
             rooms: vec![BackendRoomView {

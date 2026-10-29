@@ -292,7 +292,8 @@ impl Drop for OwnedCVPixelBuffer {
             // (`create_sample_buffer`) -- that pair is released inside the
             // same function call and would double-count every displayed
             // frame if touched here.
-            crate::platform::mem::LIVE_PIXEL_BUFFERS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            crate::platform::mem::LIVE_PIXEL_BUFFERS
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }

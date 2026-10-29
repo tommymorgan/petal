@@ -8,7 +8,7 @@
 //! rule is unit-testable without a camera. The outer [`LinuxCameraOwner`]
 //! attaches the real portal, registry, capture pump and GTK view surfaces.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -397,6 +397,11 @@ pub(crate) struct OwnerSnapshot {
 pub(crate) struct LinuxCameraOwner {
     core: Mutex<OwnerCore>,
     portal: tokio::sync::Mutex<Option<CameraPortalSession>>,
+    /// Set once a granted portal remote proved it cannot list camera nodes
+    /// (no installed portal frontend implements the Camera interface). Later
+    /// starts enumerate the session daemon directly instead of re-probing
+    /// the dead portal for five seconds on every camera click.
+    portal_unavailable: AtomicBool,
     registry: Mutex<Option<Arc<CameraRegistry>>>,
     capture_serial: tokio::sync::Mutex<()>,
     view: CameraViewStore,
@@ -427,6 +432,7 @@ impl LinuxCameraOwner {
         Self {
             core: Mutex::new(OwnerCore::default()),
             portal: tokio::sync::Mutex::new(None),
+            portal_unavailable: AtomicBool::new(false),
             registry: Mutex::new(None),
             capture_serial: tokio::sync::Mutex::new(()),
             view: CameraViewStore::new(),
@@ -530,13 +536,19 @@ impl LinuxCameraOwner {
         // A stale session (access lost / re-request) must not be reused.
         self.close_session_locked(&mut portal_guard).await;
 
+        if self.portal_unavailable.load(Ordering::Acquire) {
+            return self.ensure_access_direct().await;
+        }
+
         let cancel = CancellationToken::new();
         let mut session = CameraPortalSession::connect().await?;
+        log::trace!("camera ensure: portal connection established");
         let access = tokio::select! {
             _ = cancel.cancelled() => Err("Camera permission cancelled; the camera stays off".to_string()),
             result = tokio::time::timeout(PORTAL_TIMEOUT, session.request_access(&cancel)) =>
                 result.unwrap_or_else(|_| Err("Camera permission timed out; turn the camera on again to retry".to_string())),
         };
+        log::trace!("camera ensure: access outcome={:?}", access.is_ok());
         if let Err(error) = access {
             {
                 let mut core = self.core.lock_unpoisoned();
@@ -549,8 +561,10 @@ impl LinuxCameraOwner {
             return Err(error);
         }
         let metadata_remote = session.remote().await?;
+        log::trace!("camera ensure: restricted remote fd opened");
         let (events, receiver) = std::sync::mpsc::channel();
         let registry = Arc::new(CameraRegistry::connect(metadata_remote, events)?);
+        log::trace!("camera ensure: registry connected");
         {
             let mut slot = self.registry.lock_unpoisoned();
             *slot = Some(registry.clone());
@@ -560,8 +574,22 @@ impl LinuxCameraOwner {
         let waited = tokio::task::spawn_blocking(move || wait_registry.wait_initial())
             .await
             .map_err(|e| format!("Camera registry worker failed: {e}"))?;
+        log::trace!("camera ensure: initial enumeration outcome={waited:?}");
         if let Err(error) = waited {
             self.close_session_locked(&mut portal_guard).await;
+            if portal_lists_nothing(&error) {
+                // The portal granted access but its restricted remote never
+                // lists camera nodes: no installed portal frontend implements
+                // the Camera interface. Fall back to the session daemon
+                // rather than reporting a camera-less desktop.
+                self.portal_unavailable.store(true, Ordering::Release);
+                log::info!(
+                    "camera ensure: portal remote lists nothing; using the session PipeWire daemon"
+                );
+                drop(portal_guard);
+                let _ = session.close().await;
+                return self.ensure_access_direct().await;
+            }
             self.core.lock_unpoisoned().last_error = Some(error.clone());
             return Err(error);
         }
@@ -572,23 +600,60 @@ impl LinuxCameraOwner {
         Ok(())
     }
 
+    /// Direct-daemon access (see [`CameraRegistry::connect_direct`]). The
+    /// in-app Camera button is the consent surface; the portal session is
+    /// absent, so capture opens without a restricted remote fd.
+    async fn ensure_access_direct(self: &Arc<Self>) -> Result<(), String> {
+        let (events, receiver) = std::sync::mpsc::channel();
+        let outcome = tokio::task::spawn_blocking(move || {
+            let registry = match CameraRegistry::connect_direct(events) {
+                Ok(registry) => Arc::new(registry),
+                Err(error) => return (None, Err(error)),
+            };
+            let waited = registry.wait_initial();
+            (Some(registry), waited)
+        })
+        .await
+        .map_err(|e| format!("Camera registry worker failed: {e}"))?;
+        let (registry, outcome) = outcome;
+        log::trace!("camera ensure: direct enumeration outcome={outcome:?}");
+        if let Err(error) = outcome {
+            self.core.lock_unpoisoned().last_error = Some(error.clone());
+            return Err(error);
+        }
+        let registry = registry.ok_or("Camera PipeWire daemon unavailable")?;
+        {
+            let mut slot = self.registry.lock_unpoisoned();
+            *slot = Some(registry.clone());
+        }
+        self.refresh_devices_from(&registry);
+        self.spawn_metadata_forwarder(registry.clone(), receiver);
+        self.core.lock_unpoisoned().permission = Permission::Granted;
+        Ok(())
+    }
+
     async fn close_session_locked(
         &self,
         portal_guard: &mut tokio::sync::MutexGuard<'_, Option<CameraPortalSession>>,
     ) {
+        log::trace!("camera close: begin");
         if let Some(mut session) = portal_guard.take() {
             session.close().await;
+            log::trace!("camera close: portal session closed");
         }
         // Take the registry out under a short-lived guard, then destroy it
         // off the async thread without holding the guard across the await.
         let retired = self.registry.lock_unpoisoned().take();
         if let Some(registry) = retired {
+            log::trace!("camera close: dropping registry");
             let _ = tokio::task::spawn_blocking(move || drop(registry)).await;
+            log::trace!("camera close: registry dropped");
         }
         let mut core = self.core.lock_unpoisoned();
         if core.permission != Permission::Denied {
             core.permission = Permission::NotDetermined;
         }
+        log::trace!("camera close: done");
     }
 
     fn refresh_devices_from(&self, registry: &Arc<CameraRegistry>) {
@@ -729,7 +794,17 @@ impl LinuxCameraOwner {
     ) -> Result<(), String> {
         let _serial = self.capture_serial.lock().await;
         {
-            let core = self.core.lock_unpoisoned();
+            let mut core = self.core.lock_unpoisoned();
+            // Same device and mode: adopt the serving capture for the new
+            // selection instead of racing a rebuild against the old
+            // pipeline's teardown. The preview→publication transition keeps
+            // exactly one open device (C02); leases rebind by generation.
+            if let Some(capture) = core.capture.as_mut() {
+                if capture.node == node && capture.mode == mode {
+                    capture.generation = generation;
+                    return Ok(());
+                }
+            }
             if core.capture_matches(generation, node, mode) {
                 return Ok(());
             }
@@ -742,11 +817,16 @@ impl LinuxCameraOwner {
         }
         let remote = {
             let portal = self.portal.lock().await;
-            portal
-                .as_ref()
-                .ok_or("Camera permission is not granted; turn the camera on again")?
-                .remote()
-                .await?
+            match portal.as_ref() {
+                Some(session) => Some(session.remote().await?),
+                // Direct-daemon mode: pipewiresrc connects itself.
+                None if self.portal_unavailable.load(Ordering::Acquire) => None,
+                None => {
+                    return Err(
+                        "Camera permission is not granted; turn the camera on again".to_string()
+                    )
+                }
+            }
         };
         let status = CameraCaptureStatus::new();
         let opened = tokio::task::spawn_blocking({
@@ -890,10 +970,14 @@ impl LinuxCameraOwner {
     ) -> Result<(String, String), String> {
         self.ensure_access(app).await?;
         let selection = {
-            let core = self.core.lock_unpoisoned();
-            core.selection
-                .clone()
-                .ok_or("No camera is selected; turn the camera on first")?
+            let mut core = self.core.lock_unpoisoned();
+            if core.selection.is_none() && !core.devices.is_empty() {
+                // The Settings preview opens standalone (before any camera-on
+                // in this process): seed the default device so preview-first
+                // ordering works; publication keeps its own lease.
+                core.begin_selection(None, None);
+            }
+            core.selection.clone().ok_or("No camera is available")?
         };
         self.ensure_capture(
             selection.generation,
@@ -1154,11 +1238,6 @@ pub(crate) async fn linux_camera_preview_close() -> Result<(), String> {
     global_owner().preview_close().await
 }
 
-#[tauri::command]
-pub(crate) fn linux_camera_state() -> OwnerSnapshot {
-    global_owner().snapshot()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1354,4 +1433,14 @@ mod tests {
         // Default state claims nothing (X03).
         assert_eq!(OwnerCore::default().permission, Permission::NotDetermined);
     }
+}
+
+/// Portal enumeration outcomes that mean the restricted remote can never
+/// list camera nodes on this desktop (no portal frontend implements the
+/// Camera interface), not that the user denied or the camera is absent.
+fn portal_lists_nothing(error: &str) -> bool {
+    // A granted portal remote that enumerates to completion with zero
+    // cameras, or never answers its enumeration, supplies no cameras on
+    // this desktop; the session daemon view decides the honest device fact.
+    error.contains("The camera list did not arrive") || error.contains("No camera is available")
 }

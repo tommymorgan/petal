@@ -489,7 +489,10 @@ impl Event {
             Self::RemoteAudioSilent { duration_bucket } => {
                 extras.insert("duration_bucket", duration_bucket.as_str());
             }
-            Self::RemoteVideoStalled { source, sharer_kind } => {
+            Self::RemoteVideoStalled {
+                source,
+                sharer_kind,
+            } => {
                 extras.insert("source", source.as_str());
                 extras.insert("sharer_kind", sharer_kind.as_str());
             }
@@ -539,7 +542,11 @@ impl InputCoalescer {
         }
     }
 
-    fn note(&mut self, classified: ClassifiedInput, now: Instant) -> Option<RemoteControlInputKind> {
+    fn note(
+        &mut self,
+        classified: ClassifiedInput,
+        now: Instant,
+    ) -> Option<RemoteControlInputKind> {
         match classified {
             ClassifiedInput::Click => {
                 self.pointer_down = false;
@@ -557,8 +564,9 @@ impl InputCoalescer {
                     None
                 }
             }
-            ClassifiedInput::Type => burst(&mut self.last_type, now, TYPE_IDLE)
-                .then_some(RemoteControlInputKind::Type),
+            ClassifiedInput::Type => {
+                burst(&mut self.last_type, now, TYPE_IDLE).then_some(RemoteControlInputKind::Type)
+            }
             ClassifiedInput::Scroll => burst(&mut self.last_scroll, now, SCROLL_IDLE)
                 .then_some(RemoteControlInputKind::Scroll),
             ClassifiedInput::Paste => Some(RemoteControlInputKind::Paste),
@@ -704,7 +712,10 @@ fn windows_os_version() -> Option<String> {
 }
 
 fn command_stdout(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program).args(args).output().ok()?;
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1234,7 +1245,11 @@ fn device_changed_in(
 /// click anything" is undiagnosable from telemetry.
 pub(crate) fn annotation_toggled(active: bool) {
     capture(Event::AnnotationToggled {
-        state: if active { AnnotationState::On } else { AnnotationState::Off },
+        state: if active {
+            AnnotationState::On
+        } else {
+            AnnotationState::Off
+        },
     });
 }
 
@@ -1427,7 +1442,10 @@ mod tests {
 
     #[test]
     fn duration_and_reconnect_buckets_match_allowlist() {
-        assert_eq!(duration_bucket(Duration::from_secs(9)), DurationBucket::ZeroToTen);
+        assert_eq!(
+            duration_bucket(Duration::from_secs(9)),
+            DurationBucket::ZeroToTen
+        );
         assert_eq!(
             duration_bucket(Duration::from_secs(10)),
             DurationBucket::TenToThirty
@@ -1509,10 +1527,7 @@ mod tests {
             coalescer.note(ClassifiedInput::Scroll, t0 + Duration::from_millis(600)),
             Some(RemoteControlInputKind::Scroll)
         );
-        assert_eq!(
-            coalescer.note(ClassifiedInput::PointerDown, t0),
-            None
-        );
+        assert_eq!(coalescer.note(ClassifiedInput::PointerDown, t0), None);
         assert_eq!(
             coalescer.note(ClassifiedInput::PointerUp, t0 + Duration::from_millis(30)),
             Some(RemoteControlInputKind::Click)
@@ -2107,8 +2122,7 @@ mod tests {
     }
 
     fn closed_port_url() -> String {
-        let listener =
-            std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
         let addr = listener.local_addr().expect("local addr");
         // Nothing is listening now. How that manifests is PLATFORM-SPECIFIC:
         // macOS/Linux loopback sends RST and the connect fails immediately,
@@ -2131,7 +2145,10 @@ mod tests {
             .unwrap();
         let body = json!({"event": "test"});
         let result = send_with_retry(&client, &url, &body).await;
-        assert!(result.is_ok(), "one retry must recover a transient failure: {result:?}");
+        assert!(
+            result.is_ok(),
+            "one retry must recover a transient failure: {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -2230,7 +2247,9 @@ mod tests {
         // is queued (not two): a 401 is permanent and must NOT be retried
         // (see the next test), so the server must never see a second
         // connection.
-        let url = spawn_fake_server(vec!["HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n"]);
+        let url = spawn_fake_server(vec![
+            "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n",
+        ]);
         let client = reqwest::Client::builder()
             .timeout(SEND_TIMEOUT)
             .build()
@@ -2252,7 +2271,9 @@ mod tests {
         // overflows the queue faster. Assert it returns near-instantly --
         // if it were retrying, RETRY_BACKOFF (500ms) alone would blow this
         // bound.
-        let url = spawn_fake_server(vec!["HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n"]);
+        let url = spawn_fake_server(vec![
+            "HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\n\r\n",
+        ]);
         let client = reqwest::Client::builder()
             .timeout(SEND_TIMEOUT)
             .build()

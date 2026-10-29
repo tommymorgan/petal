@@ -25,8 +25,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::sync_ext::MutexExt;
-use crate::windows_capture_target::{self, WindowsCaptureTarget};
 use crate::wgc_border_policy::{self, BorderFailureCause, BorderRequestFailure};
+use crate::windows_capture_target::{self, WindowsCaptureTarget};
 use windows::core::{factory, IInspectable, Interface};
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{

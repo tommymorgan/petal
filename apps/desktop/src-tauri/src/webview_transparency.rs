@@ -230,10 +230,9 @@ impl WindowServerIdStore {
     }
 
     fn persist(&mut self, now: Instant) {
-        if self
-            .last_persisted_at
-            .is_some_and(|last| now.saturating_duration_since(last) < WINDOW_SERVER_ID_PERSIST_INTERVAL)
-        {
+        if self.last_persisted_at.is_some_and(|last| {
+            now.saturating_duration_since(last) < WINDOW_SERVER_ID_PERSIST_INTERVAL
+        }) {
             return;
         }
         self.last_persisted_at = Some(now);
@@ -242,7 +241,10 @@ impl WindowServerIdStore {
             self.highest_seen_this_session,
             self.current_boot_time,
         ) {
-            log::warn!("webview_transparency: failed to persist {}: {error}", self.path.display());
+            log::warn!(
+                "webview_transparency: failed to persist {}: {error}",
+                self.path.display()
+            );
         }
     }
 }
@@ -326,10 +328,7 @@ fn window_server_id_regressed(previous_highest: i64, first_seen_this_session: i6
 /// reboot; unknown boot lineage (either side `None`: pre-#882 file, first
 /// launch, sysctl failure) stays local-log-only rather than guessing (#882
 /// review).
-fn window_server_restart_reportable(
-    previous_boot: Option<i64>,
-    current_boot: Option<i64>,
-) -> bool {
+fn window_server_restart_reportable(previous_boot: Option<i64>, current_boot: Option<i64>) -> bool {
     matches!((previous_boot, current_boot), (Some(prev), Some(cur)) if prev == cur)
 }
 
@@ -341,12 +340,13 @@ fn note_window_server_id_seen(window_id: i64) {
     let Some(store) = WINDOW_SERVER_ID_STORE.get() else {
         return;
     };
-    let mut store = store.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut store = store
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if !store.regression_checked {
         store.regression_checked = true;
         if window_server_id_regressed(store.previous_highest, window_id) {
-            if window_server_restart_reportable(store.previous_boot_time, store.current_boot_time)
-            {
+            if window_server_restart_reportable(store.previous_boot_time, store.current_boot_time) {
                 log::warn!(
                     "webview_transparency: window server restarted between sessions WITHOUT a \
                      reboot (CGWindowID regressed {} -> {window_id}, kern.boottime unchanged) -- #878",

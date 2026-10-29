@@ -6,8 +6,8 @@
 //! "Plugin bus". The sender of every inbound packet is the authenticated
 //! LiveKit participant; payload contents are never trusted for identity.
 
-use std::collections::HashMap;
 use crate::sync_ext::MutexExt;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -45,7 +45,11 @@ pub fn is_plugin_id(value: &str) -> bool {
     let Some(first) = segments.next() else {
         return false;
     };
-    if first.is_empty() || !first.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) {
+    if first.is_empty()
+        || !first
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    {
         return false;
     }
     let mut rest = 0;
@@ -235,8 +239,9 @@ pub struct PluginStateChangedEvent {
 /// boots after join (host version arrives late) or re-mounts (the route's
 /// canonical-name `goto`) would otherwise see `{}` until each peer's next
 /// metadata write. `plugin_state_snapshot` serves this map on demand.
-static REMOTE_ADVERTS: OnceLock<Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>> =
-    OnceLock::new();
+static REMOTE_ADVERTS: OnceLock<
+    Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
+> = OnceLock::new();
 
 fn remote_adverts() -> &'static Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>> {
     REMOTE_ADVERTS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -307,7 +312,11 @@ pub fn event_for(
 
 /// Start the catch-all receiver for `plugin/*` topics on this room connection.
 /// Same one-room-connection seam as `telepointer::start_receiver_for_room`.
-pub fn start_receiver_for_room(app: &AppHandle, room: Arc<livekit::Room>, generation: RoomGeneration) {
+pub fn start_receiver_for_room(
+    app: &AppHandle,
+    room: Arc<livekit::Room>,
+    generation: RoomGeneration,
+) {
     let mut events = room.subscribe();
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -401,7 +410,13 @@ pub fn start_receiver_for_room(app: &AppHandle, room: Arc<livekit::Room>, genera
                 inbound.prune(now, 120.0);
                 last_prune = now;
             }
-            let event = event_for(topic, &parsed, &sender_identity, Some(sender_name.as_str()), &payload);
+            let event = event_for(
+                topic,
+                &parsed,
+                &sender_identity,
+                Some(sender_name.as_str()),
+                &payload,
+            );
             // Global emit (never emit_to): plain `listen()` in the main webview
             // only receives global events.
             if let Err(e) = app.emit(EVENT_NAME, &event) {
@@ -463,10 +478,17 @@ pub async fn plugin_publish_data(
     destination_identities: Option<Vec<String>>,
 ) -> Result<(), String> {
     let destinations = destination_identities.unwrap_or_default();
-    let (topic, payload) = validate_publish(&plugin_id, sub.as_deref(), &payload_base64, &destinations)?;
+    let (topic, payload) =
+        validate_publish(&plugin_id, sub.as_deref(), &payload_base64, &destinations)?;
     {
-        let mut limiters = outbound_limiters().lock().map_err(|_| "limiter poisoned".to_string())?;
-        let limiter = if reliable { &mut limiters.1 } else { &mut limiters.0 };
+        let mut limiters = outbound_limiters()
+            .lock()
+            .map_err(|_| "limiter poisoned".to_string())?;
+        let limiter = if reliable {
+            &mut limiters.1
+        } else {
+            &mut limiters.0
+        };
         if !limiter.try_take(&plugin_id) {
             return Err(format!(
                 "plugin {plugin_id} exceeded its {} publish quota",
@@ -528,7 +550,9 @@ pub async fn plugin_set_state(
         .map_err(|_| "limiter poisoned".to_string())?
         .try_take(&plugin_id)
     {
-        return Err(format!("plugin {plugin_id} exceeded its state publish quota"));
+        return Err(format!(
+            "plugin {plugin_id} exceeded its state publish quota"
+        ));
     }
     let state = app
         .try_state::<SessionState>()
@@ -537,7 +561,9 @@ pub async fn plugin_set_state(
         .inner()
         .control_channel_snapshot()
         .ok_or_else(|| "join a room before publishing plugin state".to_string())?;
-    room_connection.set_plugin_metadata_entry(&plugin_id, clean).await
+    room_connection
+        .set_plugin_metadata_entry(&plugin_id, clean)
+        .await
 }
 
 /// Frontend plugin-host diagnostics -> the file log. The host runs in the
@@ -565,7 +591,11 @@ pub fn plugin_host_log(level: String, line: String) -> Result<(), String> {
     // evidence. The journal has its own (much smaller) bound.
     #[cfg(feature = "cockpit-privileged")]
     journal::record(&text);
-    if !limiter.lock().map_err(|_| "limiter poisoned".to_string())?.try_take("host") {
+    if !limiter
+        .lock()
+        .map_err(|_| "limiter poisoned".to_string())?
+        .try_take("host")
+    {
         return Ok(());
     }
     match level.as_str() {
@@ -712,7 +742,10 @@ mod tests {
     }
 
     fn fixture() -> Fixture {
-        serde_json::from_str(include_str!("../../../../../contracts/petal-contracts.json")).unwrap()
+        serde_json::from_str(include_str!(
+            "../../../../../contracts/petal-contracts.json"
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -725,7 +758,10 @@ mod tests {
                 None => assert!(parsed.is_none(), "should reject {}", v.topic),
                 Some(id) => assert_eq!(
                     parsed,
-                    Some(PluginTopic { plugin_id: id, sub: v.sub }),
+                    Some(PluginTopic {
+                        plugin_id: id,
+                        sub: v.sub
+                    }),
                     "{}",
                     v.topic
                 ),
@@ -739,7 +775,10 @@ mod tests {
         assert_eq!(MAX_PAYLOAD_BYTES, l.max_payload_bytes);
         assert_eq!(LOSSY_PER_SECOND, l.lossy_per_second);
         assert_eq!(RELIABLE_PER_SECOND, l.reliable_per_second);
-        assert_eq!(INBOUND_PER_SENDER_PER_SECOND, l.inbound_per_sender_per_second);
+        assert_eq!(
+            INBOUND_PER_SENDER_PER_SECOND,
+            l.inbound_per_sender_per_second
+        );
         assert_eq!(PER_PLUGIN_STATE_BYTES, l.state_max_bytes);
         assert_eq!(PLUGINS_TOTAL_BYTES, l.state_total_max_bytes);
         assert_eq!(
@@ -755,7 +794,13 @@ mod tests {
         assert_eq!(f.name, EVENT_NAME);
         let parsed = parse_topic("plugin/petal.reactions/emoji").unwrap();
         let payload = r#"{"e":"👍","t":1788640000000}"#.as_bytes();
-        let event = event_for("plugin/petal.reactions/emoji", &parsed, "alex-1a2b", Some("Alex"), payload);
+        let event = event_for(
+            "plugin/petal.reactions/emoji",
+            &parsed,
+            "alex-1a2b",
+            Some("Alex"),
+            payload,
+        );
         let json = serde_json::to_value(&event).unwrap();
         let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
@@ -766,7 +811,10 @@ mod tests {
     #[test]
     fn sender_name_is_trimmed_and_optional() {
         let parsed = parse_topic("plugin/petal.chat").unwrap();
-        assert_eq!(event_for("plugin/petal.chat", &parsed, "x", Some("  "), b"").sender_name, None);
+        assert_eq!(
+            event_for("plugin/petal.chat", &parsed, "x", Some("  "), b"").sender_name,
+            None
+        );
         assert_eq!(
             event_for("plugin/petal.chat", &parsed, "x", Some(" Alex "), b"").sender_name,
             Some("Alex".into())
@@ -775,7 +823,10 @@ mod tests {
 
     #[test]
     fn topic_for_round_trips_and_rejects_bad_parts() {
-        assert_eq!(topic_for("petal.reactions", None).unwrap(), "plugin/petal.reactions");
+        assert_eq!(
+            topic_for("petal.reactions", None).unwrap(),
+            "plugin/petal.reactions"
+        );
         assert_eq!(
             topic_for("petal.reactions", Some("emoji")).unwrap(),
             "plugin/petal.reactions/emoji"
@@ -789,9 +840,13 @@ mod tests {
     #[test]
     fn validate_publish_enforces_size_shape_and_destinations() {
         let ok = validate_publish("petal.reactions", Some("emoji"), "AQID", &[]).unwrap();
-        assert_eq!(ok, ("plugin/petal.reactions/emoji".to_string(), vec![1, 2, 3]));
+        assert_eq!(
+            ok,
+            ("plugin/petal.reactions/emoji".to_string(), vec![1, 2, 3])
+        );
         assert!(validate_publish("petal.reactions", None, "not base64!!", &[]).is_err());
-        let big = base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_PAYLOAD_BYTES + 1]);
+        let big =
+            base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_PAYLOAD_BYTES + 1]);
         assert!(validate_publish("petal.reactions", None, &big, &[]).is_err());
         let exact = base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_PAYLOAD_BYTES]);
         assert!(validate_publish("petal.reactions", None, &exact, &[]).is_ok());
@@ -823,7 +878,10 @@ mod tests {
         let mut keys: Vec<String> = json.as_object().unwrap().keys().cloned().collect();
         keys.sort();
         assert_eq!(keys, f.plugin_state_changed_event.fields);
-        assert_eq!(json, serde_json::Value::Object(f.plugin_state_changed_event.example));
+        assert_eq!(
+            json,
+            serde_json::Value::Object(f.plugin_state_changed_event.example)
+        );
     }
 
     #[test]
@@ -832,13 +890,26 @@ mod tests {
         assert!(!is_release_version("1.0"));
         assert!(!is_release_version("01.0.0"));
         assert!(!is_release_version("1.0.0-beta"));
-        let ok = clean_plugin_entry(&serde_json::json!({"v":"1.0.0","src":"dev","state":{"a":1},"junk":true})).unwrap();
-        assert_eq!(ok, serde_json::json!({"v":"1.0.0","src":"dev","state":{"a":1}}));
-        let null_state = clean_plugin_entry(&serde_json::json!({"v":"1.0.0","src":"builtin","state":null})).unwrap();
+        let ok = clean_plugin_entry(
+            &serde_json::json!({"v":"1.0.0","src":"dev","state":{"a":1},"junk":true}),
+        )
+        .unwrap();
+        assert_eq!(
+            ok,
+            serde_json::json!({"v":"1.0.0","src":"dev","state":{"a":1}})
+        );
+        let null_state =
+            clean_plugin_entry(&serde_json::json!({"v":"1.0.0","src":"builtin","state":null}))
+                .unwrap();
         assert_eq!(null_state, serde_json::json!({"v":"1.0.0","src":"builtin"}));
         let big = "x".repeat(PER_PLUGIN_STATE_BYTES);
-        let too_big = clean_plugin_entry(&serde_json::json!({"v":"1.0.0","src":"builtin","state":big})).unwrap();
-        assert!(too_big.get("state").is_none(), "oversized state is dropped, not the whole entry");
+        let too_big =
+            clean_plugin_entry(&serde_json::json!({"v":"1.0.0","src":"builtin","state":big}))
+                .unwrap();
+        assert!(
+            too_big.get("state").is_none(),
+            "oversized state is dropped, not the whole entry"
+        );
         assert!(clean_plugin_entry(&serde_json::json!({"v":"1.0","src":"builtin"})).is_none());
         assert!(clean_plugin_entry(&serde_json::json!({"v":"1.0.0","src":"store"})).is_none());
         assert!(clean_plugin_entry(&serde_json::json!("nope")).is_none());
@@ -856,7 +927,10 @@ mod tests {
         assert!(l.try_take_at("a", t0 + Duration::from_millis(100)));
         assert!(!l.try_take_at("a", t0 + Duration::from_millis(100)));
         for _ in 0..10 {
-            assert!(l.try_take_at("a", t0 + Duration::from_secs(5)), "never above capacity");
+            assert!(
+                l.try_take_at("a", t0 + Duration::from_secs(5)),
+                "never above capacity"
+            );
         }
         assert!(!l.try_take_at("a", t0 + Duration::from_secs(5)));
         l.prune(t0 + Duration::from_secs(500), 120.0);

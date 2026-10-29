@@ -112,11 +112,7 @@ pub(crate) async fn start_for_request(app: AppHandle, window_id: u32, requester:
     }
 }
 
-async fn start_inner(
-    app: AppHandle,
-    window_id: u32,
-    requested_by: Option<String>,
-) -> StartOutcome {
+async fn start_inner(app: AppHandle, window_id: u32, requested_by: Option<String>) -> StartOutcome {
     let config = settings::current();
     if !config.enabled {
         return StartOutcome::refused(EndReason::Disabled);
@@ -274,7 +270,10 @@ async fn fetch_ai_token(
     let status = response.status();
     if !status.is_success() {
         let reason = super::state::classify_mint_status(status.as_u16());
-        log::warn!("ai_chat: token mint failed with HTTP {} ({reason:?})", status);
+        log::warn!(
+            "ai_chat: token mint failed with HTTP {} ({reason:?})",
+            status
+        );
         return Err(reason);
     }
     response
@@ -334,14 +333,32 @@ pub fn ai_chat_send_text(app: AppHandle, text: String) -> bool {
 /// [`ai_chat_remote_session`]), not as this call's return value. A remote
 /// participant is never in a position to know the outcome synchronously.
 #[tauri::command]
-pub fn ai_chat_request_start(app: AppHandle, window_id: u32, owner_identity: String) -> Result<(), String> {
-    publish_request(&app, window_id, owner_identity, super::wire::Body::StartRequest)
+pub fn ai_chat_request_start(
+    app: AppHandle,
+    window_id: u32,
+    owner_identity: String,
+) -> Result<(), String> {
+    publish_request(
+        &app,
+        window_id,
+        owner_identity,
+        super::wire::Body::StartRequest,
+    )
 }
 
 /// Ask the window's owner to stop the running session.
 #[tauri::command]
-pub fn ai_chat_request_stop(app: AppHandle, window_id: u32, owner_identity: String) -> Result<(), String> {
-    publish_request(&app, window_id, owner_identity, super::wire::Body::StopRequest)
+pub fn ai_chat_request_stop(
+    app: AppHandle,
+    window_id: u32,
+    owner_identity: String,
+) -> Result<(), String> {
+    publish_request(
+        &app,
+        window_id,
+        owner_identity,
+        super::wire::Body::StopRequest,
+    )
 }
 
 /// Send a typed message into a session running on a window someone else is
@@ -366,7 +383,12 @@ pub fn ai_chat_request_send_text(
     if text.chars().count() > super::wire::MAX_USER_TEXT_CHARS {
         return Err("text is too long".to_string());
     }
-    publish_request(&app, window_id, owner_identity, super::wire::Body::SendText { text })
+    publish_request(
+        &app,
+        window_id,
+        owner_identity,
+        super::wire::Body::SendText { text },
+    )
 }
 
 /// Claim the push-to-talk floor on a window someone else is sharing (#664:
@@ -379,13 +401,21 @@ pub fn ai_chat_request_send_text(
 /// else already holds it) comes back over the topic, not this call's return
 /// value.
 #[tauri::command]
-pub fn ai_chat_request_ptt_start(app: AppHandle, window_id: u32, owner_identity: String) -> Result<(), String> {
+pub fn ai_chat_request_ptt_start(
+    app: AppHandle,
+    window_id: u32,
+    owner_identity: String,
+) -> Result<(), String> {
     publish_request(&app, window_id, owner_identity, super::wire::Body::PttStart)
 }
 
 /// Release a push-to-talk floor claimed on a window someone else is sharing.
 #[tauri::command]
-pub fn ai_chat_request_ptt_end(app: AppHandle, window_id: u32, owner_identity: String) -> Result<(), String> {
+pub fn ai_chat_request_ptt_end(
+    app: AppHandle,
+    window_id: u32,
+    owner_identity: String,
+) -> Result<(), String> {
     publish_request(&app, window_id, owner_identity, super::wire::Body::PttEnd)
 }
 
@@ -428,7 +458,10 @@ fn publish_request(
 /// mounts right after the owner refuses a start now sees the refusal
 /// immediately from this command, not only from the next event.
 #[tauri::command]
-pub fn ai_chat_remote_session(window_id: u32, owner_identity: String) -> Option<super::topic::RemoteState> {
+pub fn ai_chat_remote_session(
+    window_id: u32,
+    owner_identity: String,
+) -> Option<super::topic::RemoteState> {
     super::topic::remote_session(&super::wire::WindowKey {
         window_id,
         owner_identity,
@@ -525,7 +558,11 @@ mod tests {
         let source = include_str!("commands.rs");
         let body = source
             .split_once("async fn fetch_ai_token")
-            .map(|(_, rest)| rest.split_once("\n}\n").map(|(body, _)| body).unwrap_or(rest))
+            .map(|(_, rest)| {
+                rest.split_once("\n}\n")
+                    .map(|(body, _)| body)
+                    .unwrap_or(rest)
+            })
             .expect("fetch_ai_token must exist");
         assert!(
             !body.contains(&retrying_helper),
@@ -537,8 +574,7 @@ mod tests {
     fn token_response_tolerates_a_missing_model_field() {
         // The backend should always send `model`, but a client that hard-errors
         // on its absence would be broken by a backend rollback.
-        let resp: AiTokenResponse =
-            serde_json::from_str(r#"{"token":"authTokens/x"}"#).unwrap();
+        let resp: AiTokenResponse = serde_json::from_str(r#"{"token":"authTokens/x"}"#).unwrap();
         assert_eq!(resp.token, "authTokens/x");
         assert!(resp.model.is_none());
     }

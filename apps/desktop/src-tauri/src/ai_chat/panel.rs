@@ -69,7 +69,11 @@ pub fn create_ai_chat_panel(app: &AppHandle) {
         .no_activate(true)
         .style_mask(tauri_nspanel::StyleMask::empty().nonactivating_panel())
         .corner_radius(0.0)
-        .with_window(|w| w.decorations(false).transparent(true).accept_first_mouse(true))
+        .with_window(|w| {
+            w.decorations(false)
+                .transparent(true)
+                .accept_first_mouse(true)
+        })
         .collection_behavior(
             CollectionBehavior::new()
                 .can_join_all_spaces()
@@ -153,7 +157,10 @@ pub fn monitor_containing_frame(app: &AppHandle, frame: &WindowFrame) -> Option<
     app.primary_monitor().ok().flatten()
 }
 
-fn get_work_area_and_scale(app: &AppHandle, frame: Option<&WindowFrame>) -> ((f64, f64, f64, f64), f64) {
+fn get_work_area_and_scale(
+    app: &AppHandle,
+    frame: Option<&WindowFrame>,
+) -> ((f64, f64, f64, f64), f64) {
     let monitor = frame
         .and_then(|f| monitor_containing_frame(app, f))
         .or_else(|| app.primary_monitor().ok().flatten());
@@ -182,7 +189,11 @@ pub fn ai_chat_panel_present(app: AppHandle, window_id: u32) -> Result<AiChatPan
     let owner_app_name = crate::platform::cg::owner_name_for_window_id(window_id);
 
     let (work_area, _scale) = get_work_area_and_scale(&app, frame.as_ref());
-    let (x, y) = calculate_ai_chat_panel_position(frame, (AI_CHAT_PANEL_WIDTH, AI_CHAT_PANEL_HEIGHT), work_area);
+    let (x, y) = calculate_ai_chat_panel_position(
+        frame,
+        (AI_CHAT_PANEL_WIDTH, AI_CHAT_PANEL_HEIGHT),
+        work_area,
+    );
 
     if std::env::var_os("PETAL_TRACE_PANEL_GEOMETRY").is_some() {
         log::info!(

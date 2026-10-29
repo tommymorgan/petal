@@ -332,7 +332,10 @@ mod tests {
         let t0 = Instant::now();
         let mut floor = Floor::default();
         assert_eq!(floor.claim("alice", t0), Claim::Granted);
-        assert_eq!(floor.claim("alice", t0 + Duration::from_secs(1)), Claim::Granted);
+        assert_eq!(
+            floor.claim("alice", t0 + Duration::from_secs(1)),
+            Claim::Granted
+        );
         assert_eq!(floor.holder(), Some("alice"));
     }
 
@@ -354,7 +357,10 @@ mod tests {
         let mut floor = Floor::default();
         floor.claim("alice", t0);
         floor.release("alice");
-        assert_eq!(floor.claim("bob", t0 + Duration::from_secs(1)), Claim::Granted);
+        assert_eq!(
+            floor.claim("bob", t0 + Duration::from_secs(1)),
+            Claim::Granted
+        );
     }
 
     #[test]
@@ -375,7 +381,10 @@ mod tests {
         let t0 = Instant::now();
         let mut floor = Floor::default();
         floor.claim("alice", t0);
-        assert_eq!(floor.expire(t0 + SILENCE_TIMEOUT - Duration::from_millis(1)), None);
+        assert_eq!(
+            floor.expire(t0 + SILENCE_TIMEOUT - Duration::from_millis(1)),
+            None
+        );
         assert_eq!(floor.expire(t0 + SILENCE_TIMEOUT), Some("alice".into()));
     }
 

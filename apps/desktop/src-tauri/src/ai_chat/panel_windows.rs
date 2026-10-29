@@ -200,9 +200,7 @@ fn show_without_activate(window: &tauri::WebviewWindow) {
 pub fn ai_chat_panel_present(app: AppHandle, window_id: u32) -> Result<AiChatPanelInfo, String> {
     let frame = crate::windows_capture_target::resolve(window_id)
         .ok()
-        .map(|target| {
-            crate::platform::windows::window_frame_for_raw(target.raw_handle())
-        })
+        .map(|target| crate::platform::windows::window_frame_for_raw(target.raw_handle()))
         .flatten();
     let owner_app_name = owner_process_name_for(window_id);
 

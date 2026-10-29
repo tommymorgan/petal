@@ -26,7 +26,7 @@ use crate::transport::camera::CameraMode;
 /// completes its initial enumeration or a node's EnumFormat reply is an
 /// explicit failure, never a hang.
 const REMOTE_ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
-const WAIT_SLICE: Duration = Duration::from_millis(50);
+const WAIT_SLICE: Duration = Duration::from_secs(1);
 
 pub(super) struct RegistryDevice {
     pub node: u32,
@@ -72,6 +72,12 @@ pub(super) struct CameraRegistry {
     // Dropped LAST (see the explicit Drop): every PipeWire object below
     // borrows this loop, and the loop must outlive them all.
     loop_: Arc<ThreadLoopBox>,
+    // Listener handles keep the registry/core hooks installed: dropping a
+    // pipewire-rs Listener removes its hook, so these live exactly as long
+    // as the registry itself. Dropping them right after register() is what
+    // silenced every event live.
+    registry_listener: Option<pipewire::registry::Listener>,
+    core_listener: Option<pipewire::core::Listener>,
     context: Option<ContextBox<'static>>,
     core: Option<CoreBox<'static>>,
     registry: Option<pipewire::registry::RegistryBox<'static>>,
@@ -89,9 +95,37 @@ impl CameraRegistry {
     /// Connect a dedicated registry to one restricted remote fd and start
     /// watching it. The loop thread owns all PipeWire dispatching; every
     /// other call site serializes through `lock()`.
+    /// Enumerate through the Camera portal's restricted remote.
     pub fn connect(
         remote: OwnedFd,
         events: std::sync::mpsc::Sender<MetadataEvent>,
+    ) -> Result<Self, String> {
+        Self::build(events, |context| {
+            context
+                .connect_fd(remote, None)
+                .map_err(|e| format!("Camera PipeWire remote rejected: {e:?}"))
+        })
+    }
+
+    /// Enumerate through the session PipeWire daemon directly. Used when no
+    /// installed portal frontend implements the Camera interface (the
+    /// restricted remote then lists zero camera nodes forever); a host
+    /// application reading the default daemon is the platform-normal path
+    /// for camera access, with the in-app Camera button as the consent
+    /// surface (deviation record: native Linux publishing and control).
+    pub fn connect_direct(events: std::sync::mpsc::Sender<MetadataEvent>) -> Result<Self, String> {
+        Self::build(events, |context| {
+            context
+                .connect(None)
+                .map_err(|e| format!("Camera PipeWire daemon unavailable: {e:?}"))
+        })
+    }
+
+    fn build(
+        events: std::sync::mpsc::Sender<MetadataEvent>,
+        connect_core: impl FnOnce(
+            &'static pw::context::Context,
+        ) -> Result<pw::core::CoreBox<'static>, String>,
     ) -> Result<Self, String> {
         let thread_loop = Arc::new(
             unsafe { ThreadLoopBox::new(Some("petal-camera-registry"), None) }
@@ -111,7 +145,7 @@ impl CameraRegistry {
             modes: None,
             seq_floor: 0,
         }));
-        let (context, core, registry) = {
+        let (context, core, registry, registry_listener, core_listener) = {
             let _guard = thread_loop.lock();
             let context = ContextBox::new(loop_ref, None)
                 .map_err(|e| format!("Camera PipeWire context unavailable: {e:?}"))?;
@@ -120,29 +154,28 @@ impl CameraRegistry {
             // pointee, and Drop destroys it only after core and registry.
             let context_ref: &'static pw::context::Context =
                 unsafe { std::mem::transmute(&*context) };
-            let core = context_ref
-                .connect_fd(remote, None)
-                .map_err(|e| format!("Camera PipeWire remote rejected: {e:?}"))?;
+            let core = connect_core(context_ref)?;
             // SAFETY: same Arc-pinned-loop argument as `loop_ref` above; the
             // CoreBox lives in this struct and drops before the loop.
             let core_ref: &'static pw::core::Core = unsafe { std::mem::transmute(&*core) };
             let registry = core_ref
                 .get_registry()
                 .map_err(|e| format!("Camera PipeWire registry unavailable: {e:?}"))?;
-            install_listeners(&registry, core_ref, state.clone(), events.clone());
-            let seq = {
-                let mut state = state.lock_unpoisoned();
-                let seq = state.next_seq();
-                state.initial_pending = Some(seq);
-                seq
-            };
-            core_ref
-                .sync(seq)
+            let (registry_listener, core_listener) =
+                install_listeners(&registry, core_ref, state.clone(), events.clone());
+            // pw assigns the reply seq (an incrementing cookie); the done
+            // callback echoes THAT value, so pin initial_pending to the
+            // returned AsyncSeq, not to our own counter.
+            let reply = core_ref
+                .sync(0)
                 .map_err(|e| format!("Camera PipeWire registry sync failed: {e:?}"))?;
-            (context, core, registry)
+            state.lock_unpoisoned().initial_pending = Some(reply.seq());
+            (context, core, registry, registry_listener, core_listener)
         };
         Ok(Self {
             loop_: thread_loop,
+            registry_listener: Some(registry_listener),
+            core_listener: Some(core_listener),
             context: Some(context),
             core: Some(core),
             registry: Some(registry),
@@ -155,6 +188,12 @@ impl CameraRegistry {
     /// timeout with an explicit unavailable message.
     pub fn wait_initial(&self) -> Result<(), String> {
         let deadline = std::time::Instant::now() + REMOTE_ANSWER_TIMEOUT;
+        // PipeWire wait protocol: hold the loop lock across the wait loop;
+        // `timed_wait` releases it while parked and reacquires it before
+        // returning. Waiting without the guard leaks the reacquired lock and
+        // wedges the later registry teardown on `loop_.lock()`, which is the
+        // silent camera hang observed live.
+        let _guard = self.loop_.lock();
         loop {
             {
                 let state = self.state.lock_unpoisoned();
@@ -171,10 +210,10 @@ impl CameraRegistry {
                 }
             }
             if std::time::Instant::now() >= deadline {
-                return Err(
-                    "The camera list did not arrive from the desktop portal remote".to_string(),
-                );
+                return Err("The camera list did not arrive from the camera service".to_string());
             }
+            // `timed_wait` truncates to whole seconds; one-second slices
+            // keep the deadline effective without busy-spinning.
             self.loop_.timed_wait(WAIT_SLICE);
         }
     }
@@ -303,13 +342,23 @@ fn deadline() -> std::time::Instant {
 
 impl Drop for CameraRegistry {
     fn drop(&mut self) {
-        // Stop dispatching, then destroy the PipeWire objects while the loop
-        // they borrow is still alive.
-        let _guard = self.loop_.lock();
+        // Destroy the PipeWire objects while the loop they borrow is still
+        // running and under its lock, then release the lock BEFORE stopping:
+        // pw_thread_loop_stop acquires the same (non-recursive) mutex, so
+        // stopping with the guard held self-deadlocks -- the silent hang
+        // observed live after a failed camera enumeration.
+        {
+            let _guard = self.loop_.lock();
+            log::trace!("camera registry drop: destroying objects under lock");
+            self.registry_listener.take();
+            self.core_listener.take();
+            self.registry.take();
+            self.core.take();
+            self.context.take();
+        }
+        log::trace!("camera registry drop: stopping loop");
         self.loop_.stop();
-        self.registry.take();
-        self.core.take();
-        self.context.take();
+        log::trace!("camera registry drop: done");
     }
 }
 
@@ -347,15 +396,18 @@ fn install_listeners(
     core: &pw::core::Core,
     state: Arc<Mutex<RegistryState>>,
     events: std::sync::mpsc::Sender<MetadataEvent>,
-) {
+) -> (pipewire::registry::Listener, pipewire::core::Listener) {
     let registry_state = state.clone();
     let registry_events = events.clone();
     let registry_remove_state = state.clone();
     let registry_remove_events = events.clone();
     let registry_node_removed = events.clone();
-    registry
+    let registry_listener = registry
         .add_listener_local()
         .global(move |global| {
+            if global.type_ == pipewire::types::ObjectType::Node {
+                log::trace!("camera registry: node global id={}", global.id);
+            }
             let Some(props) = global.props else { return };
             if global.type_ != pipewire::types::ObjectType::Node {
                 return;
@@ -383,8 +435,10 @@ fn install_listeners(
     let core_events = events.clone();
     let core_error_state = state.clone();
     let core_error_events = events.clone();
-    core.add_listener_local()
+    let core_listener = core
+        .add_listener_local()
         .done(move |id, seq| {
+            log::trace!("camera registry: core done id={id} seq={:?}", seq.seq());
             let seq = seq.seq();
             if id != pw::core::PW_ID_CORE {
                 return;
@@ -418,6 +472,7 @@ fn install_listeners(
             }
         })
         .register();
+    (registry_listener, core_listener)
 }
 
 fn publish_devices(state: &RegistryState, events: &std::sync::mpsc::Sender<MetadataEvent>) {

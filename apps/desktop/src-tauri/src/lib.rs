@@ -71,9 +71,9 @@ mod dev_test_pattern;
 // decoder/render stage sampling) stay macOS-gated inside the module, so on
 // Windows those per-track fields are honestly absent (null) rather than
 // fabricated.
+mod chat;
 pub mod diagnostics;
 mod draw;
-mod chat;
 // Plugin system host surface (plugins/README.md): M2 data bus.
 mod plugins;
 // UserDispatch feedback modal's opt-in, redacted log-attachment command
@@ -122,16 +122,16 @@ mod control_consent;
 // `main.rs` isn't the only caller if a future example/binary ever wants the
 // same sink; today only `run()` below calls `logging::init()`.
 mod analytics;
+#[cfg(target_os = "linux")]
+mod linux_compositor;
 pub mod logging;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos_screen_audio;
 mod main_window;
 mod meeting_core;
 mod menubar;
-#[cfg(target_os = "linux")]
-mod linux_compositor;
-#[cfg(target_os = "macos")]
-pub(crate) mod macos_screen_audio;
-pub(crate) mod screen_audio;
 mod network_cockpit;
+pub(crate) mod screen_audio;
 mod settings_window;
 // `pub` (not just crate-private) so `examples/compositor_probe.rs` -- a
 // separate crate-root binary linking against `desktop_lib`, same as
@@ -193,10 +193,6 @@ pub mod video_color;
 // `desktop_lib`, same as `window_source`/`transport` already are -- can call
 // it directly for verification, same pattern this crate already uses.
 #[cfg(target_os = "linux")]
-mod linux_capabilities;
-#[cfg(target_os = "linux")]
-mod linux_prerequisites;
-#[cfg(target_os = "linux")]
 mod linux_camera;
 #[cfg(target_os = "linux")]
 mod linux_camera_capture;
@@ -207,13 +203,20 @@ mod linux_camera_portal;
 #[cfg(target_os = "linux")]
 mod linux_camera_view;
 #[cfg(target_os = "linux")]
-mod linux_startup;
+mod linux_capabilities;
+#[cfg(target_os = "linux")]
+mod linux_prerequisites;
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub mod linux_pw_compat;
 #[cfg(target_os = "linux")]
 mod linux_share;
 #[cfg(target_os = "linux")]
 mod linux_share_capture;
 #[cfg(target_os = "linux")]
 mod linux_share_portal;
+#[cfg(target_os = "linux")]
+mod linux_startup;
 pub mod rooms;
 #[cfg(target_os = "macos")]
 mod session;
@@ -306,10 +309,10 @@ use menubar::{get_menubar_state, set_mic_muted, toggle_menubar_mic};
 #[cfg(target_os = "macos")]
 use menubar::{hide_menubar_popover, resize_menubar_popover};
 use network_cockpit::open_network_cockpit_window;
-use settings_window::open_settings_window;
 use rooms::{
     create_room, forget_room, list_room_occupancy, list_rooms, rename_room, reset_local_rooms,
 };
+use settings_window::open_settings_window;
 #[cfg(target_os = "macos")]
 use share_border::update_share_border_frame;
 use window_source::{ShareableWindow, WindowSourceError};

@@ -7,6 +7,26 @@
 // the maintainers' LiveKit/Vercel deployment. See docs/SELF_HOSTING.md.
 const SYSTEM_SWIFT_RUNTIME_RPATH: &str = "/usr/lib/swift";
 
+/// The PipeWire symbols libwebrtc stubs as hidden locals; see the
+/// `--wrap` emission in `main` and `src/linux_pw_compat.rs`.
+#[cfg(target_os = "linux")]
+const LINK_WRAPPED_PIPEWIRE_SYMBOLS: [&str; 14] = [
+    "pw_init",
+    "pw_thread_loop_new",
+    "pw_thread_loop_destroy",
+    "pw_thread_loop_start",
+    "pw_thread_loop_stop",
+    "pw_thread_loop_lock",
+    "pw_thread_loop_unlock",
+    "pw_thread_loop_get_loop",
+    "pw_context_new",
+    "pw_context_destroy",
+    "pw_context_connect",
+    "pw_context_connect_fd",
+    "pw_core_disconnect",
+    "pw_proxy_destroy",
+];
+
 fn main() {
     // The Rust unit-test harness (`cargo test --lib`) imports
     // `TaskDialogIndirect`, which exists only in Common Controls v6. The
@@ -19,13 +39,42 @@ fn main() {
     // manifest on the `desktop` binary (plain `cargo:rustc-link-arg` is
     // required: the scoped `-tests`/`-lib` variants never reach the
     // `cargo test --lib` harness).
+
     //
     // Note: CI's rust-gate also documents that the repo `.cargo/config.toml`
     // must set `+crt-static` for the MSVC target (issue #673) -- without it
     // the prebuilt MT libwebrtc fails the link with LNK2038.
+
+    #[cfg(target_os = "linux")]
+    {
+        // Shared with `src/linux_pw_compat.rs` so unit tests can pin the
+        // wrapper module to exactly what this script wraps at link time.
+        let out = std::env::var_os("OUT_DIR").unwrap();
+        let list = LINK_WRAPPED_PIPEWIRE_SYMBOLS
+            .iter()
+            .map(|s| format!("    \"{s}\","))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(
+            std::path::Path::new(&out).join("link-wrapped-pipewire.rs"),
+            format!("pub const WRAPPED_SYMBOLS: [&str; 14] = [\n{list}\n];\n"),
+        )
+        .expect("write link-wrapped-pipewire.rs");
+    }
     #[cfg(target_os = "windows")]
     println!("cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'");
     println!("cargo:rerun-if-env-changed=PETAL_GIT_COMMIT");
+    // Linux: libwebrtc's bundled dlopen-lazy PipeWire stubs are hidden
+    // local symbols in this executable, so pipewire-sys's calls bind to
+    // them at static-link time and jump to null until WebRTC initializes
+    // its own stub table. Route every undefined reference through the
+    // `__wrap_pw_*` functions in `linux_pw_compat.rs`, which dlsym the
+    // real libpipewire symbols instead. Keep this list in sync with
+    // `linux_pw_compat::WRAPPED_SYMBOLS`.
+    #[cfg(target_os = "linux")]
+    for symbol in LINK_WRAPPED_PIPEWIRE_SYMBOLS {
+        println!("cargo:rustc-link-arg=-Wl,--wrap={symbol}");
+    }
     println!("cargo:rerun-if-env-changed=PETAL_BUILD_DATE");
     println!("cargo:rerun-if-env-changed=PETAL_BACKEND_URL");
     println!("cargo:rerun-if-env-changed=PETAL_ALLOW_NO_BACKEND");
@@ -98,8 +147,12 @@ fn main() {
     // works). Both must be set together; a lone half is ignored with a warning.
     println!("cargo:rerun-if-env-changed=PETAL_PLUGIN_REGISTRY_URL");
     println!("cargo:rerun-if-env-changed=PETAL_PLUGIN_REGISTRY_PUBKEY");
-    let registry_url = std::env::var("PETAL_PLUGIN_REGISTRY_URL").ok().filter(|v| !v.trim().is_empty());
-    let registry_key = std::env::var("PETAL_PLUGIN_REGISTRY_PUBKEY").ok().filter(|v| !v.trim().is_empty());
+    let registry_url = std::env::var("PETAL_PLUGIN_REGISTRY_URL")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    let registry_key = std::env::var("PETAL_PLUGIN_REGISTRY_PUBKEY")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
     match (registry_url, registry_key) {
         (Some(url), Some(key)) => {
             println!("cargo:rustc-env=PETAL_PLUGIN_REGISTRY_URL={}", url.trim().trim_end_matches('/'));

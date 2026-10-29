@@ -36,7 +36,7 @@
   import { installDismissibleLayer } from '@petal/shared/ui/dismissibleLayer';
   import { tileLayoutDuration, tileTransitionDuration, uniformTileFlip, uniformTileFlipInFlight } from '$lib/motion';
   import { stepFitLadder } from '$lib/meeting/fitLadder';
-  import type { DrawUpdate } from '$lib/ipc';
+  import type { DrawUpdate, LinuxPictureShare } from '$lib/ipc';
 
   export interface GalleryParticipant {
     /** Stable participant identity when the real route has one. Falls back to
@@ -83,7 +83,10 @@
     sharingLiveColor?: string;
     remoteControlAllowed?: boolean;
     onControl?: (icon: ControlIcon) => void;
-    onChangeShare?: () => void;
+    pictureShares?: LinuxPictureShare[];
+    onAddShare?: () => void;
+    onChangeShare?: (windowId: number) => void;
+    onStopShare?: (windowId: number) => void;
     /** Public-code disclosure for active-meeting invite controls. The route
      * owns derivation so this presentational component never sees a raw room credential. */
     inviteAriaLabel?: string;
@@ -148,7 +151,10 @@
     sharingLiveColor,
     remoteControlAllowed = true,
     onControl,
+    pictureShares = [],
+    onAddShare,
     onChangeShare,
+    onStopShare,
     inviteAriaLabel = 'Copy invite link',
     inviteTooltip = 'Copy invite link',
     onInviteLinkCopy,
@@ -1167,7 +1173,7 @@
           optionsLabel="Camera options"
           optionsOpen={deviceMenuKind === 'camera'}
           optionsEnabled={!!onOpenDeviceMenu}
-          visibleLabel={linuxMeetingLimitation('camera') ? 'Camera — unsupported on Linux' : 'Camera'}
+          visibleLabel="Camera"
           onToggle={() => onControl?.('camera')}
           onOptions={(el) => onOpenDeviceMenu?.('camera', el)}
         />
@@ -1242,7 +1248,7 @@
     </div>
 
     {#if galleryMoreOpen}
-      <div bind:this={galleryMoreMenuEl} class="gallery-more-menu meeting-menu" role="menu" aria-label="More meeting controls">
+      <div bind:this={galleryMoreMenuEl} class="gallery-more-menu meeting-menu" class:picture-controls={!!onAddShare} role="menu" aria-label="More meeting controls">
         <div class="meeting-menu-section-label">More controls</div>
         {#if shareCollapsed}
           <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" data-testid="more-share" disabled={!!linuxMeetingLimitation('screenshare')} title={linuxMeetingLimitation('screenshare')} onclick={() => selectGalleryMore('screenshare')}>
@@ -1255,20 +1261,28 @@
             </span>
           </button>
         {/if}
-        {#if sharingActive && onChangeShare}
-          <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" onclick={() => {
+        {#if onAddShare}
+          <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" aria-label="Add share" onclick={() => {
             closeGalleryMore(false);
-            onChangeShare?.();
+            onAddShare?.();
           }}>
-            <span class="more-item-leading">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="4" width="18" height="13" rx="2"></rect>
-                <path d="M8 21h8M12 17v4"></path>
-              </svg>
-              <span class="meeting-menu-row-copy">Change monitor</span>
-            </span>
+            <span class="meeting-menu-row-copy">Add share</span>
           </button>
         {/if}
+        {#each pictureShares as share (share.windowId)}
+          <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" onclick={() => {
+            closeGalleryMore(false);
+            onChangeShare?.(share.windowId);
+          }}>
+            <span class="meeting-menu-row-copy">Change {share.title} (share {share.windowId})</span>
+          </button>
+          <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" onclick={() => {
+            closeGalleryMore(false);
+            onStopShare?.(share.windowId);
+          }}>
+            <span class="meeting-menu-row-copy">Stop {share.title} (share {share.windowId})</span>
+          </button>
+        {/each}
         {#if chatCollapsed}
           <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" data-testid="more-chat" onclick={() => selectGalleryMore('chat')}>
             <span class="more-item-leading">
@@ -2441,6 +2455,12 @@
     transform: translateX(-50%);
   }
 
+  .gallery-more-menu.picture-controls {
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
   .more-item-leading {
     display: inline-flex;
     align-items: center;
@@ -2668,6 +2688,10 @@
     right: calc(100% + 8px);
     bottom: 8px;
     transform: none;
+  }
+
+  .gallery.rail-controls .gallery-more-menu.picture-controls {
+    max-height: calc(100vh - 24px);
   }
 
   @media (prefers-reduced-motion: reduce) {

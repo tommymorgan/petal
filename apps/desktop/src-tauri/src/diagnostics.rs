@@ -844,8 +844,7 @@ fn memory_curve_line(
 /// filed alongside), while a fire-once detector would have shown a single
 /// value and no curve. Ten minutes gives ~120 readings across a 20-hour
 /// episode.
-const DESCRIPTOR_ALERT_REWARN_INTERVAL: std::time::Duration =
-    std::time::Duration::from_secs(600);
+const DESCRIPTOR_ALERT_REWARN_INTERVAL: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// #104: live state of the descriptor-pressure detector. `in_episode` carries
 /// the hysteresis (see `platform::fd::below_clear_water`); `last_alerted`
@@ -880,9 +879,7 @@ fn descriptor_pressure_step(
         episode.in_episode = true;
         let allowed = match episode.last_alerted {
             None => true,
-            Some(last) => {
-                now.saturating_duration_since(last) >= DESCRIPTOR_ALERT_REWARN_INTERVAL
-            }
+            Some(last) => now.saturating_duration_since(last) >= DESCRIPTOR_ALERT_REWARN_INTERVAL,
         };
         if !allowed {
             return None;
@@ -933,10 +930,13 @@ fn observe_descriptor_pressure(episode: &mut DescriptorPressureEpisode) {
          (#104)",
         limits.soft
     );
-    crate::logging::capture_sentry_diagnostic(crate::logging::SentryDiagnosticEvent::
-        DescriptorPressure(crate::logging::DescriptorPressureDiagnostic {
-            stage: crate::logging::DescriptorPressureStageTag::HighWater,
-        }));
+    crate::logging::capture_sentry_diagnostic(
+        crate::logging::SentryDiagnosticEvent::DescriptorPressure(
+            crate::logging::DescriptorPressureDiagnostic {
+                stage: crate::logging::DescriptorPressureStageTag::HighWater,
+            },
+        ),
+    );
 }
 
 /// #104: the process-wide "we already hit the wall" alarm, kept separate from
@@ -963,9 +963,9 @@ pub fn note_descriptor_exhaustion_io_error(context: &str, error: &std::io::Error
             .get_or_init(|| std::sync::Mutex::new(None))
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if last
-            .is_some_and(|last| now.saturating_duration_since(last) < DESCRIPTOR_ALERT_REWARN_INTERVAL)
-        {
+        if last.is_some_and(|last| {
+            now.saturating_duration_since(last) < DESCRIPTOR_ALERT_REWARN_INTERVAL
+        }) {
             return;
         }
         *last = Some(now);
@@ -981,10 +981,13 @@ pub fn note_descriptor_exhaustion_io_error(context: &str, error: &std::io::Error
          fd_open={fd_open} fd_soft_limit={fd_soft_limit}. Socket and file creation are \
          failing process-wide (#104)"
     );
-    crate::logging::capture_sentry_diagnostic(crate::logging::SentryDiagnosticEvent::
-        DescriptorPressure(crate::logging::DescriptorPressureDiagnostic {
-            stage: crate::logging::DescriptorPressureStageTag::Exhausted,
-        }));
+    crate::logging::capture_sentry_diagnostic(
+        crate::logging::SentryDiagnosticEvent::DescriptorPressure(
+            crate::logging::DescriptorPressureDiagnostic {
+                stage: crate::logging::DescriptorPressureStageTag::Exhausted,
+            },
+        ),
+    );
 }
 
 /// #884: pure decision over one pressure reading -- report only genuine
@@ -1028,7 +1031,10 @@ fn observe_memory_pressure_transition(last_level: &mut Option<u32>) {
         );
         crate::logging::capture_sentry_diagnostic(
             crate::logging::SentryDiagnosticEvent::MemoryPressure(
-                crate::logging::MemoryPressureDiagnostic { level: tag, top_owner },
+                crate::logging::MemoryPressureDiagnostic {
+                    level: tag,
+                    top_owner,
+                },
             ),
         );
     }
@@ -2291,7 +2297,10 @@ impl DiagnosticsState {
                 // the backoff does: a gated enqueue makes 100% drop an
                 // artifact, not a report-worthy rate (#882 review).
                 if drop_pct > 30.0 && !sleep_paused && !global_backoff_paused {
-                    let last_warned = inner.display_drop_last_warned.get(&track.latency_key).copied();
+                    let last_warned = inner
+                        .display_drop_last_warned
+                        .get(&track.latency_key)
+                        .copied();
                     if display_drop_rewarn_allowed(last_warned, warn_now) {
                         inner
                             .display_drop_last_warned
@@ -2635,14 +2644,14 @@ pub(crate) fn record_remote_video_stalled(
         300..=899 => SinceLastFrameBucketTag::FiveToFifteenMinutes,
         _ => SinceLastFrameBucketTag::OverFifteenMinutes,
     };
-    crate::logging::capture_sentry_diagnostic(crate::logging::SentryDiagnosticEvent::RemoteVideoStalled(
-        RemoteVideoStalledDiagnostic {
+    crate::logging::capture_sentry_diagnostic(
+        crate::logging::SentryDiagnosticEvent::RemoteVideoStalled(RemoteVideoStalledDiagnostic {
             sharer_kind: sharer_kind_tag,
             hold_reason,
             probe_failures,
             since_last_frame: since_last_frame_bucket,
-        },
-    ));
+        }),
+    );
     let posthog_kind = match sharer_kind {
         crate::transport::publisher::SharerClientKind::Native => {
             crate::analytics::SharerKindSource::Native
@@ -4362,7 +4371,11 @@ mod tests {
         let result = bounded_detail(value);
 
         let result = result.expect("non-empty input must produce Some");
-        assert!(result.len() <= 160, "result must be bounded to <=160 bytes, got {}", result.len());
+        assert!(
+            result.len() <= 160,
+            "result must be bounded to <=160 bytes, got {}",
+            result.len()
+        );
         // Merely constructing/using `result` as a &str proves it is valid UTF-8;
         // String::truncate itself guarantees this once it doesn't panic.
         assert!(result.chars().all(|c| c == '\u{4e2d}'));
@@ -4494,24 +4507,16 @@ mod tests {
         // Reproduces the reported bug: a Full-tier share publishes a full-res
         // layer and a throttled half-res layer; the full layer must win
         // regardless of which report is read first.
-        assert!(is_more_primary_layer(
-            true, true, 1_282_988, true, 356_580
-        ));
-        assert!(!is_more_primary_layer(
-            true, true, 356_580, true, 1_282_988
-        ));
+        assert!(is_more_primary_layer(true, true, 1_282_988, true, 356_580));
+        assert!(!is_more_primary_layer(true, true, 356_580, true, 1_282_988));
     }
 
     #[test]
     fn simulcast_primary_layer_prefers_active_over_larger_inactive() {
         // An active-but-smaller layer beats an inactive-but-larger one -- a
         // stale/paused layer's report should never win just by being bigger.
-        assert!(is_more_primary_layer(
-            true, true, 100, false, 1_000_000
-        ));
-        assert!(!is_more_primary_layer(
-            true, false, 1_000_000, true, 100
-        ));
+        assert!(is_more_primary_layer(true, true, 100, false, 1_000_000));
+        assert!(!is_more_primary_layer(true, false, 1_000_000, true, 100));
     }
 
     #[test]
@@ -5317,10 +5322,7 @@ mod tests {
         assert_eq!(describe_track("petal-window-4242"), "window 4242 share");
         // The assistant's voice must read as itself, not as an unknown track.
         #[cfg(target_os = "macos")]
-        assert_eq!(
-            describe_track("petal-ai-window-4242"),
-            "AI assistant voice"
-        );
+        assert_eq!(describe_track("petal-ai-window-4242"), "AI assistant voice");
         assert_eq!(describe_track("petal-camera-web-tester"), "webcam");
         assert_eq!(describe_track("microphone"), "'microphone'");
         assert_eq!(describe_track(""), "a track");
@@ -5603,7 +5605,10 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_value(&present).unwrap();
-        assert_eq!(json.get("physFootprintMb").unwrap(), &serde_json::json!(487));
+        assert_eq!(
+            json.get("physFootprintMb").unwrap(),
+            &serde_json::json!(487)
+        );
         assert_eq!(json.get("livePixelBuffers").unwrap(), &serde_json::json!(3));
 
         let absent = StatsSample {
@@ -5802,9 +5807,18 @@ mod tests {
             gap_since_last_frame_ms: 0,
         };
         let line = camera_receiver_interval_line(&interval);
-        assert!(!line.contains(&"i".repeat(65)), "identity must be capped: {line}");
-        assert!(!line.contains(&"t".repeat(65)), "track name must be capped: {line}");
-        assert!(!line.contains(&"d".repeat(49)), "decoder must be capped: {line}");
+        assert!(
+            !line.contains(&"i".repeat(65)),
+            "identity must be capped: {line}"
+        );
+        assert!(
+            !line.contains(&"t".repeat(65)),
+            "track name must be capped: {line}"
+        );
+        assert!(
+            !line.contains(&"d".repeat(49)),
+            "decoder must be capped: {line}"
+        );
         assert!(
             !line.contains(&"p".repeat(17)),
             "path protocol must be capped: {line}"
@@ -6467,13 +6481,28 @@ mod tests {
     // warn/critical only; steady state, recovery, and normal are silent.
     #[test]
     fn memory_pressure_transition_reports_only_upward_elevations() {
-        assert_eq!(memory_pressure_transition(None, 1), None, "normal first reading is silent");
-        assert_eq!(memory_pressure_transition(None, 2), Some(2), "joining mid-pressure reports");
+        assert_eq!(
+            memory_pressure_transition(None, 1),
+            None,
+            "normal first reading is silent"
+        );
+        assert_eq!(
+            memory_pressure_transition(None, 2),
+            Some(2),
+            "joining mid-pressure reports"
+        );
         assert_eq!(memory_pressure_transition(Some(1), 2), Some(2));
         assert_eq!(memory_pressure_transition(Some(2), 4), Some(4));
-        assert_eq!(memory_pressure_transition(Some(2), 2), None, "steady warn is silent");
-        assert_eq!(memory_pressure_transition(Some(4), 2), None, "recovery is silent");
+        assert_eq!(
+            memory_pressure_transition(Some(2), 2),
+            None,
+            "steady warn is silent"
+        );
+        assert_eq!(
+            memory_pressure_transition(Some(4), 2),
+            None,
+            "recovery is silent"
+        );
         assert_eq!(memory_pressure_transition(Some(2), 1), None);
     }
-
 }

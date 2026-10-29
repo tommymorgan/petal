@@ -133,10 +133,8 @@ mod tests {
 
     #[test]
     fn roundtrips_through_disk() {
-        let dir = std::env::temp_dir().join(format!(
-            "petal-debug-settings-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("petal-debug-settings-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(SETTINGS_FILE);

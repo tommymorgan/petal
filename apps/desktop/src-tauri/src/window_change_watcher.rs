@@ -49,19 +49,18 @@ use std::time::Instant;
 
 use tauri::{AppHandle, Emitter};
 use windows::Win32::Foundation::{
-    ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
+    GetLastError, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Accessibility::{
-    HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent, WINEVENTPROC,
+    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, WINEVENTPROC,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EVENT_OBJECT_CREATE,
-    EVENT_OBJECT_DESTROY, EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, GA_ROOT,
-    GetAncestor, GetMessageW, GetWindowThreadProcessId, HWND_MESSAGE, IsIconic, IsWindowVisible,
-    KillTimer, MSG, OBJID_WINDOW, PostMessageW, RegisterClassW, SetTimer, TranslateMessage,
-    WINEVENT_OUTOFCONTEXT, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_QUIT, WM_TIMER, WNDCLASSW,
-    CS_HREDRAW, CS_VREDRAW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetAncestor, GetMessageW,
+    GetWindowThreadProcessId, IsIconic, IsWindowVisible, KillTimer, PostMessageW, RegisterClassW,
+    SetTimer, TranslateMessage, CS_HREDRAW, CS_VREDRAW, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+    EVENT_SYSTEM_MINIMIZEEND, EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, HWND_MESSAGE, MSG, OBJID_WINDOW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WINEVENT_OUTOFCONTEXT, WM_APP, WM_QUIT, WM_TIMER, WNDCLASSW,
 };
 
 /// Tauri event emitted (debounced) after desktop window events. The window
@@ -209,7 +208,14 @@ unsafe extern "system" fn win_event_proc(
     // (DESTROY) — include it rather than risk missing the close.
     let ancestor = unsafe { GetAncestor(hwnd, GA_ROOT) };
     let is_top_level = ancestor == hwnd || ancestor.0.is_null();
-    if !should_track(event, id_object, id_child, pid, std::process::id(), is_top_level) {
+    if !should_track(
+        event,
+        id_object,
+        id_child,
+        pid,
+        std::process::id(),
+        is_top_level,
+    ) {
         return;
     }
     let pump_hwnd = PUMP_HWND.load(Ordering::Acquire);
@@ -286,7 +292,9 @@ fn run_pump_loop(hwnd: HWND, fire: &dyn Fn(), picker_visible: &dyn Fn() -> bool)
     let visibility_timer =
         unsafe { SetTimer(Some(hwnd), VISIBILITY_TIMER_ID, VISIBILITY_CHECK_MS, None) };
     if visibility_timer == 0 {
-        log::error!("window_change_watcher: failed to arm picker-visibility timer; watcher disabled");
+        log::error!(
+            "window_change_watcher: failed to arm picker-visibility timer; watcher disabled"
+        );
         return;
     }
     let mut msg = MSG::default();
@@ -358,17 +366,8 @@ fn install_hooks(proc: WINEVENTPROC) -> Vec<HWINEVENTHOOK> {
         // WINEVENT_OUTOFCONTEXT: the callback runs on OUR pump thread (the
         // installing thread) as queued messages — that thread is pumping
         // below. None/0/0 -> all processes, all threads.
-        let hook = unsafe {
-            SetWinEventHook(
-                event,
-                event,
-                None,
-                proc,
-                0,
-                0,
-                WINEVENT_OUTOFCONTEXT,
-            )
-        };
+        let hook =
+            unsafe { SetWinEventHook(event, event, None, proc, 0, 0, WINEVENT_OUTOFCONTEXT) };
         if hook.is_invalid() {
             log::warn!("window_change_watcher: SetWinEventHook(0x{event:04X}) failed");
         } else {
@@ -477,13 +476,34 @@ mod tests {
             );
             // A menu/caret/tooltip object (idObject != OBJID_WINDOW) is not a
             // window change — must not refresh the picker.
-            assert!(!should_track(event, OBJID_WINDOW.0 + 1, CHILDID_SELF, other_pid, 99, true));
+            assert!(!should_track(
+                event,
+                OBJID_WINDOW.0 + 1,
+                CHILDID_SELF,
+                other_pid,
+                99,
+                true
+            ));
             // Child objects (idChild != CHILDID_SELF) are not window changes.
-            assert!(!should_track(event, OBJID_WINDOW.0, CHILDID_SELF + 1, other_pid, 99, true));
+            assert!(!should_track(
+                event,
+                OBJID_WINDOW.0,
+                CHILDID_SELF + 1,
+                other_pid,
+                99,
+                true
+            ));
             // Child WINDOWS (a control inside another app's window) are not
             // changes to the shareable top-level set — a create/destroy of a
             // dialog control must not refresh the picker.
-            assert!(!should_track(event, OBJID_WINDOW.0, CHILDID_SELF, other_pid, 99, false));
+            assert!(!should_track(
+                event,
+                OBJID_WINDOW.0,
+                CHILDID_SELF,
+                other_pid,
+                99,
+                false
+            ));
         }
     }
 
@@ -496,7 +516,14 @@ mod tests {
             EVENT_SYSTEM_MINIMIZESTART,
             EVENT_SYSTEM_MINIMIZEEND,
         ] {
-            assert!(!should_track(event, OBJID_WINDOW.0, CHILDID_SELF, 99, 99, true));
+            assert!(!should_track(
+                event,
+                OBJID_WINDOW.0,
+                CHILDID_SELF,
+                99,
+                99,
+                true
+            ));
         }
     }
 
@@ -553,14 +580,17 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::channel::<usize>();
         let handle = thread::spawn(move || {
             assert!(register_watcher_class(), "test pump class must register");
-            let hwnd =
-                create_watcher_pump_window().expect("test pump window must be creatable");
+            let hwnd = create_watcher_pump_window().expect("test pump window must be creatable");
             let _ = ready_tx.send(hwnd.0 as usize);
             // Tests keep the pump alive: `picker_visible` always true. The
             // visibility self-termination is covered by its own test below.
-            run_pump_loop(hwnd, &|| {
-                let _ = fire_tx.send(());
-            }, &|| true);
+            run_pump_loop(
+                hwnd,
+                &|| {
+                    let _ = fire_tx.send(());
+                },
+                &|| true,
+            );
         });
         let hwnd = HWND(
             ready_rx
@@ -576,14 +606,7 @@ mod tests {
     }
 
     fn post_event(hwnd: HWND) {
-        let _ = unsafe {
-            PostMessageW(
-                Some(hwnd),
-                WM_APP_WINDOW_EVENT,
-                WPARAM(0),
-                LPARAM(0),
-            )
-        };
+        let _ = unsafe { PostMessageW(Some(hwnd), WM_APP_WINDOW_EVENT, WPARAM(0), LPARAM(0)) };
     }
 
     /// A burst of events must collapse into exactly ONE debounced fire,
@@ -609,7 +632,8 @@ mod tests {
             .expect("exactly one debounced fire expected");
         let _ = first;
         assert!(
-            Instant::now().duration_since(first_post_at) >= Duration::from_millis(DEBOUNCE_MS as u64),
+            Instant::now().duration_since(first_post_at)
+                >= Duration::from_millis(DEBOUNCE_MS as u64),
             "the debounced fire must trail the burst (trailing debounce), not arrive immediately"
         );
         // No second fire: the burst collapsed into one.
@@ -660,8 +684,7 @@ mod tests {
         let (ready_tx, ready_rx) = mpsc::channel::<usize>();
         let handle = thread::spawn(move || {
             assert!(register_watcher_class(), "test pump class must register");
-            let hwnd =
-                create_watcher_pump_window().expect("test pump window must be creatable");
+            let hwnd = create_watcher_pump_window().expect("test pump window must be creatable");
             let _ = ready_tx.send(hwnd.0 as usize);
             run_pump_loop(
                 hwnd,
@@ -691,8 +714,10 @@ mod tests {
     // ---- real OS event path (opt-in) --------------------------------------
 
     fn register_smoke_class(name: &str) -> bool {
-        let instance: HINSTANCE =
-            unsafe { GetModuleHandleW(None) }.ok().expect("module handle").into();
+        let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }
+            .ok()
+            .expect("module handle")
+            .into();
         let name_wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
         let class = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
@@ -753,8 +778,8 @@ mod tests {
             return;
         }
         use windows::Win32::UI::WindowsAndMessaging::{
-            IsIconic, PeekMessageW, ShowWindow, SW_MINIMIZE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
-            PM_REMOVE,
+            IsIconic, PeekMessageW, ShowWindow, PM_REMOVE, SW_MINIMIZE, WS_OVERLAPPEDWINDOW,
+            WS_VISIBLE,
         };
 
         let (fire_tx, fire_rx) = mpsc::channel();
@@ -788,8 +813,14 @@ mod tests {
         );
 
         const SMOKE_CLASS: &str = "PetalWinEventSmoke";
-        assert!(register_smoke_class(SMOKE_CLASS), "smoke class must register");
-        let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }.ok().expect("module").into();
+        assert!(
+            register_smoke_class(SMOKE_CLASS),
+            "smoke class must register"
+        );
+        let instance: HINSTANCE = unsafe { GetModuleHandleW(None) }
+            .ok()
+            .expect("module")
+            .into();
         let class_wide: Vec<u16> = SMOKE_CLASS
             .encode_utf16()
             .chain(std::iter::once(0))
