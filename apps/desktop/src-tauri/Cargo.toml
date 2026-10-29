@@ -257,6 +257,11 @@ zbus = { version = "5.16", default-features = false, features = ["tokio"] }
 gstreamer = "0.21"
 gstreamer-app = "0.21"
 gstreamer-video = "0.21"
+# Camera portal (ADR 0003): device and mode metadata come from the
+# restricted remote's PipeWire registry and SPA_PARAM_EnumFormat, not
+# hard-coded V4L2 paths. pkg-config binds the installed libpipewire-0.3;
+# a missing development package fails the build instead of a fallback.
+pipewire = "0.9.2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Native remote clipboard access: Unicode text, sequence numbers, and standard
