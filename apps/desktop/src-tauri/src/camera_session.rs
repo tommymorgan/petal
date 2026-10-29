@@ -364,7 +364,10 @@ pub(crate) async fn start_camera_publish_with_device(
     preferred_mode: Option<PreferredCameraMode>,
 ) -> Result<CameraPublishOutcome, String> {
     #[cfg(target_os = "linux")]
-    crate::linux_capabilities::require_camera_publication()?;
+    state
+        .cameras
+        .prepare(app, preferred_device_id.as_deref(), preferred_mode)
+        .await?;
     let (room_connection, identity, generation) = {
         if !state.camera_intent() {
             return Err("camera start cancelled".to_string());
@@ -376,11 +379,7 @@ pub(crate) async fn start_camera_publish_with_device(
         let Some((room_connection, identity)) = state.control_channel_snapshot() else {
             return Err("not in room".to_string());
         };
-        (
-            room_connection,
-            identity,
-            state.current_room_generation(),
-        )
+        (room_connection, identity, state.current_room_generation())
     };
     log::info!(
         "session: start_camera_publish begin (identity '{}')",
@@ -721,9 +720,9 @@ pub(crate) fn emit_camera_intent(app: &tauri::AppHandle, intended: bool) {
     // acquisition then succeeds, the preview yielded in time; if it fails and
     // only the self-heal retry recovers, it did not.
     log::info!("session: camera-intent intended={intended}");
-    if let Err(error) = tauri::Emitter::emit(app, "camera-intent-changed", CameraIntentEvent {
-        intended,
-    }) {
+    if let Err(error) =
+        tauri::Emitter::emit(app, "camera-intent-changed", CameraIntentEvent { intended })
+    {
         log::warn!("session: failed to emit camera-intent-changed: {error}");
     }
 }
@@ -853,12 +852,7 @@ pub(crate) async fn ensure_camera_published(
             let _control = state.lock_camera_control().await;
             let (preferred_device, preferred_mode) = app
                 .try_state::<CameraDevicePreferences>()
-                .map(|preferences| {
-                    (
-                        preferences.preferred_device(),
-                        preferences.preferred_mode(),
-                    )
-                })
+                .map(|preferences| (preferences.preferred_device(), preferences.preferred_mode()))
                 .unwrap_or((None, None));
             start_camera_publish_with_device(app, state, preferred_device, preferred_mode)
                 .await
@@ -1019,7 +1013,9 @@ pub async fn set_camera_prefs(
 ) -> Result<crate::transport::camera::AppliedCameraDevice, String> {
     let _camera_transaction = state.lock_camera_control().await;
     let mode = match (width, height, frame_rate) {
-        (Some(width), Some(height), Some(frame_rate)) if width > 0 && height > 0 && frame_rate > 0 => {
+        (Some(width), Some(height), Some(frame_rate))
+            if width > 0 && height > 0 && frame_rate > 0 =>
+        {
             Some(PreferredCameraMode {
                 width,
                 height,
@@ -1205,8 +1201,6 @@ pub(crate) async fn start_camera_publish_intent(
     preferences: &CameraDevicePreferences,
     state: &crate::session::SessionState,
 ) -> Result<StartCameraPublishResult, String> {
-    #[cfg(target_os = "linux")]
-    crate::linux_capabilities::require_camera_publication()?;
     let _control = state.lock_camera_control().await;
     state.set_camera_intent(true);
     // Announce the intent BEFORE acquiring: the Settings window's preview
@@ -1229,6 +1223,24 @@ pub(crate) async fn start_camera_publish_intent(
             Err(error)
         }
         Err(error) => {
+            #[cfg(target_os = "linux")]
+            {
+                // Portal denial/cancellation and a missing camera are
+                // terminal (C03/C05): explicit retry only, never an
+                // automatic re-prompt through the self-heal loop.
+                let lower = error.to_lowercase();
+                if lower.contains("denied")
+                    || lower.contains("cancelled")
+                    || lower.contains("no camera")
+                    || lower.contains("is not available")
+                    || lower.contains("camera access or device lost")
+                {
+                    state.set_camera_intent(false);
+                    emit_camera_intent(app, false);
+                    emit_camera_publish_state(app, false, Some(error.clone()));
+                    return Err(error);
+                }
+            }
             log::warn!(
                 "session: start_camera_publish_command immediate attempt failed, starting self-heal: {error}"
             );
@@ -1712,6 +1724,9 @@ mod tests {
             &None::<PreferredCameraMode>
         ));
         assert!(!camera_request_is_unchanged(&mode_a, &mode_b));
-        assert!(!camera_request_is_unchanged(&mode_a, &None::<PreferredCameraMode>));
+        assert!(!camera_request_is_unchanged(
+            &mode_a,
+            &None::<PreferredCameraMode>
+        ));
     }
 }

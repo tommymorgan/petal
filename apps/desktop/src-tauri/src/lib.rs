@@ -197,6 +197,16 @@ mod linux_capabilities;
 #[cfg(target_os = "linux")]
 mod linux_prerequisites;
 #[cfg(target_os = "linux")]
+mod linux_camera;
+#[cfg(target_os = "linux")]
+mod linux_camera_capture;
+#[cfg(target_os = "linux")]
+mod linux_camera_metadata;
+#[cfg(target_os = "linux")]
+mod linux_camera_portal;
+#[cfg(target_os = "linux")]
+mod linux_camera_view;
+#[cfg(target_os = "linux")]
 mod linux_startup;
 #[cfg(target_os = "linux")]
 mod linux_share;
@@ -1150,6 +1160,11 @@ pub fn run() {
             camera_session::stop_camera_publish_command,
             camera_session::camera_publish_state,
             camera_session::log_camera_preview_state,
+            // Native Linux camera owner: one capture, preview/publication
+            // leases, and the truthful state surface (ADR 0003).
+            linux_camera::linux_camera_preview_open,
+            linux_camera::linux_camera_preview_close,
+            linux_camera::linux_camera_state,
             #[cfg(target_os = "macos")]
             session::current_room,
             #[cfg(target_os = "macos")]

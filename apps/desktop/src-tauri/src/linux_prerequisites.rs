@@ -6,6 +6,9 @@ use std::time::Duration;
 use gst::prelude::*;
 use gstreamer as gst;
 
+use crate::linux_camera_capture::{
+    MIN_GSTREAMER_VERSION as MIN_CAMERA_GSTREAMER_VERSION, REQUIRED_CAMERA_ELEMENTS,
+};
 use crate::linux_share_capture::{MIN_GSTREAMER_VERSION, REQUIRED_CAPTURE_ELEMENTS};
 
 #[derive(serde::Serialize)]
@@ -132,9 +135,27 @@ pub(crate) async fn linux_native_prerequisites() -> Prerequisites {
         effect: "Monitor sharing requires an available native ScreenCast portal",
     });
     let monitor = components.iter().all(|component| component.available);
+    // Camera capability reports the installed camera pipeline components
+    // only — availability is not portal permission or a first frame.
+    let camera = components.iter().all(|component| component.available) && {
+        let mut camera_ready = true;
+        for &name in REQUIRED_CAMERA_ELEMENTS {
+            match gst::ElementFactory::find(name) {
+                Some(_) => {}
+                None => {
+                    camera_ready = false;
+                    break;
+                }
+            }
+        }
+        camera_ready && {
+            let (major, minor, _, _) = gst::version();
+            (major, minor) >= MIN_CAMERA_GSTREAMER_VERSION
+        }
+    };
     Prerequisites {
         components,
-        capabilities: Capabilities { monitor, camera: false, input: false },
-        scope: "Installed components and advertised portal interfaces on this GNOME Wayland computer only. Availability is not capture permission, a first frame, Windows rendering, or cross-distro acceptance. Camera publication and desktop input are not implemented in this unit.",
+        capabilities: Capabilities { monitor, camera, input: false },
+        scope: "Installed components and advertised portal interfaces on this GNOME Wayland computer only. Availability is not capture permission, a first frame, Windows rendering, or cross-distro acceptance. Desktop input is not implemented in this unit.",
     }
 }

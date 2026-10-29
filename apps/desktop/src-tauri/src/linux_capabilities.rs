@@ -2,16 +2,14 @@
 //! Keeping unsupported commands out of the handler alone yields an ambiguous
 //! "command not found", rather than the product's explicit Linux limitation.
 
-const WINDOW_LIMITATION: &str = "Application-window sharing is unsupported on Linux in this unit";
+const NATIVE_CONSENT_REQUIRED: &str = "Select a monitor or application window through Add share; raw window IDs cannot authorize Linux capture";
 const REGION_LIMITATION: &str = "Region sharing is unsupported on Linux";
-const PICKER_LIMITATION: &str = "This window picker command is unsupported on Linux; use the native monitor Share action";
-const AUDIO_LIMITATION: &str = "Computer, system and application audio sharing is unsupported on Linux";
-pub(crate) const CAMERA_LIMITATION: &str = "Camera publication is unsupported on Linux";
-pub(crate) const CONTROL_LIMITATION: &str = "Remote control requests, grants, input sending and replay are unsupported on Linux";
-
-pub(crate) fn require_camera_publication() -> Result<(), String> {
-    Err(CAMERA_LIMITATION.to_string())
-}
+const PICKER_LIMITATION: &str =
+    "This window picker command is unsupported on Linux; use the native Add share action";
+const AUDIO_LIMITATION: &str =
+    "Computer, system and application audio sharing is unsupported on Linux";
+pub(crate) const CONTROL_LIMITATION: &str =
+    "Remote control requests, grants, input sending and replay are unsupported on Linux";
 
 pub(crate) fn require_remote_input() -> Result<(), String> {
     Err(CONTROL_LIMITATION.to_string())
@@ -19,11 +17,10 @@ pub(crate) fn require_remote_input() -> Result<(), String> {
 
 pub(crate) fn command_error(command: &str) -> Option<&'static str> {
     match command {
-        "share_window" | "toggle_window_share" => Some(WINDOW_LIMITATION),
+        "share_window" | "toggle_window_share" => Some(NATIVE_CONSENT_REQUIRED),
         "toggle_region_share" | "open_region_window" => Some(REGION_LIMITATION),
         "open_system_content_picker" => Some(PICKER_LIMITATION),
         "set_share_audio_enabled" | "set_region_share_audio" => Some(AUDIO_LIMITATION),
-        "start_camera_publish_command" => Some(CAMERA_LIMITATION),
         "remote_control_send"
         | "remote_control_set_active"
         | "remote_control_request_escalation"
@@ -59,14 +56,11 @@ mod tests {
     #[test]
     fn linux_unsupported_commands_are_rejected_without_revoking_receive_or_audio() {
         for command in [
-            "share_window",
-            "toggle_window_share",
             "toggle_region_share",
             "open_region_window",
             "open_system_content_picker",
             "set_share_audio_enabled",
             "set_region_share_audio",
-            "start_camera_publish_command",
             "remote_control_send",
             "remote_control_set_active",
             "remote_control_request_escalation",
@@ -84,6 +78,9 @@ mod tests {
             let error = command_error(command).expect(command);
             assert!(error.contains("unsupported on Linux"), "{command}: {error}");
         }
+        for command in ["share_window", "toggle_window_share"] {
+            assert_eq!(command_error(command), Some(NATIVE_CONSENT_REQUIRED));
+        }
         for command in [
             "join_room_command",
             "leave_room_command",
@@ -93,9 +90,21 @@ mod tests {
             "compositor_list_windows",
             "compositor_resize_window",
             "current_room",
+            "open_window_picker_window",
+            "linux_picture_shares",
+            "stop_linux_picture_share",
+            "stop_all_shares",
             "room_presence",
         ] {
             assert_eq!(command_error(command), None, "{command} remains admitted");
         }
+    }
+
+    #[test]
+    fn camera_publish_command_is_admitted_while_input_stays_refused() {
+        assert!(command_error("start_camera_publish_command").is_none());
+        assert!(command_error("remote_control_send").is_some());
+        assert!(command_error("set_share_audio_enabled").is_some());
+        assert!(command_error("share_window").is_some());
     }
 }

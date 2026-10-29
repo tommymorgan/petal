@@ -48,7 +48,13 @@ pub struct SessionState {
     desired_mic_muted: AtomicBool,
     camera_intent: AtomicBool,
     camera_healing: AtomicBool,
-    pub(crate) monitor: Arc<crate::linux_share::MonitorOwner>,
+    /// The application-scoped camera owner (ADR 0003): one low-level
+    /// capture shared by publication and Settings-preview leases.
+    pub(crate) cameras: Arc<crate::linux_camera::LinuxCameraOwner>,
+    /// The published local camera, if the Video control turned it on.
+    /// Torn down by stop_camera_publish and by leave_room.
+    camera: Mutex<Option<crate::camera_session::ActiveCamera>>,
+    pub(crate) pictures: Arc<crate::linux_share::PictureOwner>,
 }
 
 impl Default for SessionState {
@@ -63,7 +69,9 @@ impl Default for SessionState {
             desired_mic_muted: AtomicBool::new(true),
             camera_intent: AtomicBool::new(false),
             camera_healing: AtomicBool::new(false),
-            monitor: Arc::new(crate::linux_share::MonitorOwner::default()),
+            cameras: crate::linux_camera::global_owner(),
+            camera: Mutex::new(None),
+            pictures: Arc::new(crate::linux_share::PictureOwner::default()),
         }
     }
 }
@@ -83,7 +91,7 @@ impl SessionState {
 
     pub(crate) fn invalidate_room_generation(&self) {
         self.generation.fetch_add(1, Ordering::SeqCst);
-        self.monitor.cancel();
+        self.pictures.cancel();
     }
 
     pub(crate) fn is_in_room(&self) -> bool {
@@ -97,8 +105,12 @@ impl SessionState {
             .map(|joined| (joined.connection.clone(), joined.identity.clone()))
     }
 
-    pub(crate) fn monitor_connection_snapshot(&self) -> Option<(Arc<RoomConnection>, RoomGeneration)> {
-        self.joined.lock_unpoisoned().as_ref()
+    pub(crate) fn picture_connection_snapshot(
+        &self,
+    ) -> Option<(Arc<RoomConnection>, RoomGeneration)> {
+        self.joined
+            .lock_unpoisoned()
+            .as_ref()
             .filter(|joined| joined.generation.is_current())
             .map(|joined| (joined.connection.clone(), joined.generation.clone()))
     }
@@ -121,15 +133,16 @@ impl SessionState {
     }
 
     pub(crate) fn is_share_active(&self, window_id: u32) -> bool {
-        self.monitor.frame(window_id).is_some()
+        self.pictures.frame(window_id).is_some()
     }
 
     pub(crate) fn is_display_share(&self, window_id: u32) -> bool {
-        self.is_share_active(window_id)
+        self.pictures.source_kind(window_id)
+            == Some(crate::transport::publisher::SharedSourceKind::Display)
     }
 
     pub(crate) fn active_share_frame(&self, window_id: u32) -> Option<WindowFrame> {
-        self.monitor.frame(window_id)
+        self.pictures.frame(window_id)
     }
 
     pub(crate) fn active_share_pid(&self, _window_id: u32) -> Option<i32> {
@@ -137,11 +150,19 @@ impl SessionState {
     }
 
     pub(crate) fn active_share_source_title(&self, window_id: u32) -> Option<String> {
-        self.is_share_active(window_id).then(|| "Selected monitor".to_string())
+        self.pictures.source_kind(window_id).map(|kind| {
+            match kind {
+                crate::transport::publisher::SharedSourceKind::Display => "Selected monitor",
+                _ => "Selected window",
+            }
+            .to_string()
+        })
     }
 
     pub(crate) fn shared_window_screen_status(&self, window_id: u32) -> SharedWindowScreenStatus {
-        self.monitor.frame(window_id).map(SharedWindowScreenStatus::OnScreen)
+        self.pictures
+            .frame(window_id)
+            .map(SharedWindowScreenStatus::OnScreen)
             .unwrap_or(SharedWindowScreenStatus::NotShared)
     }
 
@@ -224,7 +245,7 @@ impl SessionState {
     }
 
     pub(crate) fn camera_publishing(&self) -> bool {
-        false
+        self.camera.lock_unpoisoned().is_some()
     }
 
     pub(crate) fn camera_intent(&self) -> bool {
@@ -245,19 +266,33 @@ impl SessionState {
         self.camera_healing.store(false, Ordering::SeqCst);
     }
 
-    pub(crate) fn take_active_camera(&self) -> Option<ActiveCamera> {
-        None
+    pub(crate) fn take_active_camera(&self) -> Option<crate::camera_session::ActiveCamera> {
+        self.camera.lock_unpoisoned().take()
     }
 
-    pub(crate) fn put_active_camera(&self, camera: &mut Option<ActiveCamera>) -> bool {
+    pub(crate) fn put_active_camera(
+        &self,
+        camera: &mut Option<crate::camera_session::ActiveCamera>,
+    ) -> bool {
         // Never consume a capture without a live room; the caller owns cleanup.
-        camera.is_none()
+        if !self.is_in_room() || camera.is_none() || self.camera_publishing() {
+            return false;
+        }
+        *self.camera.lock_unpoisoned() = camera.take();
+        true
     }
 
     pub(crate) fn take_active_camera_matching(
         &self,
-        _status: &crate::transport::camera::CameraStatus,
-    ) -> Option<ActiveCamera> {
+        status: &crate::transport::camera::CameraStatus,
+    ) -> Option<crate::camera_session::ActiveCamera> {
+        let mut camera = self.camera.lock_unpoisoned();
+        if camera
+            .as_ref()
+            .is_some_and(|active| status.same_capture(&active.status))
+        {
+            return camera.take();
+        }
         None
     }
 }
@@ -668,6 +703,10 @@ pub(crate) async fn cleanup_for_forced_disconnect(
 async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: bool) {
     state.invalidate_room_generation();
     state.set_camera_intent(false);
+    // The room-owned camera publication retires with the room (C07); an
+    // explicitly visible Settings preview keeps its own lease.
+    crate::camera_session::stop_camera_publish(app, state).await;
+    state.cameras.room_left();
     crate::ai_chat::room_auth::forget();
     let joined = state.joined.lock_unpoisoned().take();
     if let Some(joined) = joined {
@@ -680,8 +719,8 @@ async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: b
                 log::warn!("linux session: room close failed: {error}");
             }
         }
-        if let Err(error) = state.monitor.stop(app).await {
-            log::warn!("linux monitor cleanup after room retirement: {error}");
+        if let Err(error) = state.pictures.stop(app).await {
+            log::warn!("linux picture cleanup after room retirement: {error}");
         }
         let _ = tauri::Emitter::emit(
             app,

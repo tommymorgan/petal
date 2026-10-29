@@ -395,13 +395,34 @@ mod macos {
         "authorized".to_string()
     }
     pub fn check_camera() -> String {
+        #[cfg(target_os = "linux")]
+        {
+            // X03: camera permission is the live Camera-portal state, never
+            // a platform default claiming granted access.
+            return crate::linux_camera::global_owner()
+                .permission_status()
+                .as_str()
+                .to_string();
+        }
+        #[cfg(not(target_os = "linux"))]
         "authorized".to_string()
     }
     pub fn request_microphone() -> String {
         "authorized".to_string()
     }
-    pub fn request_camera() -> String {
-        "authorized".to_string()
+    pub async fn request_camera(app: tauri::AppHandle) -> String {
+        #[cfg(target_os = "linux")]
+        {
+            // An explicit permission request goes through the real Camera
+            // portal dialog; its outcome is reported as-is.
+            let owner = crate::linux_camera::global_owner();
+            return owner.request_permission(&app).await.as_str().to_string();
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = app;
+            "authorized".to_string()
+        }
     }
     pub fn check_accessibility() -> bool {
         true
@@ -463,11 +484,22 @@ pub fn request_microphone() -> String {
     status
 }
 
-/// Camera — triggers the OS prompt (if not yet decided), blocks until the user
-/// answers (or a 60s timeout), then returns the resulting auth status string.
+/// Camera — triggers the OS prompt on macOS (if not yet decided) or the
+/// real Camera portal dialog on Linux; blocks until the user answers or a
+/// bounded timeout passes, then returns the resulting auth status string.
 #[tauri::command]
-pub fn request_camera() -> String {
+pub async fn request_camera(app: tauri::AppHandle) -> String {
+    #[cfg(target_os = "linux")]
+    let status = {
+        // An explicit permission request goes through the real Camera
+        // portal dialog; the outcome is reported as-is.
+        let owner = crate::linux_camera::global_owner();
+        owner.request_permission(&app).await.as_str().to_string()
+    };
+    #[cfg(target_os = "macos")]
     let status = macos::request_camera();
+    #[cfg(target_os = "windows")]
+    let status = macos::request_camera(app).await;
     if status == "denied" || status == "restricted" {
         crate::analytics::permission_denied(crate::analytics::PermissionKind::Camera);
     }
@@ -509,7 +541,8 @@ mod tests {
         assert_eq!(super::check_microphone(), "authorized");
         assert_eq!(super::request_microphone(), "authorized");
         assert_eq!(super::check_camera(), "authorized");
-        assert_eq!(super::request_camera(), "authorized");
+        // request_camera is an async Tauri command needing an AppHandle; the
+        // synchronous shim surface it dispatches to is what stays pinned.
         assert!(super::check_accessibility());
         assert_eq!(
             super::request_accessibility(),

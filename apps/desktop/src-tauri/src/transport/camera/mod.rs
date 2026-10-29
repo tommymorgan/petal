@@ -19,10 +19,10 @@ pub mod mf; // Windows-only (the file carries its own #![cfg] gate)
 
 // Re-export the concrete capture type so consumers can name the adapter
 // when they need its inherent API (tests, the Windows loss monitor).
-#[cfg(target_os = "windows")]
-pub use mf::CameraCapture;
 #[cfg(target_os = "macos")]
 pub use avf::CameraCapture;
+#[cfg(target_os = "windows")]
+pub use mf::CameraCapture;
 
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum CameraError {
@@ -59,7 +59,7 @@ pub struct AppliedCameraDevice {
 /// A user-chosen camera capture mode (Settings resolution/FPS menus).
 /// `frame_rate` is the integer fps preset (15/30/60); matching against the
 /// camera's native modes rounds 29.97-style rates to the nearest integer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PreferredCameraMode {
     pub width: u32,
     pub height: u32,
@@ -413,22 +413,29 @@ pub fn open_camera(
 }
 
 #[cfg(target_os = "linux")]
+/// Devices come from the Camera portal's restricted PipeWire registry
+/// (ADR 0003); without a granted permission session nothing is listed.
 pub fn list_devices() -> Result<Vec<CameraDeviceInfo>, CameraError> {
-    Err(CameraError::UnsupportedPlatform)
+    Ok(crate::linux_camera::global_owner().devices())
 }
 
 #[cfg(target_os = "linux")]
-pub fn list_modes(_preferred_device_id: Option<&str>) -> Result<Vec<CameraMode>, CameraError> {
-    Err(CameraError::UnsupportedPlatform)
+/// Modes come from the selected node's SPA_PARAM_EnumFormat parameters; an
+/// unlisted or unavailable node yields no modes rather than guessed ones.
+pub fn list_modes(preferred_device_id: Option<&str>) -> Result<Vec<CameraMode>, CameraError> {
+    Ok(crate::linux_camera::global_owner().modes(preferred_device_id))
 }
 
 #[cfg(target_os = "linux")]
 pub fn open_camera(
     _preferred_device_id: Option<&str>,
     _preferred_mode: Option<PreferredCameraMode>,
-    _on_frame: impl Fn(CameraFrame) + Send + Sync + 'static,
+    on_frame: impl Fn(CameraFrame) + Send + Sync + 'static,
 ) -> Result<Box<dyn CameraBackend>, CameraError> {
-    Err(CameraError::UnsupportedPlatform)
+    // The portal dialog and the capture start already ran in the Linux
+    // prepare step; this acquires the publication lease on that capture.
+    crate::linux_camera::LinuxCameraLease::open(on_frame)
+        .map(|lease| lease as Box<dyn CameraBackend>)
 }
 
 // ---------------------------------------------------------------------------
@@ -502,9 +509,13 @@ impl FrameLayout {
     /// not a dependency on macOS, so this cannot live under `test`-cfg code
     /// that macOS test builds compile).
     #[cfg(target_os = "windows")]
-    fn from_media_type(media_type: &windows::Win32::Media::MediaFoundation::IMFAttributes) -> Result<Self, CameraError> {
-        let packed = unsafe { media_type.GetUINT64(&windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE) }
-            .map_err(|error| operation_error("camera media type has no frame size", error))?;
+    fn from_media_type(
+        media_type: &windows::Win32::Media::MediaFoundation::IMFAttributes,
+    ) -> Result<Self, CameraError> {
+        let packed = unsafe {
+            media_type.GetUINT64(&windows::Win32::Media::MediaFoundation::MF_MT_FRAME_SIZE)
+        }
+        .map_err(|error| operation_error("camera media type has no frame size", error))?;
         Self::new((packed >> 32) as u32, packed as u32)
     }
 
