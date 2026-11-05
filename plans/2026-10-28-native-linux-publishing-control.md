@@ -919,34 +919,42 @@ Scenario Outline: Exchange separately authorized clipboard text as Linux control
 <!-- estimate: ~1600–2600 reviewable lines (low confidence) | feature-files: apps/desktop/features/linux-desktop-control.feature | demoable: yes -->
 > Depends on: Task 3.1.
 > Shippable state: Linux windows stay view-only; one explicit desktop-control session and controller work with same-session picture mapping, complete grant/clipboard validation and full revocation. No successor is needed for safety.
-> Boundary verification: With released Windows, deny a Linux window request; prepare a monitor with explicit desktop disclosure and source re-selection; verify fresh-instance grant, scaled pointer corners, keyboard/scroll, competing request rejection and host-side clipboard bounds. Revoke during held input and replay retired packets, including EIS loss before release; observe no input, closed input session and controlled share retired. Repeat X03 UI/direct-command checks: only prepared/granted Linux desktops permit replay; application-window replay is still denied.
+> Boundary verification: Keep released Windows as the media and window-refusal baseline. Use an owned temporary updated Windows candidate for exact-request positive control; never replace the installed release.
+> Prepare a monitor with explicit desktop disclosure and source re-selection; verify a fresh-instance grant, scaled pointer corners, keyboard/scroll, competing request rejection and host-side clipboard bounds.
+> Revoke during held input and replay retired packets, including EIS loss before release; observe no input, closed input session and controlled share retired.
+> Repeat X03 UI/direct-command checks: only prepared/granted Linux desktops permit replay; application-window replay is still denied.
 
-<!-- TODO -->
-<!-- November 5 actual H01 window check: safety behavior verified, H01 NOT
-accepted. Tommy completed the real native chooser for the owned editor only;
-linux_picture_shares reported sourceKind=window, one share. Released Windows
-decoded that picture, with frames161→269 across the control attempts. Its real
-Control button stayed disabled with "Preparing remote control… it will enable
-automatically", not an explicit view-only explanation. The real Windows
-remote_control_set_active request command fulfilled with false; that return is
-not proof of an active grant or an explicit host denial.
-The actual Linux global-enable, per-share-enable and answer-consent commands
-all rejected with the Linux-host unsupported error. Linux's real menu likewise
-marks request/grant unsupported. No owned RemoteDesktop/InputCapture calls or
-unattributed calls were observed, and the editor recorded no key/pointer events
-or text changes. No camera, unmuted microphone, desktop grant or input injection.
-Thus the live picture is safe under the current GLOBAL host refusal, but the
-window-specific view-only feedback/host-capability contract remains unverified;
-the misleading Windows preparing state must not be counted as H01 completion.
-The earlier manual-picker blocker is resolved. Client/editor/guard/helper
-cleanup verified, room empty, VM/release unchanged. Current receipts:
-/tmp/petal-h01-resume-ri03q_pt/actual-window-boundary-check.json and cleanup.json.
-No product code changes, publication or shared-service changes. -->
-# Requirement: H01
-# Living: apps/desktop/features/linux-desktop-control.feature::Linux window shares cannot grant desktop input
+> Local implementation checkpoint, November 5: native hosting and UI are implemented,
+> but no Task 4.1 scenario is accepted from code or unit checks alone. Native unit
+> tests, frontend checks, Linux/Windows builds, the actual no-authority UI/command
+> boundary and isolated Linux/Windows producer mutations passed. See
+> [bounded evidence and live limits](../docs/VALIDATION.md#linux-desktop-host-task-41-local-code-live-acceptance-pending).
+> November 6 second attended run (same room/scale/peer) completed the live
+> acceptance matrix: H01, H04 and H06 are accepted DONE with living scenarios
+> recorded; H02, H03 and H05 carry verified live rows with named untested
+> examples; host-direction R04 is BLOCKED by a live product defect
+> (controller clipboard requests silently never reach the host handler).
+> Full per-scenario evidence comments and receipts are inline below and in
+> docs/VALIDATION.md. Owned clients cleaned up; original scale restored; no
+> grant remains.
+
+<!-- DONE 2026-11-06 -->
+<!-- November 6 attended live acceptance (room usf-nfrw-ktq, DP-1 at 150
+percent, owned temporary updated Windows peer): the receiver's Control
+action was disabled with the exact label "View only — application-window
+shares cannot receive remote input", metadata remoteControlViewOnly=1, and
+the picture really decoded (1224x832, frames advancing). Direct preparation
+of the window target was rejected with "Application-window shares are
+view-only; select a current monitor share"; per-share enable was refused;
+state stayed idle with no controller; nothing escalated. H01 accepted.
+Living scenario recorded in apps/desktop/features/linux-desktop-control.feature.
+Receipts: /tmp/petal-task41-live2-iiw_dlxd/h01-direct-commands.json and
+/tmp/petal-task41-windows-z9Pjnj/{h01.json,h01-receiver.png}. -->
+ # Requirement: H01
+ # Living: apps/desktop/features/linux-desktop-control.feature::Linux window shares cannot grant desktop input
 # Action: creates
-# Status: TODO
-# Living updated: NO
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Linux window shares cannot grant desktop input
   Given Linux shares only the editor application window with Windows
@@ -956,7 +964,13 @@ Scenario: Linux window shares cannot grant desktop input
   And failure never escalates to desktop control
 ```
 
-<!-- TODO -->
+<!-- PARTIAL 2026-11-06: verified live at 150 percent — "approves" (active
+control reached twice through real named consent) and "declines"/"cancels"
+(the dialog's Cancel button) returning to the ready state with the picture
+share preserved and no controller admitted. Not exercised live: the consent
+request expiring unanswered, and the competing-request row. Usability
+feedback: the refusal button reads "Cancel" where "Deny" would be clearer;
+the pre-preparation warning's affirmative reads "Allow". -->
 # Requirement: H02
 # Living: apps/desktop/features/linux-desktop-control.feature::Prepare and grant Linux desktop input separately
 # Action: creates
@@ -977,7 +991,15 @@ Scenario Outline: Prepare and grant Linux desktop input separately
     | lets the request expire | no input is enabled |
 ```
 
-<!-- TODO -->
+<!-- PARTIAL 2026-11-06: missing keyboard and pointer permission together
+verified live — reselecting the combined source with "Allow remote
+interaction" off failed closed with the exact error "Desktop control
+requires both keyboard and pointer permission", the controller stayed
+absent and the original picture share survived with the receiver returning
+to its honest preparation-required view-only state. Unclaimed prepared
+states also expired fail-closed within ~3 minutes. Not exercised live:
+single-device-only denial, picker cancellation at this stage, portal
+timeout. -->
 # Requirement: H02
 # Living: apps/desktop/features/linux-desktop-control.feature::Failed native desktop permission preserves picture-only sharing
 # Action: creates
@@ -999,7 +1021,16 @@ Scenario Outline: Failed native desktop permission preserves picture-only sharin
     | missing pointer permission |
 ```
 
-<!-- TODO -->
+<!-- PARTIAL 2026-11-06: the headline mapping row verified live — a fresh
+grant on a 150 percent scaled DP-1 delivered absolute pointer clicks to
+all four corners and center in exact logical coordinates (2560x720), with
+correct press/release pairs, evdev keyboard including shift pairs, and
+proportional scroll (wheel 120 -> delta 12). Every committed replacement
+(instances 4, 8, 10, 14) was a fresh instance with no surviving grant.
+Not exercised live: resize-follow, other-monitor selection, missing or
+ambiguous mapping metadata, cancellation before replacement commit.
+Keyboard limit: composition/Text input is dropped host-side by design, so
+arbitrary Unicode text entry is unsupported; keymap keys work. -->
 # Requirement: H03
 # Living: apps/desktop/features/linux-desktop-control.feature::Bind pointer input to the committed control picture
 # Action: creates
@@ -1022,12 +1053,19 @@ Scenario Outline: Bind pointer input to the committed control picture
     | cancellation before replacement commit | the original picture-only share remains unchanged |
 ```
 
-<!-- TODO -->
-# Requirement: H04
-# Living: apps/desktop/features/linux-desktop-control.feature::Disclose desktop-wide scope before and during control
-# Action: creates
-# Status: TODO
-# Living updated: NO
+<!-- DONE 2026-11-06 -->
+<!-- Verified live: the real native disclosure (with its Allow affirmative)
+preceded every fresh combined-source selection; during two active grants
+the host UI read "Selected monitor: Task41 Windows controls your desktop"
+with the desktop-wide keyboard/focus warning and a visible "Stop
+controlled share" action; ordinary picture and window shares alone never
+authorized input (H01 + pre-preparation receiver states). H04 accepted.
+Living scenario recorded in apps/desktop/features/linux-desktop-control.feature. -->
+ # Requirement: H04
+ # Living: apps/desktop/features/linux-desktop-control.feature::Disclose desktop-wide scope before and during control
+ # Action: creates
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: Disclose desktop-wide scope before and during control
   Given Linux has an ordinary picture-only monitor share and no input grant
@@ -1040,7 +1078,19 @@ Scenario: Disclose desktop-wide scope before and during control
   And an ordinary window or monitor share alone never authorizes input
 ```
 
-<!-- TODO -->
+<!-- PARTIAL 2026-11-06: verified live — local stop (admission-first
+"revoking 1 active controller(s)", state to idle, controlled share ended);
+held input auto-released by the designed ~1.3 second TTL with synthesized
+Pointer/Key Up events injected; grant expiry (both a quiet active grant
+and an unclaimed prepared state expired fail-closed in ~3-5 minutes with
+the exact guidance error); retired-share replay rejected ("remote window
+N is not open", observed after both stop and expiry); null-coordinate and
+out-of-range (-0.5, 1.5) packets rejected with logged reasons and zero
+injection. Not exercised live: portal revocation, source loss, controller
+departure, room leave, disconnect, share-instance change while active,
+EIS-loss-before-release, invalid-token and wrong-controller packets
+(unit-proven; the sender stack also stamps token/instance/controller from
+its stored grant, so a compromised frontend cannot spoof them). -->
 # Requirement: H05
 # Living: apps/desktop/features/linux-desktop-control.feature::Reject invalid input and fully retire Linux desktop authority
 # Action: creates
@@ -1072,12 +1122,23 @@ Scenario Outline: Reject invalid input and fully retire Linux desktop authority
     | late packet from an ended grant | no input is injected by that packet |
 ```
 
-<!-- TODO -->
-# Requirement: H06
-# Living: apps/desktop/features/linux-desktop-control.feature::End control without restoring broader authority
-# Action: creates
-# Status: TODO
-# Living updated: NO
+<!-- DONE 2026-11-06 (host-side primary evidence) -->
+<!-- Verified live with editor share, real C920 camera and unmuted mic all
+running: stopping control ended only the controlled DP-1 share (editor
+share survived in host state; camera publish health continued at 24fps
+through the stop, 3241->3601 frames pushed; mic stayed unmuted), the
+controller was revoked first, and replay against the retired share was
+rejected. Every later share needed fresh native consent. Limit recorded:
+the host's own safety guard tore the session down 18 seconds after the
+stop, before the Windows peer could take a post-stop receive sample, so
+peer-side preservation corroboration is absent; host-side logs and state
+are the accepted evidence. H06 accepted on that basis.
+Living scenario recorded in apps/desktop/features/linux-desktop-control.feature. -->
+ # Requirement: H06
+ # Living: apps/desktop/features/linux-desktop-control.feature::End control without restoring broader authority
+ # Action: creates
+# Status: DONE
+# Living updated: YES
 ```gherkin
 Scenario: End control without restoring broader authority
   Given Linux publishes an actively controlled DP-1 monitor plus editor, camera and an unmuted microphone
@@ -1090,7 +1151,39 @@ Scenario: End control without restoring broader authority
   Then explicit source consent is required and any later control needs fresh preparation and approval
 ```
 
-<!-- TODO -->
+<!-- BLOCKED 2026-11-06: live product defect. Controller-originated
+clipboard operations never reach the host clipboard handler: two real
+Ctrl+C chords through the active overlay carried valid windowId, owner and
+grant token (token length 32, verified by instrumented capture), yet the
+host logged no clipboard request at all and no consent dialog appeared.
+The production UI also swallows the error (remote clipboard invoke ends
+.catch(()=>{})), and the host app's arboard backend runs on the X11
+fallback because the compositor lacks ext-data-control. Until the request
+path is fixed, the positive transfer and its rejection rows cannot pass.
+Evidence: /tmp/petal-task41-live2-iiw_dlxd/r04-blocker-and-invalid-evidence.json
+and /tmp/petal-task41-windows-z9Pjnj/clipboard-instrumented-retry.json. -->
+<!-- UPDATE 2026-11-06 evening: the host-side authorization repair is VERIFIED
+LIVE (copy request reached the host for the first time and logged "authorized
+… awaiting local consent"). Remaining layers before R04 passes: Windows maps
+an uninitialized guest clipboard (sequence 0) to "clipboard unavailable"
+(needs a product fix; initializing the clipboard works around it); and the
+parked per-operation clipboard consent dialog did not render at all — open
+bug, no dialog window appeared for the human to approve (FIXED later same
+day: fully async deadline-bounded dialogs now render — see the next note).
+Retest evidence: /tmp/petal-task41-live3-to5ranuv/r04-retest-result.json. -->
+<!-- R04 POSITIVE VERIFIED 2026-11-06 final cycle: after the three fixes
+(host-owned clipboard scope admission with logged rejections; fully async,
+deadline-bounded consent dialogs that render like the disclosure dialog;
+uninitialized-clipboard sequence handling), two separately approved
+operations each moved EXACTLY 1048576 bytes of known synthetic text —
+copy host→controller sha c5387ef4…0599e and paste controller→host sha
+9110073e…0e08c — with per-operation human consent dialogs naming the
+controller. Two earlier approved copies incidentally moved the human's own
+freshly-copied 26/23-byte content (redacted, contained, guest temp deleted),
+proving the pipeline before the synthetic retest. Rejection-example rows
+(oversize/NUL/file/image) remain unit-proven, not live-exercised; the one
+post-retirement refusal observed was the test harness's own ownership gate,
+not product code. Evidence: /tmp/petal-task41-live4-4smdnmpq/r04-final.json. -->
 # Requirement: R04
 # Living: apps/desktop/features/linux-desktop-control.feature::Exchange separately authorized clipboard text as Linux desktop sharer
 # Action: creates

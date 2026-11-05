@@ -207,15 +207,15 @@ impl SessionState {
     }
 
     pub(crate) fn remote_control_allowed(&self) -> bool {
-        false
+        self.pictures.active_ids().into_iter().any(crate::linux_desktop_control::is_prepared)
     }
 
     pub(crate) fn remote_control_policy(&self) -> RemoteControlPolicy {
-        RemoteControlPolicy::Off
+        RemoteControlPolicy::Ask
     }
 
-    pub(crate) fn share_allows_remote_control(&self, _window_id: u32) -> bool {
-        false
+    pub(crate) fn share_allows_remote_control(&self, window_id: u32) -> bool {
+        self.is_display_share(window_id) && crate::linux_desktop_control::is_prepared(window_id)
     }
 
     pub(crate) async fn lock_mic_control(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -475,9 +475,8 @@ pub(crate) async fn join_room_command(
         });
     }
     crate::resilience::start_for_room(&app, resilience_events, generation.clone());
-    // Controller-role remote control receiver: Status/Result packets from a
-    // Windows sharer (and clipboard copy responses) arrive on this
-    // subscription; host-role input stays refused inside handle_message.
+    // Common authenticated host/controller receiver; native host admission is
+    // limited to the explicitly prepared combined desktop session.
     crate::remote_control::start_receiver_for_room(
         &app,
         connection.room(),
@@ -495,6 +494,7 @@ pub(crate) async fn join_room_command(
     );
     if let Some(mut events) = events {
         let generation = generation.clone();
+        let app_events = app.clone();
         tauri::async_runtime::spawn(async move {
             loop {
                 let event = tokio::select! {
@@ -505,6 +505,9 @@ pub(crate) async fn join_room_command(
                 let Some(event) = event else { break };
                 if !generation.is_current() {
                     break;
+                }
+                if matches!(event, livekit::RoomEvent::Reconnecting | livekit::RoomEvent::Disconnected { .. }) {
+                    crate::remote_control::revoke_all(&app_events);
                 }
                 if matches!(event, livekit::RoomEvent::Disconnected { .. }) {
                     // The shared resilience watcher owns terminal room cleanup.
@@ -816,6 +819,7 @@ pub(crate) async fn cleanup_for_forced_disconnect(
 
 async fn leave_room_inner(app: &tauri::AppHandle, state: &SessionState, close: bool) {
     state.invalidate_room_generation();
+    crate::remote_control::revoke_all(app);
     state.set_camera_intent(false);
     // The room-owned camera publication retires with the room (C07); an
     // explicitly visible Settings preview keeps its own lease.

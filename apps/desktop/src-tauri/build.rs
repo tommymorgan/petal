@@ -28,6 +28,12 @@ const LINK_WRAPPED_PIPEWIRE_SYMBOLS: [&str; 14] = [
 ];
 
 fn main() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+        let available = std::process::Command::new("pkg-config")
+            .args(["--atleast-version=1.6.0", "libei-1.0"]).status()
+            .expect("Linux desktop control requires pkg-config and libei-1.0 development files");
+        assert!(available.success(), "Linux desktop control requires libei >= 1.6.0 development files");
+    }
     // The Rust unit-test harness (`cargo test --lib`) imports
     // `TaskDialogIndirect`, which exists only in Common Controls v6. The
     // shipped `desktop` binary gets the v6 manifest from tauri-build

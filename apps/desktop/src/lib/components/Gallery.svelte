@@ -37,6 +37,8 @@
   import { tileLayoutDuration, tileTransitionDuration, uniformTileFlip, uniformTileFlipInFlight } from '$lib/motion';
   import { stepFitLadder } from '$lib/meeting/fitLadder';
   import type { DrawUpdate, LinuxPictureShare } from '$lib/ipc';
+  import LinuxDesktopControl from './LinuxDesktopControl.svelte';
+  import type { LinuxDesktopControlState } from '$lib/ipc';
 
   export interface GalleryParticipant {
     /** Stable participant identity when the real route has one. Falls back to
@@ -84,6 +86,9 @@
     remoteControlAllowed?: boolean;
     onControl?: (icon: ControlIcon) => void;
     pictureShares?: LinuxPictureShare[];
+    desktopControlState?: LinuxDesktopControlState | null;
+    onPrepareDesktopControl?: (windowId: number) => void;
+    onStopDesktopControl?: (windowId: number) => void;
     onAddShare?: () => void;
     onChangeShare?: (windowId: number) => void;
     onStopShare?: (windowId: number) => void;
@@ -152,6 +157,9 @@
     remoteControlAllowed = true,
     onControl,
     pictureShares = [],
+    desktopControlState = null,
+    onPrepareDesktopControl,
+    onStopDesktopControl,
     onAddShare,
     onChangeShare,
     onStopShare,
@@ -1048,6 +1056,7 @@
       {@render topbarAction?.()}
     </div>
   </div>
+  <LinuxDesktopControl shares={pictureShares} state={desktopControlState} onPrepare={onPrepareDesktopControl} onStop={onStopDesktopControl} />
 
   <div class="gallery-body">
   <div
@@ -1327,11 +1336,9 @@
           </span>
         </button>
         {#if linuxMeetingLimitation('remotecontrol')}
-          {#each ['Request remote control', 'Grant remote control', 'Send remote input', 'Replay remote input'] as action}
-            <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" disabled title={linuxMeetingLimitation('remotecontrol')}>
-              <span class="meeting-menu-row-copy">{action} — unsupported on Linux</span>
-            </button>
-          {/each}
+          <button type="button" class="meeting-menu-row gallery-more-item" role="menuitem" disabled>
+            <span class="meeting-menu-row-copy">{linuxMeetingLimitation('remotecontrol')}</span>
+          </button>
         {:else}
         <button type="button" class="meeting-menu-row gallery-more-item" role="menuitemcheckbox" aria-checked={remoteControlAllowed} onclick={() => selectGalleryMore('remotecontrol')}>
           <span class="more-item-leading">

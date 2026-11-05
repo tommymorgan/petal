@@ -533,8 +533,15 @@ const MAX_REPLAY_TEXT_SLICE_CHARS: usize = 32;
 const ACTIVATION_PUBLISH_ATTEMPTS: usize = 5;
 const ACTIVATION_RETRY_DELAY: Duration = Duration::from_millis(120);
 pub(crate) const CONTROLLER_REQUEST_TIMEOUT_MS: u64 = 8_000;
-const CONTROLLER_REQUEST_TIMEOUT_MESSAGE: &str =
-    "Remote control request timed out. Check Accessibility on the shared Mac, then try again.";
+const CONTROLLER_REQUEST_TIMEOUT_MESSAGE: &str = if cfg!(target_os = "macos") {
+    "Remote control request timed out. Check Accessibility on the shared Mac, then try again."
+} else {
+    // Measured live 2026-11-07: a Windows controller staring at a Linux host
+    // was told to "check Accessibility on the shared Mac". The AX hint is a
+    // macOS-only failure mode; everywhere else the honest cause is that the
+    // sharer never answered in time.
+    "Remote control request timed out before the sharer responded. Try again."
+};
 // #372: cap injection-failure status packets to ~1/sec per (window,
 // controller) so a sustained AX/injection failure (e.g. every pointer-move
 // event failing) doesn't spam the controller with a status packet per event.
@@ -1442,6 +1449,8 @@ fn should_accept_unreliable_seq(message: &RemoteControlMessage) -> bool {
 /// Reconnects preserve grants, but any held input whose release packet was in
 /// flight must be released before the transport resumes (issue #371).
 pub(crate) fn release_held_inputs_for_reconnect() -> usize {
+    #[cfg(target_os = "linux")]
+    crate::linux_desktop_control::retire_all();
     let releases = drain_all_pressed();
     let count = releases.len();
     enqueue_synthetic_releases(releases, "transparent reconnect");
@@ -1485,11 +1494,11 @@ fn enqueue_synthetic_releases(tasks: Vec<ReplayTask>, reason: &str) {
 fn active_status_for_session(
     window_id: u32,
     controller_id: String,
-    grant_token: String,
+    grant_token: Option<String>,
 ) -> RemoteControlStatus {
     RemoteControlStatus { request_id: remote_control_engine().host_request_id(window_id, &controller_id), window_id, owner_identity: None, controller_id, status: "active",
     message: "Remote control active for shared window".to_string(),
-    grant_token: Some(grant_token),
+    grant_token,
     reason: None, }
 }
 
@@ -1497,27 +1506,95 @@ fn active_status_for_session(
 /// The forced path is intentional: normal status de-duplication would hide
 /// this status from a controller whose data channel was recreated (#371).
 pub(crate) fn reemit_active_statuses(app: &AppHandle, state: &SessionState) {
+    let controllers: Vec<String> = {
+        let sessions = sessions().lock_unpoisoned();
+        let mut controllers: Vec<String> = sessions
+            .keys()
+            .map(|key| key.controller_id.clone())
+            .collect();
+        controllers.sort();
+        controllers.dedup();
+        controllers
+    };
+    for controller_id in controllers {
+        reemit_active_statuses_for_controller(app, state, &controller_id);
+    }
+}
+
+/// Windows this controller currently holds grants for, deduplicated across
+/// the legacy and v2 grant keys the same window can carry. Sorted for
+/// deterministic announcement order.
+pub(crate) fn granted_windows_for_controller(controller_id: &str) -> Vec<u32> {
+    let mut windows: Vec<u32> = sessions()
+        .lock_unpoisoned()
+        .keys()
+        .filter(|key| key.controller_id == controller_id)
+        .map(|key| key.window_id)
+        .collect();
+    // A Linux desktop-control host tracks its single prepared desktop share
+    // in the desktop-control authority, not the generic grant map — without
+    // this union the #820 re-announce silently no-ops for exactly that
+    // topology (measured live 2026-11-06: "grants kept" logged, nothing
+    // emitted, the controller's recreated pages stayed down).
+    #[cfg(target_os = "linux")]
+    if let Some(window_id) =
+        crate::linux_desktop_control::active_window_for_controller(controller_id)
+    {
+        windows.push(window_id);
+    }
+    windows.sort_unstable();
+    windows.dedup();
+    windows
+}
+
+/// Reannounce ONE controller's still-active grants. Used when that controller
+/// reconnects: the host kept its grants (#820 stale-disconnect resolution),
+/// but the controller's own control overlay may have torn itself down when
+/// its connection dropped — measured live 2026-11-06, a 20s network outage
+/// left the host active while the Windows controller's overlay deactivated
+/// and locally gated all input. Host authority is the truth, so it re-emits
+/// `active` (forced: the lifecycle de-dup latch already holds `active` for
+/// these windows and would swallow a plain re-emit).
+pub(crate) fn reemit_active_statuses_for_controller(
+    app: &AppHandle,
+    state: &SessionState,
+    controller_id: &str,
+) {
     let Some((_, local_identity)) = state.control_channel_snapshot() else {
-        log::warn!("remote-control: cannot re-emit active statuses without a joined room");
+        log::warn!(
+            "remote-control: cannot re-emit active statuses to '{controller_id}' without a joined room"
+        );
         return;
     };
-    let active: Vec<(u32, String, String)> = sessions()
-        .lock_unpoisoned()
-        .iter()
-        .map(|(key, grant_token)| {
-            (
-                key.window_id,
-                key.controller_id.clone(),
-                grant_token.clone(),
-            )
-        })
-        .collect();
-    for (window_id, controller_id, grant_token) in active {
+    let sessions = sessions().lock_unpoisoned();
+    for window_id in granted_windows_for_controller(controller_id) {
+        // The generic grant map is the first token source (both grant keys
+        // for a window carry the same value in practice), the engine's
+        // legacy key the second. A Linux desktop-control admission can have
+        // NEITHER — its authority lives in the desktop-control module — in
+        // which case the re-announce is still emitted tokenless: it never
+        // MINTS authorization, the grant itself stands, and tokenless-input
+        // compatibility on the controller covers the rest. Skipping it
+        // (the earlier `continue`) silently no-ops the whole re-announce for
+        // exactly that topology (measured live 2026-11-07: "grants kept"
+        // logged, nothing emitted).
+        let grant_token = sessions
+            .iter()
+            .find(|(key, _)| {
+                key.window_id == window_id && key.controller_id == controller_id
+            })
+            .map(|(_, token)| token.clone())
+            .or_else(|| {
+                remote_control_engine().active_grant_token(&ControlGrantKey::legacy(
+                    window_id,
+                    controller_id,
+                ))
+            });
         emit_and_send_status_forced(
             app,
             state,
             &local_identity,
-            active_status_for_session(window_id, controller_id, grant_token),
+            active_status_for_session(window_id, controller_id.to_string(), grant_token),
         );
     }
 }
@@ -1608,6 +1685,8 @@ fn revoke(window_id: u32, controller_id: &str) {
         bump_replay_epoch(window_id, controller_id, "controller revoked");
     }
     reset_unreliable_seq(window_id, controller_id);
+    #[cfg(target_os = "linux")]
+    crate::linux_desktop_control::retire_controller(window_id, controller_id);
     enqueue_synthetic_releases(releases, "controller revoked");
 }
 
@@ -1688,6 +1767,8 @@ fn drain_window_control_releasing(
 }
 
 pub(crate) fn revoke_window(app: &AppHandle, window_id: u32, reason: &'static str) {
+    #[cfg(target_os = "linux")]
+    crate::linux_desktop_control::retire(window_id);
     deny_pending_requests_where(
         app,
         |pending_window, _| pending_window == window_id,
@@ -1721,6 +1802,8 @@ pub(crate) fn revoke_window(app: &AppHandle, window_id: u32, reason: &'static st
 }
 
 pub(crate) fn revoke_all(app: &AppHandle) {
+    #[cfg(target_os = "linux")]
+    crate::linux_desktop_control::retire_all();
     #[cfg(target_os = "windows")]
     clear_escalations_where(|_, _| true);
     deny_pending_requests_where(
@@ -1832,8 +1915,24 @@ pub(crate) fn revoke_controller(app: &AppHandle, controller_id: &str, reason: &'
         // only ITS state per window — never another concurrent controller's
         // gesture or replay epoch on the same window.
         platform_control().clear_controller_gestures(*window_id, controller_id);
+        // Linux desktop-control teardown: a departed controller's desktop
+        // admission must retire WITH its grant. `revoke()` already does
+        // this for per-window revocation; the confirmed-departure path
+        // removed grants directly and used to leave the Linux desktop
+        // authority "active" (EIS live) until a deadline reaped it —
+        // turning the old absolute 300s bound into the only vanish-reaper.
+        #[cfg(target_os = "linux")]
+        crate::linux_desktop_control::retire_controller(*window_id, controller_id);
         bump_replay_epoch(*window_id, controller_id, reason);
     }
+    // The loop above only covers windows recorded in the generic grant
+    // map. A Linux desktop-control grant lives in the desktop-control
+    // authority instead (measured live 2026-11-07: a confirmed departure
+    // left the admission active — "in use by another named controller" —
+    // because this map had no entry for it), so retire that admission by
+    // CONTROLLER here, independent of the loop.
+    #[cfg(target_os = "linux")]
+    crate::linux_desktop_control::retire_controller_admission(controller_id);
     if active.is_empty() {
         log::debug!(
             "remote-control: revoke_controller('{controller_id}') no active windows ({reason})"
@@ -1863,7 +1962,7 @@ fn is_authorized(window_id: u32, controller_id: &str) -> bool {
         .contains_key(&ControlGrantKey::legacy(window_id, controller_id))
 }
 
-fn is_authorized_input(message: &RemoteControlMessage) -> bool {
+pub(crate) fn is_authorized_input(message: &RemoteControlMessage) -> bool {
     let Some(grant_key) = ControlGrantKey::for_message(message) else {
         return false;
     };
@@ -2296,6 +2395,8 @@ pub(crate) struct ControlConsentRequestedPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub window_title: Option<String>,
     pub timeout_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_scope: Option<&'static str>,
 }
 
 #[cfg(target_os = "windows")]
@@ -2488,7 +2589,10 @@ fn park_consent_request(
         controller_name: controller_display_name(state, &controller_id),
         window_title: state.active_share_source_title(window_id),
         timeout_ms: CONSENT_TIMEOUT.as_millis() as u64,
+        control_scope: if cfg!(target_os = "linux") { Some("desktop") } else { None },
     };
+    #[cfg(target_os = "linux")]
+    crate::linux_desktop_control::present_controller_consent(app, &payload);
     let _ = app.emit("control-consent-requested", payload);
     let app_for_timer = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -2541,6 +2645,8 @@ pub(crate) fn answer_consent(
         log::warn!("remote-control: consent answered outside a joined room; dropping");
         return false;
     };
+    #[cfg(target_os = "linux")]
+    if approve && crate::linux_desktop_control::validate_request(&message).is_err() { return false; }
     if !approve {
         log::info!(
             "remote-control: sharer denied control for '{controller_id}' on window {window_id} ({reason:?})"
@@ -3483,6 +3589,11 @@ fn replay_high_rate_drop_count() -> u32 {
 }
 
 fn emit_status(app: &AppHandle, status: RemoteControlStatus) {
+    #[cfg(target_os = "linux")]
+    if matches!(status.status, "stopped" | "disabled") {
+        crate::linux_desktop_control::status(status.window_id, &status.controller_id, &status.controller_id,
+            status.request_id.as_deref(), status.status);
+    }
     if !should_deliver_status(&status, false) {
         return;
     }
@@ -3504,6 +3615,7 @@ fn emit_and_send_status(
     local_identity: &str,
     status: RemoteControlStatus,
 ) {
+    settle_host_status(state, &status);
     if !should_deliver_status(&status, false) {
         return;
     }
@@ -3516,10 +3628,26 @@ fn emit_and_send_status_forced(
     local_identity: &str,
     status: RemoteControlStatus,
 ) {
+    settle_host_status(state, &status);
     if !should_deliver_status(&status, true) {
         return;
     }
     emit_and_send_status_unchecked(app, state, local_identity, status);
+}
+
+// Authority transitions must not depend on presentation deduplication. In
+// particular, cancelling A2 after A1 was also cancelled must release A2's
+// pending slot even when its second "stopped" notification is suppressed.
+fn settle_host_status(_state: &SessionState, status: &RemoteControlStatus) {
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux_desktop_control::status(status.window_id, &status.controller_id,
+            &controller_display_name(_state, &status.controller_id), status.request_id.as_deref(), status.status);
+    }
+    if matches!(status.status, "stopped" | "disabled" | "denied" | "requestUnavailable" | "requestFailed") {
+        remote_control_engine().retire_host_request(
+            status.window_id, &status.controller_id, status.request_id.as_deref());
+    }
 }
 
 fn emit_and_send_status_unchecked(
@@ -3531,10 +3659,6 @@ fn emit_and_send_status_unchecked(
     log_status_emitted("local+controller", &status);
     crate::region_window::emit_region_control_state_for_status(app, &status);
     send_status_to_controller(state, local_identity, &status);
-    if matches!(status.status, "stopped" | "disabled" | "denied" | "requestUnavailable" | "requestFailed") {
-        remote_control_engine().retire_host_request(
-            status.window_id, &status.controller_id, status.request_id.as_deref());
-    }
     let _ = app.emit("remote-control-status", status);
 }
 
@@ -3689,8 +3813,10 @@ fn status_packet_for(status: &RemoteControlStatus, local_identity: &str) -> Remo
     // It never publishes a `share_instance_id`, so no controller can send the
     // capable envelope at it, so `target_kind` above is always None here and no
     // v2 grant key ever exists. Empty is the honest answer, NOT the #802 bug.
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let host_capabilities = Vec::new();
+    #[cfg(target_os = "linux")]
+    let host_capabilities = crate::linux_desktop_control::host_capabilities(status.window_id);
     RemoteControlMessage { request_id: status.request_id.clone(), v: VERSION,
     message_type: RemoteControlType::Status,
     action: None,
@@ -3740,15 +3866,9 @@ fn status_packet_for(status: &RemoteControlStatus, local_identity: &str) -> Remo
     status: Some(status.status.to_string()),
     message: Some(status.message.clone()),
     grant_token: status.grant_token.clone(),
-    // #370 corrective pass: unconditionally true on an "active" status --
-    // its presence is the whole capability signal. Only a host running
-    // this corrective-pass code path ever reaches this line at all, so
-    // there is no version check to make: an old host's status packet
-    // just never sets the field, which decodes as `false` by default.
-    // Must be true on Windows too -- the host_capabilities/grant above
-    // are negotiated regardless of platform, and the controller relies
-    // on this flag to switch pointer/wheel sends to the binary encoding.
-    supports_binary_hot_path: status.status == "active",
+    // The compact binary frame cannot carry exact desktop instance identity.
+    // Linux hosts therefore require scoped JSON for their continuous stream.
+    supports_binary_hot_path: status.status == "active" && !cfg!(target_os = "linux"),
     modifiers: RemoteControlModifiers::default(), }
 }
 
@@ -4326,27 +4446,6 @@ fn handle_message(
     trusted_sender: Option<String>,
     message: RemoteControlMessage,
 ) {
-    #[cfg(target_os = "linux")]
-    if matches!(
-        message.message_type,
-        RemoteControlType::Request
-            | RemoteControlType::Release
-            | RemoteControlType::Pointer
-            | RemoteControlType::Wheel
-            | RemoteControlType::Key
-            | RemoteControlType::Text
-    ) {
-        // Linux never acts as the remote-control host: requests to control a
-        // local share, release handling and input replay stay refused until
-        // Task 4.1 owns that path. Controller-role packets (Status, Result)
-        // continue below.
-        log::debug!(
-            "remote-control: refusing host-role {:?} packet from '{}' on Linux",
-            message.message_type,
-            message.controller_id
-        );
-        return;
-    }
     if message.target_user_id != local_identity {
         if should_log_message(message.message_type, message.action, message.seq) {
             log::debug!(
@@ -4557,6 +4656,15 @@ fn handle_message(
                 );
                 return;
             }
+            #[cfg(target_os = "linux")]
+            if let Err(error) = crate::linux_desktop_control::validate_request(&message) {
+                emit_and_send_status(app, state, local_identity, RemoteControlStatus {
+                    request_id: message.request_id.clone(), window_id: message.window_id, owner_identity: None,
+                    controller_id: message.controller_id.clone(), status: "requestUnavailable", message: error,
+                    grant_token: None, reason: None,
+                });
+                return;
+            }
             #[cfg(target_os = "windows")]
             if let Err(error) =
                 crate::windows_remote_control::validate_host_request(state, &message)
@@ -4605,6 +4713,7 @@ fn handle_message(
                             controller_name: controller_display_name(state, &message.controller_id),
                             window_title: state.active_share_source_title(message.window_id),
                             timeout_ms: ESCALATION_TIMEOUT.as_millis() as u64,
+                            control_scope: None,
                         };
                         let _ = app.emit("control-consent-requested", payload);
                         let controller_id = message.controller_id.clone();
@@ -4985,46 +5094,109 @@ fn clipboard_copy_message_if_authorized(
     trusted_sender: &str,
     request: &RemoteClipboardCopyRequest,
 ) -> Option<RemoteControlMessage> {
+    // Task 4.1 live defect: every gate here used to return None silently, so
+    // a refused clipboard Copy produced no request, rejection, or consent
+    // line on the host. Every rejection now logs its reason.
+    let reject = |reason: &str| -> Option<RemoteControlMessage> {
+        log::info!(
+            "remote-control: clipboard copy from '{}' for window {} rejected: {reason}",
+            trusted_sender,
+            request.window_id
+        );
+        None
+    };
+    if request.target_user_id != local_identity {
+        return reject("request targets a different participant");
+    }
+    if request.controller_id != trusted_sender {
+        return reject("controller identity does not match the authenticated sender");
+    }
+    if !remote_clipboard::operation_id_is_valid(&request.operation_id) {
+        return reject("operation id is malformed");
+    }
+    if request.grant_token.is_empty() {
+        return reject("grant token is missing");
+    }
     #[cfg(target_os = "linux")]
     {
-        // Linux is not a remote-clipboard host (Task 4.1): copy requests
-        // addressed to a local share never authorize.
-        let _ = (state, local_identity, trusted_sender, request);
-        return None;
-    }
-    if request.target_user_id != local_identity
-        || request.controller_id != trusted_sender
-        || !remote_clipboard::operation_id_is_valid(&request.operation_id)
-        || request.grant_token.is_empty()
-        || request.target_kind.is_some() != request.share_instance_id.is_some()
-        || request.target_kind == Some(RemoteControlTargetKind::Unknown)
-        || state.active_share_frame(request.window_id).is_none()
-        || active_display_share(state, request.window_id)
-    {
-        return None;
-    }
-    #[cfg(target_os = "windows")]
-    if let (Some(target_kind), Some(share_instance_id)) =
-        (request.target_kind, request.share_instance_id.as_deref())
-    {
-        use crate::windows_capture_target::TargetKind;
-        let target = state.control_target_snapshot(request.window_id, share_instance_id)?;
-        if target_kind != RemoteControlTargetKind::Window || target.kind != TargetKind::Window {
-            return None;
+        let _ = state;
+        // Desktop-control clipboard mirrors the paste stream path
+        // (`apply_linux_clipboard_paste`): the HOST owns the desktop scope
+        // (Display + the prepared window id), never the controller's echo,
+        // and the consent-minted grant token — checked against the engine's
+        // scoped key — provides the exact per-operation correlation. Live
+        // EIS admission is re-validated by `linux_desktop_control::clipboard`
+        // before any host effect, so a stale grant, instance, or controller
+        // still fails closed here.
+        let snapshot = crate::linux_desktop_control::snapshot();
+        if let Err(reason) = crate::linux_desktop_control::clipboard_scope(
+            &snapshot,
+            trusted_sender,
+            request.window_id,
+            request.target_kind,
+            request.share_instance_id.as_deref(),
+        ) {
+            return reject(&reason);
         }
+        let message = clipboard_key_message(
+            local_identity,
+            trusted_sender,
+            request.window_id,
+            request.seq,
+            &request.grant_token,
+            Some(RemoteControlTargetKind::Display),
+            Some(request.window_id.to_string()),
+            ClipboardShortcut::Copy,
+            RemoteControlAction::Down,
+        );
+        if !is_authorized_input(&message) {
+            return reject("grant token is stale, revoked, or names no current desktop grant");
+        }
+        return Some(message);
     }
-    let message = clipboard_key_message(
-        local_identity,
-        trusted_sender,
-        request.window_id,
-        request.seq,
-        &request.grant_token,
-        request.target_kind,
-        request.share_instance_id.clone(),
-        ClipboardShortcut::Copy,
-        RemoteControlAction::Down,
-    );
-    is_authorized_input(&message).then_some(message)
+    #[cfg(not(target_os = "linux"))]
+    {
+        if request.target_kind.is_some() != request.share_instance_id.is_some() {
+            return reject("target kind and share instance must be present together");
+        }
+        if request.target_kind == Some(RemoteControlTargetKind::Unknown) {
+            return reject("target kind is unknown");
+        }
+        if state.active_share_frame(request.window_id).is_none() {
+            return reject("window is not an active local share");
+        }
+        if active_display_share(state, request.window_id) {
+            return reject("whole-display shares do not support clipboard on this host");
+        }
+        #[cfg(target_os = "windows")]
+        if let (Some(target_kind), Some(share_instance_id)) =
+            (request.target_kind, request.share_instance_id.as_deref())
+        {
+            use crate::windows_capture_target::TargetKind;
+            let Some(target) = state.control_target_snapshot(request.window_id, share_instance_id)
+            else {
+                return reject("control target is no longer live for this share instance");
+            };
+            if target_kind != RemoteControlTargetKind::Window || target.kind != TargetKind::Window {
+                return reject("clipboard requires a window-type control target on this host");
+            }
+        }
+        let message = clipboard_key_message(
+            local_identity,
+            trusted_sender,
+            request.window_id,
+            request.seq,
+            &request.grant_token,
+            request.target_kind,
+            request.share_instance_id.clone(),
+            ClipboardShortcut::Copy,
+            RemoteControlAction::Down,
+        );
+        if !is_authorized_input(&message) {
+            return reject("grant token is stale, revoked, or names no current grant");
+        }
+        Some(message)
+    }
 }
 
 #[derive(Debug)]
@@ -5036,21 +5208,170 @@ struct CompletedClipboardCopy {
     bytes: Vec<u8>,
 }
 
+/// Bounds one clipboard dialog/read/write stage with a RUNTIME-side deadline.
+/// Live 2026-11-06 22:16: the consent dialog's only timeouts lived on the
+/// GTK main loop; when that loop wedged, `block_on(confirm(...))` parked the
+/// copy worker forever (holding the clipboard operation lock) with no log.
+/// A runtime-driven deadline turns any wedged stage into a logged failure.
+#[cfg(target_os = "linux")]
+async fn clipboard_stage_with_deadline<F, T>(stage: &str, window_id: u32, stage_future: F) -> Option<T>
+where
+    F: Future<Output = T>,
+{
+    match tokio::time::timeout(
+        remote_clipboard::REMOTE_CLIPBOARD_OPERATION_TTL,
+        stage_future,
+    )
+    .await
+    {
+        Ok(value) => Some(value),
+        Err(_) => {
+            log::info!(
+                "remote-control: clipboard {stage} for window {} exceeded the operation deadline",
+                window_id
+            );
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn execute_linux_host_clipboard_copy(
+    app: &AppHandle,
+    message: RemoteControlMessage,
+    operation_id: String,
+    generation: &RoomGeneration,
+) -> Option<CompletedClipboardCopy> {
+    let abandoned = |stage: &str| {
+        log::info!(
+            "remote-control: clipboard copy for window {} from '{}' stopped at {stage}",
+            message.window_id,
+            message.controller_id
+        );
+    };
+    if !generation.is_current() {
+        abandoned("room generation change");
+        return None;
+    }
+    let Some(_clipboard_lock) = remote_clipboard::try_clipboard_operation_lock() else {
+        abandoned("clipboard busy with another operation");
+        return None;
+    };
+    if !remote_clipboard::reserve_copy_operation(
+        &message.controller_id,
+        &operation_id,
+        Instant::now(),
+    ) {
+        abandoned("a conflicting copy operation is still pending");
+        return None;
+    }
+    let clipboard = match crate::linux_desktop_control::clipboard(&message) {
+        Ok(clipboard) => clipboard,
+        Err(reason) => {
+            log::info!(
+                "remote-control: clipboard copy for window {} rejected before consent: {reason}",
+                message.window_id
+            );
+            return None;
+        }
+    };
+    let name = match app
+        .try_state::<SessionState>()
+        .map(|s| controller_display_name(s.inner(), &message.controller_id))
+    {
+        Some(name) => name,
+        None => {
+            abandoned("session state unavailable");
+            return None;
+        }
+    };
+    // Consent is a runtime-driven future — the same presentation mechanism
+    // as the desktop-prepare disclosure that renders on the real desktop —
+    // never block_on from a blocking worker, and always deadline-bounded so
+    // a wedged dialog cannot park the operation (or the clipboard lock).
+    let consent = clipboard_stage_with_deadline(
+        "consent",
+        message.window_id,
+        crate::linux_desktop_control::confirm(
+            app,
+            "Allow this controller to copy your clipboard?",
+            &format!("{name} requests your current plain-text clipboard. This permission is only for this copy operation."),
+        ),
+    )
+    .await;
+    match consent {
+        Some(Ok(())) => {}
+        Some(Err(reason)) => {
+            log::info!(
+                "remote-control: clipboard copy for window {} was not approved: {reason}",
+                message.window_id
+            );
+            return None;
+        }
+        None => {
+            abandoned("consent dialog did not answer before the operation deadline");
+            return None;
+        }
+    }
+    if !generation.is_current() || !is_authorized_input(&message)
+        || crate::linux_desktop_control::validate_request(&message).is_err() {
+        abandoned("grant or desktop session changed after consent");
+        return None;
+    }
+    let read = clipboard_stage_with_deadline("clipboard read", message.window_id, clipboard.read())
+        .await?;
+    let bytes = match read {
+        Ok(bytes) => bytes,
+        Err(reason) => {
+            log::info!(
+                "remote-control: clipboard copy for window {} failed reading the desktop clipboard: {reason}",
+                message.window_id
+            );
+            return None;
+        }
+    };
+    if !generation.is_current() || !is_authorized_input(&message)
+        || crate::linux_desktop_control::validate_request(&message).is_err() {
+        abandoned("grant or desktop session changed while reading");
+        return None;
+    }
+    let Some(grant_token) = message.grant_token.clone() else {
+        abandoned("grant token vanished");
+        return None;
+    };
+    Some(CompletedClipboardCopy { operation_id,
+        target_user_id: message.controller_id.clone(), window_id: message.window_id,
+        grant_token, bytes })
+}
+
+#[cfg(not(target_os = "linux"))]
 fn execute_host_clipboard_copy(
     app: &AppHandle,
     message: RemoteControlMessage,
     operation_id: String,
     generation: &RoomGeneration,
 ) -> Option<CompletedClipboardCopy> {
+    let abandoned = |stage: &str| {
+        log::info!(
+            "remote-control: clipboard copy for window {} from '{}' stopped at {stage}",
+            message.window_id,
+            message.controller_id
+        );
+    };
     if !generation.is_current() {
+        abandoned("room generation change");
         return None;
     }
-    let _clipboard_lock = remote_clipboard::try_clipboard_operation_lock()?;
+    let Some(_clipboard_lock) = remote_clipboard::try_clipboard_operation_lock() else {
+        abandoned("clipboard busy with another operation");
+        return None;
+    };
     if !remote_clipboard::reserve_copy_operation(
         &message.controller_id,
         &operation_id,
         Instant::now(),
     ) {
+        abandoned("a conflicting copy operation is still pending");
         return None;
     }
     let clipboard = remote_clipboard::system_clipboard();
@@ -5132,10 +5453,12 @@ fn apply_clipboard_copy_response(
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn host_clipboard_target_is_current(state: &SessionState, window_id: u32) -> bool {
     state.active_share_frame(window_id).is_some() && !active_display_share(state, window_id)
 }
 
+#[cfg(not(target_os = "linux"))]
 fn apply_clipboard_paste(
     app: &AppHandle,
     local_identity: &str,
@@ -5144,20 +5467,7 @@ fn apply_clipboard_paste(
     body: Vec<u8>,
     generation: &RoomGeneration,
 ) {
-    #[cfg(target_os = "linux")]
     {
-        // Linux is not a remote-clipboard host (Task 4.1): incoming paste
-        // streams never write the local clipboard.
-        let _ = (
-            app,
-            local_identity,
-            sender_identity,
-            &metadata,
-            body,
-            generation,
-        );
-        return;
-    }
     if !generation.is_current() {
         return;
     }
@@ -5232,6 +5542,93 @@ fn apply_clipboard_paste(
     );
     #[cfg(not(feature = "cockpit-privileged"))]
     let _ = replay_succeeded;
+    }
+}
+
+#[cfg(target_os = "linux")]
+async fn apply_linux_clipboard_paste(app: &AppHandle, local_identity: &str, sender: &str,
+    metadata: ClipboardStreamMetadata, body: Vec<u8>, generation: &RoomGeneration) {
+    let rejected = |reason: &str| {
+        log::info!(
+            "remote-control: clipboard paste from '{}' for window {} rejected: {reason}",
+            sender,
+            metadata.window_id
+        );
+    };
+    if !generation.is_current() { rejected("room generation changed"); return; }
+    if remote_clipboard::validate_remote_text(&body).is_err() {
+        rejected("stream body is not bounded UTF-8 text");
+        return;
+    }
+    if !remote_clipboard::operation_id_is_valid(&metadata.operation_id) {
+        rejected("operation id is malformed");
+        return;
+    }
+    let message = clipboard_key_message(local_identity, sender, metadata.window_id, now_ms(),
+        &metadata.grant_token, Some(RemoteControlTargetKind::Display),
+        Some(metadata.window_id.to_string()), ClipboardShortcut::Paste, RemoteControlAction::Down);
+    if !is_authorized_input(&message) {
+        rejected("grant token is stale, revoked, or names no current desktop grant");
+        return;
+    }
+    let Ok(clipboard) = crate::linux_desktop_control::clipboard(&message) else {
+        rejected("no active named desktop controller or clipboard permission");
+        return;
+    };
+    let Some(_guard) = remote_clipboard::try_clipboard_operation_lock() else {
+        rejected("clipboard busy with another operation");
+        return;
+    };
+    if !remote_clipboard::reserve_paste_operation(sender, &metadata.operation_id, Instant::now()) {
+        rejected("a conflicting paste operation is still pending");
+        return;
+    }
+    let Some(state) = app.try_state::<SessionState>() else {
+        rejected("session state unavailable");
+        return;
+    };
+    let name = controller_display_name(state.inner(), sender);
+    // Same rule as copy: runtime-driven consent plus a runtime-side
+    // deadline, so a wedged dialog can never park the paste worker.
+    let consent = clipboard_stage_with_deadline(
+        "consent",
+        metadata.window_id,
+        crate::linux_desktop_control::confirm(app,
+            "Allow this controller to replace your clipboard?",
+            &format!("{name} requests a plain-text clipboard paste. This permission applies only to this operation.")),
+    )
+    .await;
+    match consent {
+        Some(Ok(())) => {}
+        Some(Err(reason)) => {
+            rejected(&format!("local user did not approve the paste ({reason})"));
+            return;
+        }
+        None => {
+            rejected("consent dialog did not answer before the operation deadline");
+            return;
+        }
+    }
+    if !generation.is_current() || !is_authorized_input(&message)
+        || crate::linux_desktop_control::validate_request(&message).is_err() {
+        rejected("grant or desktop session changed after consent");
+        return;
+    }
+    match clipboard_stage_with_deadline(
+        "clipboard write",
+        metadata.window_id,
+        clipboard.write(body),
+    )
+    .await
+    {
+        Some(Ok(())) => {}
+        Some(Err(reason)) => {
+            rejected(&format!("desktop clipboard write failed: {reason}"));
+        }
+        None => {
+            rejected("clipboard write exceeded the operation deadline");
+        }
+    }
 }
 
 async fn handle_clipboard_stream(
@@ -5243,6 +5640,12 @@ async fn handle_clipboard_stream(
     generation: RoomGeneration,
 ) {
     let Some(body) = read_clipboard_stream(reader, metadata.declared_length).await else {
+        log::info!(
+            "remote-control: clipboard {:?} stream '{}' from '{}' rejected: body did not match its declared length or text bounds",
+            metadata.direction,
+            metadata.operation_id,
+            sender_identity
+        );
         if metadata.direction == ClipboardStreamDirection::CopyResponse {
             remote_clipboard::clear_pending_copy_if_operation(&metadata.operation_id);
         }
@@ -5256,14 +5659,21 @@ async fn handle_clipboard_stream(
             apply_clipboard_copy_response(&sender_identity, metadata, body);
         }
         ClipboardStreamDirection::Paste => {
-            apply_clipboard_paste(
-                &app,
-                &local_identity,
-                &sender_identity,
-                metadata,
-                body,
-                &generation,
-            );
+            #[cfg(target_os = "linux")]
+            {
+                tauri::async_runtime::spawn(async move {
+                    apply_linux_clipboard_paste(
+                        &app, &local_identity, &sender_identity, metadata, body, &generation,
+                    )
+                    .await;
+                });
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                tokio::task::spawn_blocking(move || apply_clipboard_paste(
+                    &app, &local_identity, &sender_identity, metadata, body, &generation
+                )).await.ok();
+            }
         }
     }
 }
@@ -5276,30 +5686,56 @@ fn dispatch_clipboard_copy_request(
     request: RemoteClipboardCopyRequest,
     generation: &RoomGeneration,
 ) {
-    let Some(message) =
-        clipboard_copy_message_if_authorized(state, local_identity, trusted_sender, &request)
-    else {
+    let message =
+        clipboard_copy_message_if_authorized(state, local_identity, trusted_sender, &request);
+    let Some(message) = message else {
+        // The refusing gate already logged its reason.
         return;
     };
+    log::info!(
+        "remote-control: clipboard copy from '{}' authorized for window {}; awaiting local consent",
+        trusted_sender,
+        request.window_id
+    );
     let app = app.clone();
     let generation_for_copy = generation.clone();
     let generation_for_send = generation_for_copy.clone();
     tauri::async_runtime::spawn(async move {
         let operation_id = request.operation_id.clone();
-        let app_for_copy = app.clone();
-        let generation_for_worker = generation_for_copy;
-        let completed = tokio::task::spawn_blocking(move || {
-            execute_host_clipboard_copy(
-                &app_for_copy,
-                message,
-                operation_id,
-                &generation_for_worker,
-            )
-        })
-        .await
-        .ok()
-        .flatten();
+        // Linux: the consent dialog is a runtime-driven future (like the
+        // desktop-prepare disclosure). Never block_on from a blocking
+        // worker — that parked the worker forever in the 2026-11-06 live
+        // stall while the GTK closure never ran.
+        #[cfg(target_os = "linux")]
+        let completed = execute_linux_host_clipboard_copy(
+            &app,
+            message,
+            operation_id,
+            &generation_for_copy,
+        )
+        .await;
+        #[cfg(not(target_os = "linux"))]
+        let completed = {
+            let app_for_copy = app.clone();
+            let generation_for_worker = generation_for_copy;
+            tokio::task::spawn_blocking(move || {
+                execute_host_clipboard_copy(
+                    &app_for_copy,
+                    message,
+                    operation_id,
+                    &generation_for_worker,
+                )
+            })
+            .await
+            .ok()
+            .flatten()
+        };
         let Some(completed) = completed else {
+            log::info!(
+                "remote-control: clipboard copy operation '{}' for window {} produced no host copy; the stopping stage was logged",
+                request.operation_id,
+                request.window_id
+            );
             return;
         };
         if !generation_for_send.is_current() {
@@ -5338,7 +5774,7 @@ pub fn start_receiver_for_room(
 ) {
     #[cfg(target_os = "linux")]
     log::info!(
-        "remote-control: receiver starting for identity '{}' in controller-only role (host-side input stays refused)",
+        "remote-control: receiver starting for identity '{}' with explicit prepared-desktop host admission",
         crate::logging::log_safe_quoted(&local_identity)
     );
     ensure_pressed_ttl_sweeper();
@@ -5483,6 +5919,10 @@ pub fn start_receiver_for_room(
                             "remote-control: ignoring stale ParticipantDisconnected for '{}' ({identity}) -- still in the room roster (reconnect aftershock, #820); grants kept",
                             participant.name()
                         );
+                        // The controller's own side may have torn its overlay
+                        // down during the blip even though the roster proves
+                        // it never left: re-announce its grants.
+                        reannounce_grants_after_stale_disconnect(&app, &identity);
                         continue;
                     }
                     log::warn!(
@@ -5502,6 +5942,11 @@ pub fn start_receiver_for_room(
                             log::warn!(
                                 "remote-control: '{identity}' is back in the roster after the grace window -- stale disconnect during a reconnect (#820); grants kept"
                             );
+                            // Grants survived, but the controller reconnected
+                            // through a fresh channel and its overlay may be
+                            // down: re-announce so usable control survives the
+                            // blip, not just host authority.
+                            reannounce_grants_after_stale_disconnect(&app, &identity);
                             return;
                         }
                         log::warn!(
@@ -5519,6 +5964,17 @@ pub fn start_receiver_for_room(
             remote_clipboard::clear_paste_operations();
         }
     });
+}
+
+/// Shared tail of both #820 stale-disconnect resolutions ("still in roster"
+/// aftershock and "back in roster after the grace window"): the host kept
+/// this controller's grants, so re-announce them onto its (possibly fresh)
+/// channel and let the controller's overlay re-arm from host authority.
+fn reannounce_grants_after_stale_disconnect(app: &AppHandle, controller_id: &str) {
+    let Some(state) = app.try_state::<SessionState>() else {
+        return;
+    };
+    reemit_active_statuses_for_controller(app, state.inner(), controller_id);
 }
 
 fn publish_control_activity(state: &SessionState, message: &RemoteControlMessage) {
@@ -5798,8 +6254,8 @@ async fn controller_clipboard_target(
         let target =
             crate::compositor::remote_control_target_metadata(window_id, Some(owner_identity))
                 .ok_or_else(|| format!("remote window {window_id} is not open"))?;
-        if target.target_kind != RemoteControlTargetKind::Window {
-            return Err("remote clipboard requires an application-window share".to_string());
+        if !matches!(target.target_kind, RemoteControlTargetKind::Window | RemoteControlTargetKind::Display) {
+            return Err("remote clipboard requires an active window or desktop grant".to_string());
         }
         return Ok((target.target_kind, target.share_instance_id));
     }
@@ -5814,17 +6270,19 @@ async fn controller_clipboard_target(
                     && !window.hidden
             })
             .ok_or_else(|| format!("remote window {window_id} is not open"))?;
-        if target.source_kind != crate::transport::publisher::SharedSourceKind::Window {
-            return Err("remote clipboard requires an application-window share".to_string());
-        }
-        return Ok((RemoteControlTargetKind::Window, target.share_instance_id));
+        let kind = match target.source_kind {
+            crate::transport::publisher::SharedSourceKind::Window => RemoteControlTargetKind::Window,
+            crate::transport::publisher::SharedSourceKind::Display => RemoteControlTargetKind::Display,
+            _ => return Err("remote clipboard requires an active window or desktop grant".to_string()),
+        };
+        return Ok((kind, target.share_instance_id));
     }
     #[cfg(target_os = "linux")]
     {
         let target = crate::linux_remote_control::receive_target(window_id, Some(owner_identity))
             .ok_or_else(|| format!("remote window {window_id} is not open"))?;
-        if target.target_kind != RemoteControlTargetKind::Window {
-            return Err("remote clipboard requires an application-window share".to_string());
+        if !matches!(target.target_kind, RemoteControlTargetKind::Window | RemoteControlTargetKind::Display) {
+            return Err("remote clipboard requires an active window or desktop grant".to_string());
         }
         return Ok((target.target_kind, target.share_instance_id));
     }
@@ -5903,6 +6361,7 @@ fn clipboard_key_message(
     modifiers, }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn clipboard_replay_message(
     state: &SessionState,
     message: RemoteControlMessage,
@@ -5940,6 +6399,7 @@ fn clipboard_replay_message(
     }
 }
 
+#[cfg(not(target_os = "linux"))]
 fn run_clipboard_shortcut(
     app: &AppHandle,
     message: RemoteControlMessage,
@@ -6282,6 +6742,32 @@ pub async fn remote_control_set_active(
     }
     #[cfg(not(target_os = "linux"))]
     remote_control_set_active_impl(app, window_id, owner_identity, active, request_id).await
+}
+
+/// Controller-side state for a fresh surface page to bootstrap from: the
+/// request id when THIS app currently holds an ACTIVE control request for
+/// the shared window it is viewing. A surface page recreated by a reconnect
+/// transport replacement mounts with no local request id and misses the
+/// host's fire-and-forget re-announce event; pulling engine truth lets the
+/// recreated header re-arm instead of showing "Request control" while the
+/// overlay is live (observed 2026-11-07).
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerRequestState {
+    pub request_id: String,
+}
+
+#[tauri::command]
+pub async fn remote_control_controller_state(
+    window_id: u32,
+    owner_identity: Option<String>,
+) -> Result<Option<ControllerRequestState>, String> {
+    let Some(owner) = owner_identity.filter(|id: &String| !id.is_empty()) else {
+        return Ok(None);
+    };
+    Ok(remote_control_engine()
+        .controller_request_active(window_id, &owner)
+        .map(|request_id| ControllerRequestState { request_id }))
 }
 
 /// GTK reserves before spawning this future; never reserve again on poll.
@@ -18455,7 +18941,7 @@ pub(crate) mod input {
     use crate::platform::cg::WindowFrame;
 
     pub fn accessibility_trusted() -> bool {
-        false
+        crate::linux_desktop_control::snapshot().window_id.is_some_and(crate::linux_desktop_control::is_prepared)
     }
 
     pub fn prompt_accessibility() -> bool {
@@ -18500,12 +18986,221 @@ pub(crate) mod input {
         _frame: WindowFrame,
         _target_pid: Option<i32>,
     ) -> Result<(), String> {
-        crate::linux_capabilities::require_remote_input()
+        crate::linux_desktop_control::replay(_message)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn clipboard_controller_envelope_accepts_current_desktop_but_not_unknown_or_retired_target() {
+        let _guard = crate::remote_control_core::test_support::state_test_lock();
+        let owner = "linux-desktop-clipboard-host";
+        let id = 0x6500_0041;
+        crate::linux_remote_control::upsert_receive_target(crate::linux_remote_control::ReceiveTargetInfo {
+            owner_identity: owner.into(), window_id: id, target_kind: RemoteControlTargetKind::Display,
+            share_instance_id: Some("combined-instance".into()),
+        });
+        let (kind, instance) = controller_clipboard_target(id, owner).await.unwrap();
+        assert_eq!(kind, RemoteControlTargetKind::Display);
+        assert_eq!(instance.as_deref(), Some("combined-instance"));
+        crate::linux_remote_control::retire_controller_for(owner, id);
+        assert!(controller_clipboard_target(id, owner).await.is_err());
+        crate::linux_remote_control::upsert_receive_target(crate::linux_remote_control::ReceiveTargetInfo {
+            owner_identity: owner.into(), window_id: id, target_kind: RemoteControlTargetKind::Unknown,
+            share_instance_id: Some("unrecognized".into()),
+        });
+        assert!(controller_clipboard_target(id, owner).await.is_err());
+        crate::linux_remote_control::retire_controller_for(owner, id);
+    }
+    #[cfg(target_os = "linux")]
+    #[tokio::test(start_paused = true)]
+    async fn clipboard_dialog_stage_cannot_outlive_its_deadline() {
+        // Live 2026-11-06 22:16: the copy worker parked in
+        // block_on(confirm(...)) forever — the consent dialog's only
+        // timeouts lived on the wedged GTK main loop, so neither its
+        // 30s response timeout nor any log ever fired, and the parked
+        // worker held the clipboard operation lock. Every dialog/read
+        // stage must carry its own runtime-side deadline.
+        assert!(
+            clipboard_stage_with_deadline("consent", 42, std::future::pending::<()>())
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            clipboard_stage_with_deadline("consent", 42, std::future::ready(7)).await,
+            Some(7)
+        );
+    }
+    #[cfg(target_os = "linux")]
+    mod linux_clipboard_copy_authorization {
+        use super::*;
+        use crate::remote_control_core::test_support::state_test_lock;
+        use crate::remote_control_core::ControlGrantKey;
+
+        const HOST: &str = "linux-desktop-clipboard-host";
+        const CONTROLLER: &str = "windows-clipboard-controller";
+        const WINDOW_ID: u32 = 0x6500_0044;
+
+        fn request(
+            grant_token: &str,
+            target_kind: Option<RemoteControlTargetKind>,
+            share_instance_id: Option<&str>,
+        ) -> RemoteClipboardCopyRequest {
+            RemoteClipboardCopyRequest {
+                v: VERSION,
+                target_user_id: HOST.to_string(),
+                controller_id: CONTROLLER.to_string(),
+                window_id: WINDOW_ID,
+                seq: now_ms(),
+                grant_token: grant_token.to_string(),
+                kind: "copy".to_string(),
+                operation_id: "0123456789abcdef0123456789abcdef".to_string(),
+                target_kind,
+                share_instance_id: share_instance_id.map(str::to_string),
+            }
+        }
+
+        fn admit_active_desktop_grant() -> String {
+            crate::linux_desktop_control::install_clipboard_scope_test_state(
+                WINDOW_ID,
+                "active",
+                Some(CONTROLLER),
+            );
+            authorize_shared_key(ControlGrantKey {
+                window_id: WINDOW_ID,
+                controller_id: CONTROLLER.to_string(),
+                target_kind: Some(RemoteControlTargetKind::Display),
+                share_instance_id: Some(WINDOW_ID.to_string()),
+            })
+        }
+
+        #[test]
+        fn active_desktop_grant_authorizes_copy_without_frame_registry_or_echoed_scope() {
+            let _guard = state_test_lock();
+            let token = admit_active_desktop_grant();
+            // No PictureOwner entry exists: the prepared desktop authority,
+            // not the display-share frame registry, must gate the Linux
+            // desktop clipboard.
+            let state = SessionState::default();
+            let message = clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request(&token, None, None),
+            )
+            .expect("an active desktop-control grant must authorize the copy request");
+            assert_eq!(message.target_kind, Some(RemoteControlTargetKind::Display));
+            assert_eq!(
+                message.share_instance_id.as_deref(),
+                Some(WINDOW_ID.to_string().as_str())
+            );
+            assert_eq!(message.grant_token.as_deref(), Some(token.as_str()));
+            crate::linux_desktop_control::reset_clipboard_scope_test_state();
+        }
+
+        #[test]
+        fn copy_rejects_stale_tokens_foreign_scopes_and_uncorrelated_identities() {
+            let _guard = state_test_lock();
+            let token = admit_active_desktop_grant();
+            let state = SessionState::default();
+            // A correct echoed scope still authorizes.
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request(
+                    &token,
+                    Some(RemoteControlTargetKind::Display),
+                    Some(WINDOW_ID.to_string().as_str())
+                )
+            )
+            .is_some());
+            // Stale or foreign grant token.
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request("ffffffffffffffffffffffffffffffff", None, None)
+            )
+            .is_none());
+            // Echoed scope naming a different instance or kind.
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request(
+                    &token,
+                    Some(RemoteControlTargetKind::Display),
+                    Some("previous-instance")
+                )
+            )
+            .is_none());
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request(
+                    &token,
+                    Some(RemoteControlTargetKind::Window),
+                    Some(WINDOW_ID.to_string().as_str())
+                )
+            )
+            .is_none());
+            // Parity violations stay malformed.
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request(&token, Some(RemoteControlTargetKind::Display), None)
+            )
+            .is_none());
+            // Identity correlation fails closed.
+            let mut other_target = request(&token, None, None);
+            other_target.target_user_id = "someone-else".into();
+            assert!(
+                clipboard_copy_message_if_authorized(&state, HOST, CONTROLLER, &other_target)
+                    .is_none()
+            );
+            let mut other_controller = request(&token, None, None);
+            other_controller.controller_id = "spoofed-identity".into();
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &other_controller
+            )
+            .is_none());
+            // Another named controller holds the prepared desktop.
+            crate::linux_desktop_control::install_clipboard_scope_test_state(
+                WINDOW_ID,
+                "active",
+                Some("competing-controller"),
+            );
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request(&token, None, None)
+            )
+            .is_none());
+            // No prepared desktop at all.
+            crate::linux_desktop_control::install_clipboard_scope_test_state(
+                WINDOW_ID,
+                "idle",
+                None,
+            );
+            assert!(clipboard_copy_message_if_authorized(
+                &state,
+                HOST,
+                CONTROLLER,
+                &request(&token, None, None)
+            )
+            .is_none());
+            crate::linux_desktop_control::reset_clipboard_scope_test_state();
+        }
+    }
     #[cfg(target_os = "linux")]
     #[test]
     fn stale_cancel_command_cannot_retire_or_release_a_newer_attempt() {
@@ -18676,7 +19371,7 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_replay_refuses_real_pointer_keyboard_and_text_packets() {
+    fn linux_window_replay_refuses_pointer_keyboard_text_without_desktop_escalation() {
         for event in [
             serde_json::json!({"kind": "pointer", "action": "down", "x": 0.25, "y": 0.75, "button": 0}),
             serde_json::json!({"kind": "pointer", "action": "up", "x": 0.25, "y": 0.75, "button": 0}),
@@ -18706,7 +19401,7 @@ mod tests {
                 Some(std::process::id() as i32),
             )
             .expect_err("Linux must not inject this input");
-            assert!(error.contains("unsupported on Linux"), "{error}");
+            assert!(error.contains("view-only"), "{error}");
         }
     }
 
@@ -22389,37 +23084,47 @@ mod tests {
     }
 
     #[test]
-    fn status_packet_routes_host_result_back_to_controller() {
-        let ids = remote_control_test_ids("status_packet_routes_host_result_back_to_controller");
-        let status = RemoteControlStatus { request_id: None, window_id: ids.window_id,
-        owner_identity: None,
-        controller_id: ids.controller_id.clone(),
-        status: "active",
-        message: "Remote control active for shared window".to_string(),
-        grant_token: Some("0123456789abcdef0123456789abcdef".to_string()),
-        reason: None, };
-
-        let packet = status_packet_for(&status, "host-id");
-
-        assert_eq!(packet.message_type, RemoteControlType::Status);
-        assert_eq!(packet.target_user_id, ids.controller_id);
-        assert_eq!(packet.controller_id, "host-id");
-        assert_eq!(packet.window_id, ids.window_id);
-        assert_eq!(packet.status.as_deref(), Some("active"));
+    fn granted_windows_for_controller_dedupes_and_scopes_to_one_controller() {
+        let ids =
+            remote_control_test_ids("granted_windows_for_controller_dedupes_and_scopes");
+        let other = remote_control_test_ids("granted_windows_for_controller_other");
+        let v2_key = ControlGrantKey {
+            window_id: ids.window_id,
+            controller_id: ids.controller_id.clone(),
+            target_kind: Some(crate::remote_control_core::RemoteControlTargetKind::Display),
+            share_instance_id: Some("reannounce-instance".to_string()),
+        };
+        {
+            let mut sessions = sessions().lock_unpoisoned();
+            sessions.insert(
+                ControlGrantKey::legacy(ids.window_id, ids.controller_id.clone()),
+                "legacy-token".to_string(),
+            );
+            sessions.insert(v2_key.clone(), "v2-token".to_string());
+            sessions.insert(
+                ControlGrantKey::legacy(other.window_id, other.controller_id.clone()),
+                "other-token".to_string(),
+            );
+        }
+        // The legacy and v2 grant keys for the SAME window must announce that
+        // window once, and the other controller's window must not appear.
         assert_eq!(
-            packet.message.as_deref(),
-            Some("Remote control active for shared window")
+            granted_windows_for_controller(&ids.controller_id),
+            vec![ids.window_id]
         );
-        assert_eq!(
-            packet.grant_token.as_deref(),
-            Some("0123456789abcdef0123456789abcdef")
-        );
-        // #370 corrective pass: an "active" status packet must unconditionally
-        // advertise hot-path support -- this is the ONLY signal a controller
-        // uses to decide it may switch pointer/wheel sends to binary.
-        assert!(packet.supports_binary_hot_path);
-        assert!(unreliable_seq_stream(&packet).is_none());
+        assert!(granted_windows_for_controller("reannounce-no-such-controller").is_empty());
+        let mut sessions = sessions().lock_unpoisoned();
+        sessions.remove(&ControlGrantKey::legacy(
+            ids.window_id,
+            ids.controller_id.clone(),
+        ));
+        sessions.remove(&v2_key);
+        sessions.remove(&ControlGrantKey::legacy(
+            other.window_id,
+            other.controller_id.clone(),
+        ));
     }
+
 
     #[test]
     fn reconnected_reemits_active_status() {
@@ -22427,7 +23132,7 @@ mod tests {
         let status = active_status_for_session(
             ids.window_id,
             ids.controller_id.clone(),
-            "0123456789abcdef0123456789abcdef".to_string(),
+            Some("0123456789abcdef0123456789abcdef".to_string()),
         );
 
         // Reconnect must bypass the ordinary same-status de-duplication.
@@ -22437,6 +23142,27 @@ mod tests {
         let packet = status_packet_for(&status, "host-id");
         assert_eq!(packet.status.as_deref(), Some("active"));
         assert_eq!(packet.target_user_id, ids.controller_id);
+        last_emitted_statuses()
+            .lock_unpoisoned()
+            .remove(&(ids.window_id, status.controller_id));
+    }
+
+    #[test]
+    fn reannounce_emits_tokenless_when_no_generic_grant_entry_exists() {
+        // The Linux desktop-control topology: the admission lives in the
+        // desktop-control authority, so neither the generic session map nor
+        // the engine's legacy key holds a token. The re-announce must still
+        // build a deliverable active status (tokenless) instead of skipping
+        // the window — the skip is the exact silent no-op measured live on
+        // 2026-11-07.
+        let ids = remote_control_test_ids("reannounce_tokenless");
+        let status =
+            active_status_for_session(ids.window_id, ids.controller_id.clone(), None);
+        assert_eq!(status.status, "active");
+        assert_eq!(status.grant_token, None);
+        let packet = status_packet_for(&status, "host-id");
+        assert_eq!(packet.status.as_deref(), Some("active"));
+        assert_eq!(packet.grant_token, None);
         last_emitted_statuses()
             .lock_unpoisoned()
             .remove(&(ids.window_id, status.controller_id));

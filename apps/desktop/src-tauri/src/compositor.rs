@@ -64,7 +64,7 @@ use tauri_nspanel::{tauri_panel, CollectionBehavior, PanelBuilder, PanelLevel};
 use crate::native_display::DisplayLayer;
 use crate::native_display::OwnedCMSampleBuffer;
 use crate::platform::cg::WindowFrame;
-use crate::transport::publisher::SharedSourceKind;
+use crate::transport::publisher::{SharedControlCapability, SharedSourceKind};
 
 /// The teardown trigger for a remote compositor window. Keep these labels
 /// stable: they are used to distinguish the otherwise identical teardown
@@ -419,6 +419,7 @@ fn header_query_string(
     source_url: Option<&str>,
     remote_control_available: bool,
     remote_control_disallowed: bool,
+    control_capability: Option<SharedControlCapability>,
     owner_palette_index: Option<u8>,
 ) -> String {
     let mut query = format!(
@@ -448,13 +449,23 @@ fn header_query_string(
         query.push_str("&url=");
         query.push_str(&percent_encode(source_url));
     }
-    if remote_control_available {
+    if remote_control_available && control_capability.is_none_or(SharedControlCapability::allows_request) {
         query.push_str("&remoteControl=1");
     } else if remote_control_disallowed {
         // Distinct from merely-absent: the header must say "not allowed"
         // rather than sit on an indefinite "Preparing...", which would be a
         // lie about a permanent state.
         query.push_str("&remoteControlDisallowed=1");
+    }
+    match control_capability {
+        Some(SharedControlCapability::WindowViewOnly) => query.push_str("&remoteControlViewOnly=1"),
+        Some(SharedControlCapability::DesktopPreparationRequired) => {
+            query.push_str("&remoteControlPreparationRequired=1");
+        }
+        Some(SharedControlCapability::Unavailable) if !remote_control_disallowed => {
+            query.push_str("&remoteControlDisallowed=1");
+        }
+        Some(SharedControlCapability::Unavailable | SharedControlCapability::DesktopReady) | None => {}
     }
     query
 }
@@ -471,6 +482,7 @@ fn surface_route_url(
     source_url: Option<&str>,
     remote_control_available: bool,
     remote_control_disallowed: bool,
+    control_capability: Option<SharedControlCapability>,
     owner_palette_index: Option<u8>,
 ) -> String {
     format!(
@@ -483,6 +495,7 @@ fn surface_route_url(
             source_url,
             remote_control_available,
             remote_control_disallowed,
+            control_capability,
             owner_palette_index,
         )
     )
@@ -603,6 +616,7 @@ struct CompositorWindow {
     /// to metadata simply not having arrived yet). Drives an honest header
     /// label; never a security decision -- the host re-checks every packet.
     remote_control_disallowed: bool,
+    control_capability: Option<SharedControlCapability>,
     /// Last frame successfully observed for this remote compositor window.
     last_frame_received_ms: AtomicU64,
     frames_received: AtomicU64,
@@ -1861,6 +1875,7 @@ fn show_retired_window_on_main(
                         win_state.source_url.as_deref(),
                         win_state.remote_control_available,
                         win_state.remote_control_disallowed,
+                        win_state.control_capability,
                         win_state.owner_palette_index,
                     );
                     if let Some(origin) = win_state.app_origin.as_deref() {
@@ -1878,6 +1893,7 @@ fn show_retired_window_on_main(
                                 win_state.source_url.as_deref(),
                                 win_state.remote_control_available,
                                 win_state.remote_control_disallowed,
+                                win_state.control_capability,
                                 win_state.owner_palette_index,
                             ),
                         );
@@ -2118,9 +2134,12 @@ pub fn ensure_window(
     source_scale: f64,
     remote_control_available: bool,
     remote_control_disallowed: bool,
+    control_capability: Option<SharedControlCapability>,
     owner_palette_index: Option<u8>,
     canonical_source_size: Option<(u32, u32)>,
 ) {
+    let remote_control_available =
+        remote_control_available && control_capability.is_none_or(SharedControlCapability::allows_request);
     let owner_identity = owner_identity.to_string();
     let owner_palette_index =
         owner_palette_index.filter(|index| (*index as usize) < OWNER_COLOR_PALETTE_HEX.len());
@@ -2140,6 +2159,9 @@ pub fn ensure_window(
             if let Some(window) = s.windows.get_mut(&key) {
                 window.source_kind = source_kind;
                 window.share_instance_id = share_instance_id.clone();
+                window.remote_control_available = remote_control_available;
+                window.remote_control_disallowed = remote_control_disallowed;
+                window.control_capability = control_capability;
             }
         });
         update_canonical_source_size_on_republish(app, &key, canonical_source_size);
@@ -2186,6 +2208,9 @@ pub fn ensure_window(
                 if let Some(window) = s.windows.get_mut(&key) {
                     window.source_kind = source_kind;
                     window.share_instance_id = share_instance_id.clone();
+                    window.remote_control_available = remote_control_available;
+                    window.remote_control_disallowed = remote_control_disallowed;
+                    window.control_capability = control_capability;
                 }
             });
             update_canonical_source_size_on_republish(app, &key, canonical_source_size);
@@ -2208,6 +2233,8 @@ pub fn ensure_window(
                 win_state.layer_has_content,
             );
             win_state.remote_control_available = remote_control_available;
+            win_state.remote_control_disallowed = remote_control_disallowed;
+            win_state.control_capability = control_capability;
             win_state.owner_display_name = owner_display_name.to_string();
             win_state.source_title = source_title.to_string();
             win_state.source_url = source_url.clone();
@@ -2306,6 +2333,7 @@ pub fn ensure_window(
                 source_url.as_deref(),
                 remote_control_available,
                 remote_control_disallowed,
+                control_capability,
                 owner_palette_index,
             )
             .into(),
@@ -2400,6 +2428,7 @@ pub fn ensure_window(
             key.clone(),
             CompositorWindow {
                 remote_control_disallowed,
+                control_capability,
                 owner_identity: owner_identity.to_string(),
                 owner_display_name: owner_display_name.to_string(),
                 owner_palette_index,
@@ -3399,9 +3428,12 @@ pub fn update_window_metadata(
     source_scale: Option<f64>,
     remote_control_available: bool,
     remote_control_disallowed: bool,
+    control_capability: Option<SharedControlCapability>,
     owner_palette_index: Option<u8>,
     share_instance_id: Option<String>,
 ) {
+    let remote_control_available =
+        remote_control_available && control_capability.is_none_or(SharedControlCapability::allows_request);
     let owner_identity = owner_identity.to_string();
     let key = RemoteWindowKey::new(owner_identity.clone(), window_id);
     let owner_display_name = owner_display_name.to_string();
@@ -3423,6 +3455,8 @@ pub fn update_window_metadata(
             win.source_scale = valid_source_scale(source_scale);
         }
         win.remote_control_available = remote_control_available;
+        win.remote_control_disallowed = remote_control_disallowed;
+        win.control_capability = control_capability;
         true
     });
     if !should_refresh {
@@ -3443,6 +3477,7 @@ pub fn update_window_metadata(
                     source_url.as_deref(),
                     remote_control_available,
                     remote_control_disallowed,
+                    control_capability,
                     owner_palette_index,
                 ),
             );
@@ -7439,6 +7474,7 @@ mod tests {
     fn test_window(owner: &str, title: &str) -> CompositorWindow {
         CompositorWindow {
             remote_control_disallowed: false,
+            control_capability: None,
             owner_identity: owner.to_string(),
             owner_display_name: owner.to_string(),
             owner_palette_index: None,
@@ -10123,17 +10159,17 @@ mod tests {
         // "not available" is what made the header promise "Preparing..." for a
         // window that would never become controllable.
         let preparing =
-            header_query_string(7, "marco-id", "Marco", "Terminal", None, false, false, None);
+            header_query_string(7, "marco-id", "Marco", "Terminal", None, false, false, None, None);
         assert!(!preparing.contains("remoteControl=1"));
         assert!(!preparing.contains("remoteControlDisallowed=1"));
 
         let allowed =
-            header_query_string(7, "marco-id", "Marco", "Terminal", None, true, false, None);
+            header_query_string(7, "marco-id", "Marco", "Terminal", None, true, false, None, None);
         assert!(allowed.contains("remoteControl=1"));
         assert!(!allowed.contains("remoteControlDisallowed=1"));
 
         let denied =
-            header_query_string(7, "marco-id", "Marco", "Terminal", None, false, true, None);
+            header_query_string(7, "marco-id", "Marco", "Terminal", None, false, true, None, None);
         assert!(denied.contains("remoteControlDisallowed=1"));
         assert!(!denied.contains("remoteControl=1"));
     }
@@ -10141,7 +10177,7 @@ mod tests {
     #[test]
     fn header_query_exports_same_border_treatment_as_parent_panel() {
         let query =
-            header_query_string(7, "marco-id", "Marco", "Terminal", None, false, false, None);
+            header_query_string(7, "marco-id", "Marco", "Terminal", None, false, false, None, None);
         assert!(query.contains("ownerIdentity=marco%2Did"));
         // Border color keys on the owner IDENTITY (mirrors the header's
         // colorForIdentity(ownerIdentity || ownerName)), not the display name.

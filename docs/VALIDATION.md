@@ -288,8 +288,9 @@ apps/desktop/src-tauri/target/debug/desktop
 ```
 
 No `tauri dev`, browser, macOS signing/permissions, Windows SDK, or installer
-step is involved. This requires the system GTK3/WebKitGTK runtime and normal
-Linux build dependencies; general distribution packaging is not this gate.
+step is involved. This requires the system GTK3/WebKitGTK runtime, libei 1.6
+or newer (`libei-1.0` pkg-config metadata for the Linux build), and normal
+Linux build dependencies. General distribution packaging is not this gate.
 
 Monitor publication additionally requires the GNOME ScreenCast portal on the
 current user session bus, PipeWire, GStreamer 1.28 or newer, and the
@@ -297,7 +298,11 @@ current user session bus, PipeWire, GStreamer 1.28 or newer, and the
 and `appsink` elements. The Linux-target Rust bindings use the existing GLib 0.18 family;
 there is no GTK4 or browser-media path. A missing capture element is a
 per-attempt error, not permission to install software or capture a different
-source. Camera and desktop input are separate, unavailable capabilities.
+source. Camera activation and desktop-input preparation are separate operations;
+ordinary picture sharing never grants input. Desktop hosting additionally needs
+the RemoteDesktop portal's keyboard/pointer permission, ConnectToEIS, ScreenCast
+v5 same-session mapping and a separately approved named controller. Task 4.1's
+live acceptance remains separate from a successful build or launch.
 
 The monitor-entry assertion requires no room join or source selection:
 
@@ -922,8 +927,8 @@ unchanged. Receipts under `/tmp/petal-c02-indicator-y4kia9yc` include
 `preview-and-publication.json`, `publication-off-preview-retained.json`,
 `last-preview-closed.json` and `cleanup.json`. No publication or deployment.
 
-**November 5 actual Linux-host H01 window check: safety verified, acceptance
-incomplete.** Tommy selected only the task-owned editor in the real native
+**November 5 pre-implementation Linux-host H01 baseline: safety verified,
+acceptance incomplete.** Tommy selected only the task-owned editor in the real native
 chooser. The Linux picture-share record reported one source of kind `window`;
 unchanged released Windows0.9.33 decoded it at736×416, with received frames
 advancing161→269 across control attempts. Both microphones stayed muted and
@@ -940,17 +945,201 @@ Linux's actual menu labels request/grant control unsupported.
 The header-only D-Bus observer saw zero owned RemoteDesktop/InputCapture calls
 and zero unattributed calls. The editor had zero key/pointer events or text
 changes; the picture kept decoding. These checks establish safe refusal under
-the current global Linux-host block, not the complete window-specific
+the then-global Linux-host block, not the complete window-specific
 view-only feedback contract. H01 stays TODO; the Windows preparing state must
 not be presented as a completed refusal/availability explanation.
 
 The manual chooser prerequisite is now resolved. Both owned clients and editor
 quit normally; the guard, observer and helper were removed, room empty, no owned
-capture clients, VM/release unchanged. Current bounded receipts:
+capture clients, VM/release unchanged. Bounded receipts for that baseline:
 `/tmp/petal-h01-resume-ri03q_pt/actual-window-boundary-check.json` and
 `cleanup.json`. The earlier chooser-timeout preflight remains historical at
 `/tmp/petal-h01-window-boundary-lox9tjoo`; no product code, shared-service,
 publication or deployment changes were made.
+
+#### Linux desktop-host Task 4.1: local code, live acceptance pending
+
+The local implementation now separates ordinary pictures, explicit desktop-wide
+preparation and named-controller approval. It adds same-session EIS mapping,
+scoped continuous-pointer negotiation, authority retirement and separately
+approved current-clipboard text exchange. It does not automatically copy a
+selection or paste into an editor.
+
+The final native unit gate passed 1,452 tests with three ignored. The focused
+frontend gate passed 26 tests; typecheck reported zero errors and the existing
+RoomRow accessibility warning after regenerating the stale route-type cache.
+Production frontend assets and both Linux and temporary Windows candidates built.
+
+The actual fresh-profile Linux executable rendered the view-only header and
+unprepared-desktop feedback, rejected invalid preparation/stop commands and
+stale consent answers, and passed the migrated no-authority living capability
+scenario. This did not join a room or activate capture, input or clipboards.
+
+Nine isolated negative controls failed at their expected assertions and passed
+after restoration, including both real controller producers; the Windows
+producer test ran in the owned VM. The complete original tree, including ignored
+artifacts, remained byte-identical across that witness. A separate watchdog test
+stayed green when the production starvation regression was restored; that
+copied-loop test was removed rather than counted as expiry-teardown coverage.
+Receipts are in `/tmp/petal-task41-frozen-mdgqiatd/mutation-results.json` and
+`original-after-verification.json`.
+
+On November 6, the actual fresh-profile Linux host and owned temporary Windows
+candidate joined a new room. With DP-1 temporarily at 150 percent scale, ordinary
+monitor publication followed by fresh native desktop-control selection reached
+`ready` for the replacement share, with no controller. This proves preparation
+reached its ready state, not pointer mapping or input delivery. The attended run
+ended for a meeting before named approval, input or clipboard acceptance.
+
+`stop_all_shares` completed; the picture list was empty and desktop-control state
+held no window or controller. The original 100 percent scaling was restored,
+the owned Linux app left and exited normally, and the safety guard was disarmed.
+Partial evidence is in `/tmp/petal-task41-live-tt9ye5wt/partial-acceptance.json`.
+Named approval, EIS injection, clipboard interoperability, held-input teardown
+and other-media preservation remain unverified. H01–H06 and host R04 remain TODO;
+the 150 percent pointer-mapping row is not accepted. No installed Windows
+replacement, publication, deployment or shared-service change has occurred.
+
+The Windows receiver's native Control menu attempt stalled UI/CDP automation;
+no control request was sent and decoded-picture correctness was not established.
+The owned temporary candidate required identity-checked termination after normal
+Leave/Quit and Escape failed. Its guard and guest directory were removed; the
+installed release hash stayed unchanged. This remains an unresolved live-path
+
+#### Task 4.1 attended live results, November 6 (second run)
+
+With fresh human consent, the real Linux host and owned temporary Windows
+candidate exercised live scenarios in room `usf-nfrw-ktq` at DP-1 150 percent
+scale. Observed PASSes: H01 window-share view-only (receiver button disabled
+with the explicit label, `remoteControlViewOnly=1`, real decode confirmed;
+direct preparation of the window target rejected with the view-only
+explanation); H02 named approval reaching active control twice; H02 refusal
+(the dialog's Cancel) returning to ready with the picture preserved; H02
+missing keyboard/pointer permission failing closed with the exact
+"requires both keyboard and pointer permission" error while the original
+picture share survived; H03 pointer absolute mapping at 150 percent across
+all four corners and center with correct logical coordinates, evdev keyboard
+delivery with shift pairs, and proportional scroll; H04 disclosure before and
+during control with the controller named and an obvious stop; H05 local stop
+revoking the controller first ("revoking 1 active controller(s)") and ending
+the controlled share, held input auto-released by the designed ~1.3 second
+held-input TTL, malformed packets (null, −0.5, 1.5) rejected with logged
+reasons and zero injection, unclaimed prepared states and quiet active grants
+expiring fail-closed roughly three to five minutes in, and post-retirement
+replay rejected ("remote window N is not open").
+
+Live blockers and limits: controller-originated clipboard operations (R04)
+never reach the host clipboard handler despite valid grant tokens — the
+production UI also swallows the error — so the positive clipboard transfer is
+blocked on this build; composition/`Text`-type input is dropped host-side by
+design, so arbitrary Unicode text entry is unsupported (evdev keys work); the
+consent dialog buttons read "Allow"/"Cancel" (usability feedback: "Deny" and a
+distinct continue label would be clearer). Not exercised live: unanswered
+request expiry at the consent dialog, cancellation before replacement commit,
+portal revocation, source loss, controller departure, room leave, disconnect,
+EIS-loss teardown, reconnect-no-restore, and the full H06 preservation matrix
+(editor/camera/mic surviving stop) unless the final attended cycle runs.
+Evidence: `/tmp/petal-task41-live2-iiw_dlxd/*.json` and
+`/tmp/petal-task41-windows-z9Pjnj/*` (host fixture events, host logs, Windows
+
+Final outcome of that run: H01, H04 and H06 are accepted (living scenarios
+now recorded in `apps/desktop/features/linux-desktop-control.feature` and
+the plan rows flipped); H02, H03 and H05 carry the verified live rows noted
+above with their untested examples still open; host-direction R04 stays
+blocked by the clipboard request defect. Two operational notes: the host
+safety guard's deadline landed 18 seconds after the final stop, costing the
+peer-side post-stop preservation sample (host logs are the accepted H06
+evidence), and Windows auto-created two inert per-path "Query User" firewall
+rules from the dismissed prompt for the now-deleted temporary executable —
+never allowed, inert, recorded in the cleanup receipt; removing them would
+need one manual elevated action. All owned Linux processes, fixtures and
+guards exited cleanly with 100 percent scale verified restored; the Windows
+candidate left/quit normally with the installed release hash unchanged.
+The host clipboard was replaced with authorized synthetic content during
+
+Clipboard-fix retest, November 6 evening: the host-side authorization repair
+is verified live — after the owned peer initialized its (never-initialized)
+guest clipboard, a real copy request reached the host for the first time and
+logged "clipboard copy … authorized for window 4; awaiting local consent."
+Two further layers remain before R04 can pass: the Windows backend maps an
+uninitialized guest clipboard (sequence number 0) to "clipboard unavailable",
+swallowed by the overlay until the new error banner ships in a rebuilt Windows
+candidate; and the parked per-operation clipboard consent dialog did not
+render at all (no window, nothing for the human to click) before the session
+
+R04 positive verified live, November 6 final cycle: after three same-day
+fixes (host-owned clipboard scope admission with logged rejections, fully
+async deadline-bounded consent dialogs that render exactly like the working
+disclosure dialog, and uninitialized-clipboard sequence handling), two
+separately approved operations each moved exactly 1048576 bytes of known
+synthetic text — copy host→controller and paste controller→host, hashes
+matching on both sides, each behind its own human-approved dialog naming the
+controller. Two earlier approved copies incidentally moved the human's own
+freshly-copied 26- and 23-byte content after normal desktop use replaced the
+synthetic; the observing agent redacted both, nothing was displayed or
+stored, and the guest temp directory was deleted. The oversize/NUL/file/image
+rejection rows remain unit-proven only (the one post-retirement refusal seen
+was the test harness's own ownership gate, not product code). All clients
+
+Expiry fix and edge rows, November 6 evening: the ~5-minute control-session
+expiry was diagnosed as a single absolute 300-second deadline set at
+preparation and never renewed (plus departed controllers never retiring the
+desktop authority). Now actively granted sessions run on a 30-minute sliding
+idle window renewed by activation, input and clipboard use; unclaimed
+preparations keep the 300-second absolute bound that request spam cannot
+extend; and a departed controller's authority is revoked with its grant after
+the 10-second roster confirmation. Live edge results: controller app-quit
+revoked exactly 10.0 seconds after disconnect with the controlled share
+ended and clean idle; a rejoined peer received nothing and old operations
+were rejected; a fresh request/consent cycle reached active control again;
+and a real 20-second network outage was survived HOST-side (stale-disconnect
+recognition kept the grants, state stayed active) — but the controlling
+client deactivated its overlay on reconnect and locally gated all input, so
+usable control did not transparently survive the blip. That client-side
+reconnect state desync is the next open bug. Evidence:
+`/tmp/petal-task41-live5-edge/edge-rows.json` and
+`/tmp/petal-departure-cycle-eF4eJc/reconnect-renewal-attempt.json`.
+
+Physical rows, November 6 evening: with control active, the human physically
+unplugged the sole monitor (DP-1) for about five seconds and replugged it. The
+host failed closed within roughly two seconds of the unplug — state moved to
+failed with `EIS permission or input device ended`, the controlled share
+retired, and the controller was cleared; the Windows peer corroborated the
+shared-window affordance disappearing with no share resurrection, and its VM
+survived the display change. After replug the monitor returned at scale 1.0
+with the app alive in the room and no automatic restoration of control — a
+fresh consent cycle would be required. Second-monitor selection remains
+untested: no second physical monitor was available. Evidence:
+`/tmp/petal-task41-live6-phys/physical-rows.json` and
+`/tmp/petal-physical-peer-c0vgrw/source-loss-observation.json`.
+
+Reconnect-desync fix, November 6/7 evening: the "controller overlay
+deactivates on reconnect" bug (host kept grants through a 20s outage while
+the Windows controller's recreated pages stayed down) was fixed in four
+layers, each verified live on the VM peer unless noted: the #820
+stale-disconnect resolutions now re-announce still-active grants (forced
+past the lifecycle dedup, tokenless when the grant lives only in the
+desktop-control authority — unit-proven, `reannounce_emits_tokenless…`);
+the Windows compositor seeds a recreated control overlay from engine truth;
+the recreated surface header adopts a host request id when its local id is
+null; and a fresh surface page pulls controller state on mount
+(`remote_control_controller_state`). Live result with both fixed binaries:
+after a 20s outage (30s+ active idle first), BOTH the recreated overlay and
+the recreated header re-armed within ~7.4s of reconnect with no new
+request, and three pointer moves were accepted host-side (zero rejection
+lines in the host log). Two adjacent bugs found and fixed the same evening:
+a confirmed controller departure now also retires the Linux desktop-control
+admission by controller (previously it could stay "in use" for up to the
+30-minute idle bound — unit-proven; the observed live refusal was the
+same-identity stop-first message after an in-grace rejoin, which is correct
+behavior), and the request-timeout copy no longer tells Windows users to
+"check Accessibility on the shared Mac" (verified live: the new
+platform-neutral message rendered). Evidence:
+`/tmp/petal-reconnect-v2-LPG7Zz/`, `/tmp/petal-retirement-final-8GbU21/`,
+and `/tmp/petal-task41-live9-final/`.
+
+#### Read-only native prerequisite checks
+
 
 
 Run the native read-only prerequisite diagnostic with an intentionally missing
@@ -968,7 +1157,7 @@ reads only advertised ScreenCast properties from the portal's existing unique
 bus owner. It neither starts a stopped portal service nor creates a portal
 session, requests permission, opens a PipeWire remote, selects a device or
 installs software. Its report names missing components and their monitor-sharing
-effect. Camera and input remain unavailable in this unit. A positive component
+effect. Reporting prerequisites enables neither camera nor input. A positive
 report is not permission, a working capture stream or Windows-rendering proof.
 The check observes owned portal method-call headers and rejects media/input
 activation; it does not record selected content.

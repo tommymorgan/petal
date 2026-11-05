@@ -54,6 +54,7 @@
     EVENTS,
     type AiChatOverlayOpenChangedEvent,
     type AiChatRemoteSessionState,
+    hasTauriBridge,
     type AiChatSettings,
     type DebugModeSettings,
     type NetworkSnapshot,
@@ -84,6 +85,8 @@
   const remoteControlDisallowed = $derived(
     page.url.searchParams.get('remoteControlDisallowed') === '1'
   );
+  const remoteControlViewOnly = $derived(page.url.searchParams.get('remoteControlViewOnly') === '1');
+  const remoteControlPreparationRequired = $derived(page.url.searchParams.get('remoteControlPreparationRequired') === '1');
   let controlMode = $state<'cursorPreserving' | 'fullControl'>(
     page.url.searchParams.get('controlMode') === 'fullControl' ? 'fullControl' : 'cursorPreserving'
   );
@@ -232,7 +235,10 @@
   }
 
   function applyRemoteControlStatus(status: RemoteControlStatus) {
-    if (!status.requestId || status.requestId !== remoteControlRequestId) return;
+    // A page recreated by a reconnect starts with no local request id; the
+    // host's status (e.g. the #820 re-announce of a surviving grant) must be
+    // adoptable so the header re-arms instead of gating on a null id forever.
+    if (!status.requestId || (remoteControlRequestId && status.requestId !== remoteControlRequestId)) return;
     const effect = remoteControlStatusEffect(status.status);
     // Consent flow: the host parked our request and is asking the sharer.
     // Stay in "requesting" (the button keeps its pending state) but swap the
@@ -728,6 +734,25 @@
   });
 
   onMount(() => {
+    // Reconnect bootstrap (#820 follow-up): this page can be recreated by a
+    // transport replacement while a control grant survives host-side. The
+    // host's fire-and-forget re-announce event is missed by a page that was
+    // not yet mounted, so PULL engine truth once: adopt the active request
+    // id and re-arm the header instead of showing "Request control" while
+    // the overlay is live (observed 2026-11-07).
+    if (hasTauriBridge()) {
+      invoke<{ requestId: string } | null>(COMMANDS.remoteControlControllerState, {
+        windowId,
+        ownerIdentity
+      })
+        .then((state) => {
+          if (!state || remoteControlRequestId || remoteControlActive) return;
+          remoteControlRequestId = state.requestId;
+          remoteControlActive = true;
+          remoteControlRequesting = false;
+        })
+        .catch(() => {});
+    }
     void refreshFreshness();
     freshnessTimer = setInterval(() => void refreshFreshness(), 1000);
     // Ask AND listen. This panel can mount long after a session went live (a
@@ -783,7 +808,10 @@
     };
     surfaceWindow.__petalRemoteControlHeaderActive =
       (value: boolean, requestId?: string | null) => {
-        if (!requestId || requestId !== remoteControlRequestId) return;
+        // Same adoption rule as applyRemoteControlStatus: a recreated page
+        // (reconnect transport replacement) has no local id to compare, and
+        // must take the compositor-driven re-arm.
+        if (!requestId || (remoteControlRequestId && requestId !== remoteControlRequestId)) return;
         clearRemoteControlTimeout();
         remoteControlRequestSerial += 1;
         remoteControlActive = value;
@@ -875,6 +903,8 @@
       {remoteControlStatusMessage}
       {remoteControlAvailable}
       {remoteControlDisallowed}
+      {remoteControlViewOnly}
+      {remoteControlPreparationRequired}
       {onToggleRemoteControl}
       {controlMode}
       {onRequestEscalation}

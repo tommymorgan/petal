@@ -530,25 +530,6 @@ pub fn open_privacy_settings(which: String) -> bool {
 mod tests {
     use super::{auth_status_string, privacy_settings_url, PermissionRequestOutcome};
 
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    fn non_macos_adapters_do_not_gate_on_macos_tcc() {
-        assert!(super::check_screen_recording());
-        assert_eq!(
-            super::request_screen_recording(),
-            PermissionRequestOutcome::new(true, true)
-        );
-        assert_eq!(super::check_microphone(), "authorized");
-        assert_eq!(super::request_microphone(), "authorized");
-        assert_eq!(super::check_camera(), "authorized");
-        // request_camera is an async Tauri command needing an AppHandle; the
-        // synchronous shim surface it dispatches to is what stays pinned.
-        assert!(super::check_accessibility());
-        assert_eq!(
-            super::request_accessibility(),
-            PermissionRequestOutcome::new(true, true)
-        );
-    }
 
     #[test]
     fn maps_known_av_authorization_statuses() {

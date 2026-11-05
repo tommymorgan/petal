@@ -436,14 +436,10 @@ pub(crate) fn prepare_outbound_input(message: &mut RemoteControlMessage) -> Resu
             | (RemoteControlType::Text, _)
     );
     if !v2_discrete {
-        // macOS parity, lossy drag stream: legacy-shaped — grant token only.
-        // Clearing the v2 markers (target kind, share instance, host caps)
-        // keeps the host from classifying this as a v2 attempt (and rejecting
-        // it as an incomplete envelope); the mirrored legacy grant on the host
-        // authorizes it.
-        message.target_kind = None;
-        message.share_instance_id = None;
-        message.host_capabilities = Vec::new();
+        // Linux desktop hosts advertise a scoped JSON stream. Keep its exact
+        // target/instance without stamping discrete-operation markers. Older
+        // hosts retain their existing mirrored legacy-token stream.
+        crate::remote_control_core::prepare_continuous_pointer_envelope(message);
         return Ok(true);
     }
 
@@ -3343,6 +3339,40 @@ mod tests {
         let ok = wheel_lparam(800, 600).expect("in-range coords");
         assert_eq!((ok as usize & 0xFFFF) as i32, 800);
         assert_eq!(((ok as usize >> 16) & 0xFFFF) as i32, 600);
+    }
+
+    #[test]
+    fn desktop_pointer_stream_generated_by_windows_passes_exact_scoped_host_admission() {
+        use crate::remote_control_core::{ControlGrantKey, ControllerGrantEnvelope, is_v2_discrete_attempt, remote_control_engine, test_support::input_message};
+        let _guard = test_lock();
+        let engine = remote_control_engine();
+        let id = 0x6500_0042;
+        engine.begin_controller_request(id, "linux-host", Some("pointer-attempt".into()));
+        engine.install_controller_grant(id, "linux-host".into(), ControllerGrantEnvelope {
+            target_kind: RemoteControlTargetKind::Display, share_instance_id: "current-desktop".into(),
+            control_session_id: "desktop-token".into(), grant_token: "desktop-token".into(), full_pointer: false,
+            host_capabilities: vec![RemoteControlCapability::DiscretePointerV1, RemoteControlCapability::ScopedPointerStreamV1],
+            next_input_seq: 1,
+        });
+        for action in [RemoteControlAction::Move, RemoteControlAction::Down, RemoteControlAction::Up] {
+            let mut message = input_message(id, "linux-host", RemoteControlType::Pointer);
+            message.action = Some(action);
+            assert_eq!(prepare_outbound_input(&mut message), Ok(true));
+            assert!(!is_v2_discrete_attempt(&message));
+            let key = ControlGrantKey {
+                window_id: id,
+                controller_id: "local-controller".into(),
+                target_kind: Some(RemoteControlTargetKind::Display),
+                share_instance_id: Some("current-desktop".into()),
+            };
+            engine.install_grant(key.clone(), "desktop-token".into());
+            assert!(crate::remote_control::is_authorized_input(&message));
+            message.share_instance_id = Some("retired-desktop".into());
+            assert!(!crate::remote_control::is_authorized_input(&message));
+            engine.revoke_grant(&key);
+        }
+        engine.retire_controller_request(id, "linux-host");
+        engine.remove_controller_grant(id, "linux-host");
     }
 
     #[test]

@@ -1142,13 +1142,18 @@ pub(crate) fn start_compositor_feed(
                     // The sharer's own denial (petalWindowRemoteControl) is
                     // separate from "metadata hasn't arrived yet": the first is
                     // permanent and must read as such, the second is transient.
+                    let control_capability =
+                        crate::transport::publisher::shared_window_control_capability_from_metadata(
+                            &participant.metadata(), window_id,
+                        );
                     let remote_control_disallowed =
                         !crate::transport::publisher::shared_window_remote_control_allowed_from_metadata(
                             &participant.metadata(),
                             window_id,
                         );
-                    let remote_control_available =
-                        source_scale_metadata.is_some() && !remote_control_disallowed;
+                    let remote_control_available = source_scale_metadata.is_some()
+                        && !remote_control_disallowed
+                        && control_capability.is_none_or(crate::transport::publisher::SharedControlCapability::allows_request);
                     if !remote_control_available && !remote_control_disallowed {
                         log::debug!(
                             "compositor feed: native metadata not available yet for window {window_id} from '{}'; remote control stays hidden until metadata arrives",
@@ -1243,6 +1248,7 @@ pub(crate) fn start_compositor_feed(
                         source_scale,
                         remote_control_available,
                         remote_control_disallowed,
+                        control_capability,
                         owner_palette_index,
                         canonical_source_size,
                     );
@@ -1396,6 +1402,8 @@ pub(crate) fn start_compositor_feed(
                                 log::info!(
                                     "compositor feed: applying metadata that raced window creation for window {window_id} from '{owner_display_name}' ({owner_identity_for_retry})"
                                 );
+                                let control_capability = crate::transport::publisher::
+                                    shared_window_control_capability_from_metadata(&metadata, window_id);
                                 let remote_control_disallowed = !crate::transport::publisher::
                                     shared_window_remote_control_allowed_from_metadata(
                                         &metadata, window_id,
@@ -1408,8 +1416,9 @@ pub(crate) fn start_compositor_feed(
                                     &source_title,
                                     source_url,
                                     Some(source_scale),
-                                    !remote_control_disallowed,
+                                    !remote_control_disallowed && control_capability.is_none_or(crate::transport::publisher::SharedControlCapability::allows_request),
                                     remote_control_disallowed,
+                                    control_capability,
                                     owner_palette_index,
                                     share_instance_id,
                                 );
@@ -2258,6 +2267,8 @@ pub(crate) fn start_compositor_feed(
                             crate::transport::publisher::identity_palette_index_from_metadata(
                                 &metadata,
                             );
+                        let control_capability = crate::transport::publisher::
+                            shared_window_control_capability_from_metadata(&metadata, window_id);
                         let remote_control_disallowed = !crate::transport::publisher::
                             shared_window_remote_control_allowed_from_metadata(
                                 &metadata, window_id,
@@ -2274,8 +2285,9 @@ pub(crate) fn start_compositor_feed(
                             &source_title,
                             source_url,
                             Some(source_scale),
-                            !remote_control_disallowed,
+                            !remote_control_disallowed && control_capability.is_none_or(crate::transport::publisher::SharedControlCapability::allows_request),
                             remote_control_disallowed,
+                            control_capability,
                             owner_palette_index,
                             share_instance_id,
                         );
@@ -2293,27 +2305,6 @@ pub(crate) fn start_compositor_feed(
                                 &metadata, window_id,
                             ),
                         );
-                        #[cfg(target_os = "windows")]
-                        {
-                            let share_instance_id =
-                                crate::transport::publisher::shared_window_share_instance_from_metadata(
-                                    &metadata,
-                                    window_id,
-                                );
-                            let control_mode = crate::transport::publisher::
-                                shared_window_control_mode_from_metadata(&metadata, window_id);
-                            crate::windows_compositor::update_window_metadata(
-                                &app,
-                                (owner_identity.clone(), window_id),
-                                owner_display_name.clone(),
-                                source_title.clone(),
-                                source_kind,
-                                true,
-                                share_instance_id,
-                                control_mode,
-                            )
-                            .await;
-                        }
 
                         // #251: color_profile was previously read only at
                         // TrackSubscribed. Under #249's >3s signaling-stall
@@ -2589,6 +2580,10 @@ pub(crate) fn start_compositor_feed(
                             &participant.metadata(),
                             window_id,
                         );
+                    let control_capability =
+                        crate::transport::publisher::shared_window_control_capability_from_metadata(
+                            &participant.metadata(), window_id,
+                        );
                     let remote_control_disallowed =
                         !crate::transport::publisher::shared_window_remote_control_allowed_from_metadata(
                             &participant.metadata(),
@@ -2600,7 +2595,8 @@ pub(crate) fn start_compositor_feed(
                             window_id,
                         )
                         .is_some())
-                        && !remote_control_disallowed;
+                        && !remote_control_disallowed
+                        && control_capability.is_none_or(crate::transport::publisher::SharedControlCapability::allows_request);
                     let control_mode =
                         crate::transport::publisher::shared_window_control_mode_from_metadata(
                             &participant.metadata(),
@@ -2657,6 +2653,7 @@ pub(crate) fn start_compositor_feed(
                             source_url,
                             source_kind,
                             remote_control_available,
+                            control_capability,
                             share_instance_id,
                             control_mode,
                             canonical_source_size,
@@ -2764,6 +2761,8 @@ pub(crate) fn start_compositor_feed(
                             crate::transport::publisher::shared_window_share_instance_from_metadata(
                                 &metadata, window_id,
                             );
+                        let control_capability = crate::transport::publisher::
+                            shared_window_control_capability_from_metadata(&metadata, window_id);
                         let remote_control_disallowed =
                             !crate::transport::publisher::shared_window_remote_control_allowed_from_metadata(
                                 &metadata, window_id,
@@ -2773,7 +2772,8 @@ pub(crate) fn start_compositor_feed(
                                 &metadata, window_id,
                             )
                             .is_some())
-                            && !remote_control_disallowed;
+                            && !remote_control_disallowed
+                            && control_capability.is_none_or(crate::transport::publisher::SharedControlCapability::allows_request);
                         let control_mode =
                             crate::transport::publisher::shared_window_control_mode_from_metadata(
                                 &metadata, window_id,
@@ -2786,6 +2786,7 @@ pub(crate) fn start_compositor_feed(
                             source_url,
                             source_kind,
                             remote_control_available,
+                            control_capability,
                             share_instance_id,
                             control_mode,
                         )

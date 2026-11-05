@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Mutex, MutexGuard, OnceLock, TryLockError};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::sync_ext::MutexExt;
@@ -115,6 +115,18 @@ pub(crate) fn new_operation_id() -> Result<String, ClipboardError> {
         write!(&mut id, "{byte:02x}").expect("writing an operation id cannot fail");
     }
     Ok(id)
+}
+
+/// Windows `GetClipboardSequenceNumber` returns 0 for a clipboard that has
+/// never been initialized (fresh session, nothing ever copied), and
+/// clipboard-win surfaces exactly that case as `None`. Sequence 0 is the
+/// VALID empty-clipboard state on every platform — Linux derives 0 for no
+/// text, macOS changeCount starts at 0 — not unavailability. Genuine open
+/// failures stay `ClipboardError::Unavailable` and are mapped only where the
+/// clipboard is actually opened (`Clipboard::new_attempts`).
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn clipboard_sequence_number(raw: Option<u32>) -> u64 {
+    raw.map(u64::from).unwrap_or(0)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,13 +318,14 @@ pub(crate) fn prune_paste_operations(now: Instant) {
     });
 }
 
-pub(crate) fn try_clipboard_operation_lock() -> Option<MutexGuard<'static, ()>> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    match LOCK.get_or_init(|| Mutex::new(())).try_lock() {
-        Ok(guard) => Some(guard),
-        Err(TryLockError::Poisoned(error)) => Some(error.into_inner()),
-        Err(TryLockError::WouldBlock) => None,
-    }
+pub(crate) fn try_clipboard_operation_lock() -> Option<tokio::sync::OwnedMutexGuard<()>> {
+    // Tokio-owned so the Linux host paths can hold the operation lock
+    // across AWAITED consent/read/write stages: an `OwnedMutexGuard` is
+    // `Send`, a `std::sync::MutexGuard` is not, and the 2026-11-06 deadlock
+    // fix requires runtime-driven (awaited) dialog stages.
+    static LOCK: LazyLock<Arc<tokio::sync::Mutex<()>>> =
+        LazyLock::new(|| Arc::new(tokio::sync::Mutex::new(())));
+    LOCK.clone().try_lock_owned().ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -412,17 +425,18 @@ impl ClipboardBackend for SystemClipboardBackend {
     }
 
     fn sequence(&self) -> Result<u64, ClipboardError> {
-        clipboard_win::seq_num()
-            .map(|sequence| u64::from(sequence.get()))
-            .ok_or(ClipboardError::Unavailable)
+        // Sequence 0 (never-initialized clipboard) is valid, not an error:
+        // GetClipboardSequenceNumber has no failure state of its own.
+        Ok(clipboard_sequence_number(
+            clipboard_win::seq_num().map(|sequence| sequence.get()),
+        ))
     }
 
     fn contents(&self) -> Result<ClipboardContents, ClipboardError> {
         let _clipboard = clipboard_win::Clipboard::new_attempts(CLIPBOARD_OPEN_ATTEMPTS)
             .map_err(|_| ClipboardError::Unavailable)?;
-        let sequence = clipboard_win::seq_num()
-            .map(|value| u64::from(value.get()))
-            .ok_or(ClipboardError::Unavailable)?;
+        let sequence =
+            clipboard_sequence_number(clipboard_win::seq_num().map(|value| value.get()));
         let has_file_transfer = windows_file_format_available();
         let text = if has_file_transfer {
             None
@@ -706,6 +720,22 @@ mod tests {
         assert!(operation_id_is_valid(&id));
         assert!(!operation_id_is_valid(&id.to_ascii_uppercase()));
         assert!(!operation_id_is_valid("short"));
+    }
+
+    #[test]
+    fn windows_sequence_zero_is_a_valid_empty_clipboard_not_unavailability() {
+        // Live 2026-11-06: a never-initialized guest clipboard
+        // (GetClipboardSequenceNumber()==0, surfaced by clipboard-win as
+        // None) failed `remote_clipboard_copy` with "clipboard unavailable"
+        // BEFORE the request was published; initializing the clipboard
+        // (seq 12) made the identical invoke succeed. Sequence 0 is the
+        // valid empty-clipboard state on every platform (Linux derives 0
+        // for no text; macOS changeCount starts at 0) — only genuine open
+        // failures are Unavailable, mapped where the clipboard is opened.
+        assert_eq!(clipboard_sequence_number(None), 0);
+        assert_eq!(clipboard_sequence_number(Some(0)), 0);
+        assert_eq!(clipboard_sequence_number(Some(12)), 12);
+        assert_eq!(clipboard_sequence_number(Some(u32::MAX)), u64::from(u32::MAX));
     }
 
     #[test]

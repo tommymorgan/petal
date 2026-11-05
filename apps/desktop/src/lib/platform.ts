@@ -43,7 +43,7 @@ export function linuxMeetingLimitation(
     case 'region':
       return 'Region sharing is unsupported on Linux';
     case 'remotecontrol':
-      return 'Remote control requests, grants, input sending and replay are unsupported on Linux';
+      return 'Prepare a display share for desktop control; application-window shares are View only';
     default:
       return undefined;
   }

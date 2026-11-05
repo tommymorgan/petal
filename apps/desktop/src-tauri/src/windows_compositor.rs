@@ -31,7 +31,7 @@ use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use crate::sync_ext::MutexExt;
-use crate::transport::publisher::SharedSourceKind;
+use crate::transport::publisher::{SharedControlCapability, SharedSourceKind};
 use crate::video_color::VideoColorProfile;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -150,10 +150,13 @@ fn surface_route_url(
     source_url: Option<&str>,
     source_kind: SharedSourceKind,
     remote_control_available: bool,
+    control_capability: Option<SharedControlCapability>,
     share_instance_id: Option<&str>,
     control_mode: crate::remote_control_core::RemoteControlMode,
 ) -> String {
-    let remote_control = u8::from(remote_control_available);
+    let remote_control = u8::from(
+        remote_control_available && control_capability.is_none_or(SharedControlCapability::allows_request),
+    );
     let share_instance_id = share_instance_id.map(percent_encode).unwrap_or_default();
     let control_mode = match control_mode {
         crate::remote_control_core::RemoteControlMode::FullControl => "fullControl",
@@ -167,6 +170,14 @@ fn surface_route_url(
         &owner_palette_hex(owner_identity)[1..],
         source_kind.as_wire(),
     );
+    match control_capability {
+        Some(SharedControlCapability::WindowViewOnly) => route.push_str("&remoteControlViewOnly=1"),
+        Some(SharedControlCapability::DesktopPreparationRequired) => {
+            route.push_str("&remoteControlPreparationRequired=1");
+        }
+        Some(SharedControlCapability::Unavailable) => route.push_str("&remoteControlDisallowed=1"),
+        Some(SharedControlCapability::DesktopReady) | None => {}
+    }
     if let Some(source_url) =
         source_url.and_then(crate::browser_url::privacy_minimized_openable_url)
     {
@@ -2270,6 +2281,7 @@ pub(crate) async fn update_window_metadata(
     source_url: Option<String>,
     source_kind: SharedSourceKind,
     remote_control_available: bool,
+    control_capability: Option<SharedControlCapability>,
     share_instance_id: Option<String>,
     control_mode: crate::remote_control_core::RemoteControlMode,
 ) {
@@ -2289,6 +2301,7 @@ pub(crate) async fn update_window_metadata(
         source_url.as_deref(),
         source_kind,
         remote_control_available,
+        control_capability,
         share_instance_id.as_deref(),
         control_mode,
     );
@@ -2333,6 +2346,7 @@ pub(crate) async fn create_window(
     source_url: Option<String>,
     source_kind: SharedSourceKind,
     remote_control_available: bool,
+    control_capability: Option<SharedControlCapability>,
     share_instance_id: Option<String>,
     control_mode: crate::remote_control_core::RemoteControlMode,
     canonical_source_size: Option<(u32, u32)>,
@@ -2355,6 +2369,7 @@ pub(crate) async fn create_window(
         source_url.as_deref(),
         source_kind,
         remote_control_available,
+        control_capability,
         share_instance_id.as_deref(),
         control_mode,
     );
@@ -2590,6 +2605,28 @@ fn create_control_overlay(app: &tauri::AppHandle, key: &WindowKey) {
             };
             if !window_exists {
                 let _ = overlay.close();
+            }
+            // Reconnect re-arm (#820 follow-up): a transport replacement can
+            // rebuild the receiver windows AFTER the host re-announced an
+            // active grant, and a fresh overlay otherwise boots inactive —
+            // measured live, that left control unusable despite host
+            // authority surviving the blip. Seed from engine truth; the page
+            // parks the value until its handlers exist.
+            if window_exists {
+                if let Some(request_id) = crate::remote_control_core::remote_control_engine()
+                    .controller_request_active(key.1, &key.0)
+                {
+                    if let Ok(request_id_json) = serde_json::to_string(&request_id) {
+                        let js = format!(
+                            "window.__petalPendingRemoteControlRequestId = {request_id_json}; window.__petalPendingRemoteControlActive = true; window.__petalRemoteControlSetActive?.(true, {request_id_json});"
+                        );
+                        if let Err(error) = overlay.eval(&js) {
+                            log::warn!(
+                                "windows compositor: failed to seed recreated control overlay for {key:?}: {error}"
+                            );
+                        }
+                    }
+                }
             }
         }
         Err(error) => {

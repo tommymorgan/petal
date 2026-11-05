@@ -13,12 +13,14 @@ const DESTINATION: &str = "org.freedesktop.portal.Desktop";
 const DESKTOP: &str = "/org/freedesktop/portal/desktop";
 const SCREENCAST: &str = "org.freedesktop.portal.ScreenCast";
 const PERMISSION_TIMEOUT: Duration = Duration::from_secs(120);
+const REMOTE_DESKTOP: &str = "org.freedesktop.portal.RemoteDesktop";
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
 type Properties = HashMap<String, OwnedValue>;
 
 pub(super) struct PictureStream {
     pub node: u32,
     pub source_kind: SharedSourceKind,
+    pub mapping_id: Option<String>,
 }
 
 fn validate_streams(mut streams: Vec<(u32, Properties)>) -> Result<PictureStream, String> {
@@ -43,13 +45,30 @@ fn validate_streams(mut streams: Vec<(u32, Properties)>) -> Result<PictureStream
     if node == 0 {
         return Err("ScreenCast returned an invalid picture node".to_string());
     }
-    Ok(PictureStream { node, source_kind })
+    let mapping_id = properties.get("mapping_id").and_then(|v| <&str>::try_from(v).ok())
+        .filter(|id| !id.is_empty()).map(str::to_string);
+    Ok(PictureStream { node, source_kind, mapping_id })
+}
+
+fn validate_control_streams(streams: Vec<(u32, Properties)>, devices: u32) -> Result<PictureStream, String> {
+    if devices & 3 != 3 { return Err("Desktop control requires both keyboard and pointer permission".into()); }
+    let stream = validate_streams(streams)?;
+    if stream.source_kind != SharedSourceKind::Display {
+        return Err("Application-window shares are view-only; desktop control requires a monitor".into());
+    }
+    if stream.mapping_id.is_none() {
+        return Err("Selected monitor has no same-session input mapping; picture-only sharing is unchanged".into());
+    }
+    Ok(stream)
 }
 
 pub(super) struct PortalSession {
     connection: Option<zbus::Connection>,
     path: String,
     request_serial: u64,
+    interface: &'static str,
+    pub clipboard_enabled: bool,
+    pub clipboard: Option<std::sync::Arc<crate::linux_host_clipboard::PortalClipboard>>,
 }
 
 impl PortalSession {
@@ -68,6 +87,9 @@ impl PortalSession {
             connection: Some(connection),
             path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_picture"),
             request_serial: 0,
+            interface: SCREENCAST,
+            clipboard_enabled: false,
+            clipboard: None,
         })
     }
 
@@ -76,7 +98,7 @@ impl PortalSession {
             self.connection.as_ref().ok_or("Portal session retired")?,
             DESTINATION,
             DESKTOP,
-            SCREENCAST,
+            self.interface,
         )
         .await
         .map_err(|e| format!("ScreenCast portal unavailable: {e}"))
@@ -159,6 +181,68 @@ impl PortalSession {
                 tokio::time::timeout(CLOSE_TIMEOUT, request.call::<_, _, ()>("Close", &())).await;
         }
         outcome
+    }
+
+    /// One RemoteDesktop-owned session supplies both capture and EIS authority.
+    /// No persistent token and no input fallback are ever requested.
+    pub async fn select_desktop_control(&mut self, cancel: &CancellationToken) -> Result<PictureStream, String> {
+        self.interface = REMOTE_DESKTOP;
+        let mut options = self.options();
+        options.insert("session_handle_token", Value::from("petal_picture"));
+        let mut created = self.request("CreateSession", &(options,), cancel).await?;
+        let handle = created.remove("session_handle").ok_or("RemoteDesktop returned no session")?;
+        let actual = if let Ok(path) = <&str>::try_from(&handle) { path.to_string() }
+            else { OwnedObjectPath::try_from(handle).map_err(|_| "Invalid desktop session")?.to_string() };
+        if actual != self.path { return Err("Unexpected RemoteDesktop session identity".into()); }
+        let session = OwnedObjectPath::try_from(self.path.clone()).map_err(|e| e.to_string())?;
+        let mut options = self.options();
+        options.insert("types", Value::from(3u32));
+        options.insert("persist_mode", Value::from(0u32));
+        self.request("SelectDevices", &(&session, options), cancel).await?;
+        self.interface = SCREENCAST;
+        let proxy = self.proxy().await?;
+        let version: u32 = proxy.get_property("version").await.map_err(|e| format!("ScreenCast version unavailable: {e}"))?;
+        if version < 5 { return Err("Desktop control needs ScreenCast v5 same-session mapping".into()); }
+        drop(proxy);
+        let mut options = self.options();
+        options.insert("types", Value::from(1u32));
+        options.insert("multiple", Value::from(false));
+        options.insert("cursor_mode", Value::from(2u32));
+        // Combined sessions prohibit ScreenCast persist_mode.
+        self.request("SelectSources", &(&session, options), cancel).await?;
+        self.clipboard = crate::linux_host_clipboard::PortalClipboard::open(
+            self.connection.as_ref().ok_or("Desktop session retired")?.clone(),
+            self.path.clone(), cancel.clone()).await.ok();
+        // Request OS clipboard capability before Start. A compositor may deny
+        // it independently; no content is accessed here.
+        if let Ok(clipboard) = zbus::Proxy::new(self.connection.as_ref().ok_or("Desktop session retired")?,
+            DESTINATION, DESKTOP, "org.freedesktop.portal.Clipboard").await {
+            let options: HashMap<&str, Value<'_>> = HashMap::new();
+            let result = tokio::time::timeout(Duration::from_secs(10),
+                clipboard.call::<_, _, ()>("RequestClipboard", &(&session, options))).await;
+            if !matches!(result, Ok(Ok(()))) { log::info!("Desktop clipboard capability unavailable for this attempt"); }
+        }
+        self.interface = REMOTE_DESKTOP;
+        let options = self.options();
+        let mut response = self.request("Start", &(&session, "", options), cancel).await?;
+        self.clipboard_enabled = response.get("clipboard_enabled").and_then(|v| bool::try_from(v).ok()).unwrap_or(false);
+        if !self.clipboard_enabled { self.clipboard = None; }
+        let devices = response.get("devices").and_then(|v| u32::try_from(v).ok()).unwrap_or(0);
+        let streams = response.remove("streams").ok_or("RemoteDesktop returned no monitor stream")?;
+        let stream = validate_control_streams(streams.try_into().map_err(|e| format!("Invalid combined streams: {e}"))?, devices)?;
+        self.interface = SCREENCAST;
+        Ok(stream)
+    }
+
+    pub async fn eis_remote(&self) -> Result<std::os::fd::OwnedFd, String> {
+        let proxy = zbus::Proxy::new(self.connection.as_ref().ok_or("Desktop session retired")?,
+            DESTINATION, DESKTOP, REMOTE_DESKTOP).await.map_err(|e| e.to_string())?;
+        let session = OwnedObjectPath::try_from(self.path.clone()).map_err(|e| e.to_string())?;
+        let options: HashMap<&str, Value<'_>> = HashMap::new();
+        let fd: zbus::zvariant::OwnedFd = tokio::time::timeout(Duration::from_secs(10),
+            proxy.call("ConnectToEIS", &(&session, options))).await
+            .map_err(|_| "ConnectToEIS timed out")?.map_err(|e| format!("ConnectToEIS unavailable: {e}"))?;
+        Ok(fd.into())
     }
 
     pub async fn select_picture(
@@ -287,6 +371,26 @@ impl Drop for PortalSession {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn desktop_preparation_requires_monitor_mapping_and_both_devices() {
+        let monitor = || HashMap::from([
+            ("source_type".to_string(), OwnedValue::from(1u32)),
+            ("mapping_id".to_string(), OwnedValue::from(zbus::zvariant::Str::from("same-session-monitor"))),
+        ]);
+        let stream = validate_control_streams(vec![(42, monitor())], 3).unwrap();
+        assert_eq!(stream.mapping_id.as_deref(), Some("same-session-monitor"));
+        for devices in [0, 1, 2] {
+            assert!(validate_control_streams(vec![(42, monitor())], devices).is_err());
+        }
+        let mut window = monitor();
+        window.insert("source_type".into(), OwnedValue::from(2u32));
+        assert!(validate_control_streams(vec![(42, window)], 3).is_err());
+        let mut missing = monitor();
+        missing.remove("mapping_id");
+        assert!(validate_control_streams(vec![(42, missing)], 3).is_err());
+        assert!(validate_control_streams(vec![(42, monitor()), (43, monitor())], 3).is_err());
+    }
+
     use super::*;
 
     #[test]
@@ -493,6 +597,9 @@ mod tests {
             connection: Some(connection),
             path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_picture"),
             request_serial: 0,
+            interface: SCREENCAST,
+            clipboard_enabled: false,
+            clipboard: None,
         };
         for (status, expected) in [
             (1, "cancelled"),
@@ -562,6 +669,9 @@ mod tests {
             connection: Some(connection),
             path: format!("/org/freedesktop/portal/desktop/session/{sender}/petal_picture"),
             request_serial: 0,
+            interface: SCREENCAST,
+            clipboard_enabled: false,
+            clipboard: None,
         };
         let result = tokio::time::timeout(
             Duration::from_secs(5),

@@ -1714,6 +1714,7 @@
           <legend class="row-title">{REMOTE_CONTROL_POLICY_TITLE}</legend>
           <span class="row-description" id="remote-control-policy-description">
             {REMOTE_CONTROL_POLICY_DESCRIPTION}
+            {#if isLinux()}Linux desktop control always requires separate preparation and approval of the named controller, even with Allow automatically.{/if}
           </span>
           <div class="policy-options" role="radiogroup" aria-label={REMOTE_CONTROL_POLICY_TITLE}>
             {#each REMOTE_CONTROL_POLICY_OPTIONS as option (option.value)}
@@ -1727,7 +1728,7 @@
                 />
                 <span class="policy-option-copy">
                   <span class="policy-option-label">{option.label}</span>
-                  <span class="policy-option-hint">{option.hint}</span>
+                  <span class="policy-option-hint">{isLinux() && option.value === 'auto' ? 'Linux desktops still require explicit approval for each named controller.' : option.hint}</span>
                 </span>
                 <svg class="policy-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M5 12.5 10 17.5 19 7"></path>

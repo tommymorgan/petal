@@ -129,6 +129,7 @@ pub(crate) struct RemoteWindowSummary {
     hidden: bool,
     source_kind: SharedSourceKind,
     share_instance_id: Option<String>,
+    control_capability: Option<publisher::SharedControlCapability>,
     content_crop: Option<(f64, f64, f64, f64)>,
     /// Actual decoded pixels accepted by the native renderer, not window allocation.
     decoded_size: Option<(u32, u32)>,
@@ -283,6 +284,7 @@ impl LinuxReceiveFeed {
                         share_instance_id: publisher::shared_window_share_instance_from_metadata(
                             &metadata, window_id,
                         ),
+                        control_capability: publisher::shared_window_control_capability_from_metadata(&metadata, window_id),
                         content_crop: None,
                         decoded_size: None,
                     }),
@@ -412,6 +414,7 @@ impl LinuxReceiveFeed {
                     let source_kind = publisher::shared_window_kind_from_metadata(&metadata, key.1);
                     let share_instance =
                         publisher::shared_window_share_instance_from_metadata(&metadata, key.1);
+                    summary.control_capability = publisher::shared_window_control_capability_from_metadata(&metadata, key.1);
                     let instance_changed = share_instance != summary.share_instance_id
                         || source_kind != summary.source_kind;
                     if instance_changed {
@@ -527,6 +530,7 @@ struct PendingWheel {
 #[derive(Default)]
 struct ControllerState {
     mode: Option<ControllerMode>,
+    control_capability: Option<publisher::SharedControlCapability>,
     request_serial: u64,
     request_id: Option<String>,
     timeout_source: Option<gtk::glib::SourceId>,
@@ -679,7 +683,17 @@ fn wheel_draft(pending: &PendingWheel, key: &WindowKey, seq: u64) -> RemoteContr
     ..empty_draft() }
 }
 
+fn capability_presentation(capability: Option<publisher::SharedControlCapability>) -> (&'static str, &'static str, bool) {
+    use publisher::SharedControlCapability::*;
+    match capability {
+        Some(WindowViewOnly) => ("View only", "Application-window shares cannot accept input.", false),
+        Some(DesktopPreparationRequired) => ("Control not prepared", "The sharer must explicitly prepare desktop control.", false),
+        Some(Unavailable) => ("Control unavailable", "This source cannot accept input.", false),
+        _ => ("Request control", "", true),
+    }
+}
 impl ControllerUi {
+
     fn new(state: Rc<RefCell<ControllerState>>, key: WindowKey) -> Self {
         let button = gtk::Button::with_label("Request control");
         if let Some(accessible) = button.accessible() {
@@ -703,7 +717,10 @@ impl ControllerUi {
     }
 
     fn idle_presentation(&self) {
-        self.refresh_controls("Request control", "");
+        let capability = self.state.borrow().control_capability;
+        let (button, detail, enabled) = capability_presentation(capability);
+        self.refresh_controls(button, detail);
+        self.button.set_sensitive(enabled);
     }
 
     /// Everything local that must happen when control ends, whatever ended
@@ -781,7 +798,7 @@ impl ControllerUi {
             label.set_text(match mode {
                 ControllerMode::Active => "Controlling",
                 ControllerMode::Requesting => "Waiting for the sharer…",
-                ControllerMode::Idle => "",
+                ControllerMode::Idle => capability_presentation(state.borrow().control_capability).1,
             });
             if let Ok(mut state) = state.try_borrow_mut() {
                 state.feedback_source = None;
@@ -825,6 +842,7 @@ impl ControllerUi {
 
     fn on_toggle(&self) {
         let mut state = self.state.borrow_mut();
+        if state.control_capability.is_some_and(|capability| !capability.allows_request()) { return; }
         match state.mode() {
             ControllerMode::Idle => {
                 let (owner, window_id) = self.key.clone();
@@ -1181,7 +1199,9 @@ impl NativeWindow {
         window.set_resizable(true);
         window.set_default_size(pixels.width.min(1000), pixels.height.min(700));
 
-        let state = Rc::new(RefCell::new(ControllerState::default()));
+        let capability = feed.slots.lock_unpoisoned().get(&key)
+            .and_then(|slot| slot.summary.lock_unpoisoned().control_capability);
+        let state = Rc::new(RefCell::new(ControllerState { control_capability: capability, ..Default::default() }));
         let controller = ControllerUi::new(state.clone(), key.clone());
 
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1643,6 +1663,17 @@ fn start_gtk_pump(feed: LinuxReceiveFeed) {
             if slot.cancel.is_cancelled() || !feed.generation.is_current() {
                 continue;
             }
+            if let Some(native) = windows.get_mut(&slot.key) {
+                let capability = slot.summary.lock_unpoisoned().control_capability;
+                let changed = native.controller.state.borrow().control_capability != capability;
+                if changed {
+                    native.controller.state.borrow_mut().control_capability = capability;
+                    if capability.is_some_and(|capability| !capability.allows_request()) {
+                        native.controller.deactivate("This source cannot accept input.");
+                    }
+                    native.controller.idle_presentation();
+                }
+            }
             let pixels = slot.latest.lock_unpoisoned().take();
             if let Some(pixels) = pixels {
                 if !windows.contains_key(&slot.key) {
@@ -1731,6 +1762,18 @@ pub(crate) fn compositor_list_windows(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn durable_source_capabilities_never_present_automatic_control() {
+        use publisher::SharedControlCapability::*;
+        assert_eq!(capability_presentation(Some(WindowViewOnly)), ("View only", "Application-window shares cannot accept input.", false));
+        let (label, detail, enabled) = capability_presentation(Some(DesktopPreparationRequired));
+        assert_eq!(label, "Control not prepared");
+        assert!(detail.contains("explicitly"));
+        assert!(!enabled);
+        assert!(!capability_presentation(Some(Unavailable)).2);
+        assert_eq!(capability_presentation(Some(DesktopReady)).0, "Request control");
+        assert!(capability_presentation(None).2);
+    }
 
     #[test]
     fn incoming_i420_becomes_opaque_native_pixels_without_plane_overread() {
@@ -1795,6 +1838,7 @@ mod tests {
                     window_id: 7,
                     owner_identity: owner.into(),
                     owner_display_name: owner.into(),
+                    control_capability: None,
                     source_title: "Editor".into(),
                     hidden: false,
                     source_kind: SharedSourceKind::Window,

@@ -218,6 +218,12 @@ mod linux_share_capture;
 #[cfg(target_os = "linux")]
 mod linux_share_portal;
 #[cfg(target_os = "linux")]
+mod linux_eis;
+#[cfg(target_os = "linux")]
+mod linux_desktop_control;
+#[cfg(target_os = "linux")]
+mod linux_host_clipboard;
+#[cfg(target_os = "linux")]
 mod linux_startup;
 pub mod rooms;
 #[cfg(target_os = "macos")]
@@ -1830,6 +1836,7 @@ pub fn run() {
             debug_settings::set_debug_mode,
             remote_control::remote_control_send,
             remote_control::remote_control_set_active,
+            remote_control::remote_control_controller_state,
             remote_control::remote_clipboard_copy,
             remote_control::remote_clipboard_paste,
             remote_control::remote_control_request_escalation,

@@ -27,6 +27,8 @@ COMMANDS = [
     ("set_share_remote_control_allowed", {"windowId": 427, "allowed": True}),
     ("set_share_control_mode", {"windowId": 427, "mode": "fullControl"}),
     ("remote_control_answer_consent", {"windowId": 427, "controllerId": "native-controller", "requestId": "boundary-attempt", "approve": True}),
+    ("prepare_linux_desktop_control", {"windowId": 427}),
+    ("stop_linux_desktop_control", {"windowId": 427}),
     ("remote_control_answer_escalation", {"windowId": 427, "controllerId": "native-controller", "requestId": "boundary-attempt", "approve": True}),
     ("remote_control_request_escalation", {"windowId": 427, "ownerIdentity": "native-host"}),
     ("remote_clipboard_copy", {"windowId": 427, "ownerIdentity": "native-host", "grantToken": "native-grant-427"}),
@@ -91,6 +93,14 @@ def assert_denials(app):
         "remote_clipboard_paste",
     }
     for command, status, result in results:
+        if command == "remote_control_answer_consent":
+            assert status == "resolved" and result is False, \
+                f"{command} must refuse an answer without an exact pending request: {result}"
+            continue
+        if command in ("prepare_linux_desktop_control", "stop_linux_desktop_control"):
+            assert status == "rejected", \
+                f"{command} must refuse a target without a current prepared desktop: {result}"
+            continue
         if command in ("share_window", "toggle_window_share"):
             assert status == "rejected" and "add share" in str(result).lower(), \
                 f"{command} must direct raw window IDs to fresh native source consent: {result}"
@@ -109,8 +119,9 @@ def assert_denials(app):
             continue
         assert status == "rejected" and "linux" in str(result).lower(), \
             f"{command} must explicitly reject without authority, got {status}: {result}"
-        assert "unsupported" in str(result).lower(), \
-            f"{command} must explicitly reject as unsupported on Linux: {result}"
+        # Refusal and the resulting authority/media state are the contract.
+        # Host-policy commands now explain explicit preparation rather than
+        # claiming all Linux desktop input is unsupported.
 
 
 def inspect_room_controls(app, *, navigate=True):
@@ -161,9 +172,8 @@ def inspect_room_controls(app, *, navigate=True):
                 const region = buttons.find(b => visible(b) && label(b).startsWith('Petal View'));
                 const mic = buttons.find(b => visible(b) && /^(Mute|Unmute) microphone$/.test(label(b)));
                 if (!camera || !share || !mic || !region) return;
-                const actions = ['Request remote control', 'Grant remote control', 'Send remote input', 'Replay remote input'];
-                const remote = actions.map(action => buttons.find(b => visible(b) && label(b).startsWith(action)));
-                if (remote.some(b => !b)) return;
+                const remote = buttons.filter(b => visible(b) && label(b).toLowerCase().includes('desktop control'));
+                if (remote.length !== 1) return;
                 const describe = b => ({
                     disabled: b.disabled,
                     label: b.getAttribute('aria-label') || b.textContent.trim(),
@@ -223,16 +233,14 @@ class CapabilityScenario:
         assert_monitor_start_requires_room(self.app, launch_app=False)
 
     def unavailable(self):
-        # Task 2.1: camera is supported. Task 3.1: controller input is
-        # supported through the native GTK share window; the meeting-page
-        # toggles gated here are host-policy controls (granting/answering
-        # control of THIS desktop), unavailable until Task 4.1.
+        # Camera and received-share controller input are supported. With no
+        # outgoing source, the host surface explains explicit preparation
+        # rather than offering an implicit global input grant.
         camera = self.controls["camera"]
         assert camera["visible"] and not camera["disabled"], \
             {"control": camera, "diagnostic": self.controls["diagnostic"]}
         for control in [self.controls["region"], *self.controls["remote"]]:
             assert control["disabled"] and control["visible"], {"control": control, "diagnostic": self.controls["diagnostic"]}
-            assert "unsupported on Linux" in control["explanation"], control
 
     def errors(self):
         assert_denials(self.app)
@@ -244,12 +252,15 @@ class CapabilityScenario:
                 room: await window.__TAURI_INTERNALS__.invoke('current_room'),
                 presence: await window.__TAURI_INTERNALS__.invoke('room_presence'),
                 shares: await window.__TAURI_INTERNALS__.invoke('shared_window_ids'),
+                desktopControl: await window.__TAURI_INTERNALS__.invoke('linux_desktop_control_state'),
             };
         """)
         assert self.snapshot["camera"]["intended"] is False, self.snapshot
         assert self.snapshot["camera"]["publishing"] is False, self.snapshot
         assert self.snapshot["room"] is None and self.snapshot["presence"] == [], self.snapshot
         assert self.snapshot["shares"] == [], self.snapshot
+        assert self.snapshot["desktopControl"]["phase"] == "idle", self.snapshot
+        assert self.snapshot["desktopControl"]["controllerId"] is None, self.snapshot
 
     def supported(self):
         assert self.entry["entry"] and self.entry["join"], self.entry
@@ -412,8 +423,8 @@ STEP_BINDINGS = {
     "When I inspect its room controls and invoke unfinished commands directly": "inspect_and_invoke",
     "Then the monitor Share action is visibly enabled": "monitor_available",
     "And monitor selection without a room reports the missing room before requesting permission": "monitor_admission",
-    "And camera controls are enabled while region and host-input controls remain unavailable with Linux explanations": "unavailable",
-    "And region, audio and host-input commands report unsupported while camera and controller commands report their missing authority gate, and raw window IDs require native consent": "errors",
+    "And camera controls are enabled while region remains unavailable and desktop control requires explicit preparation": "unavailable",
+    "And region and audio commands remain unsupported, unprepared host input is refused, camera and controller commands report their missing authority gate, and raw window IDs require native consent": "errors",
     "And no room, picture or camera publication is created": "no_effects",
     "And room-entry and microphone controls remain available": "supported",
     "And repeated unfinished actions leave the native app without publication or input effects": "invariant",

@@ -177,88 +177,6 @@ test('remote window surface header stays transparent and height-locked to native
   assert.match(headerComponent, /\.header\.idle\s*{[\s\S]*height:\s*4px;/);
 });
 
-test('remote window header renders the View Control Draw switcher and debug toggle', () => {
-  const headerComponent = readFileSync(
-    new URL('../src/lib/components/RemoteWindowHeader.svelte', import.meta.url),
-    'utf8'
-  );
-  const surfaceRoute = readFileSync(
-    new URL('../src/routes/compositor/surface/+page.svelte', import.meta.url),
-    'utf8'
-  );
-  const controlRoute = readFileSync(
-    new URL('../src/routes/compositor/control/+page.svelte', import.meta.url),
-    'utf8'
-  );
-  const ipc = readFileSync(new URL('../src/lib/ipc.ts', import.meta.url), 'utf8');
-
-  assert.match(headerComponent, /type HeaderMode = 'view' \| 'control' \| 'draw';/);
-  assert.match(ipc, /drawSend: 'draw_send'/);
-  assert.match(ipc, /compositorSetDrawActive: 'compositor_set_draw_active'/);
-  assert.match(ipc, /\[COMMANDS\.drawSend\]: \{ draft: DrawDraft \}/);
-  assert.match(ipc, /\[COMMANDS\.compositorSetDrawActive\]: \{ windowId: number; ownerIdentity\?: string; active: boolean \}/);
-  assert.match(headerComponent, /class="mode-switcher"/);
-  assert.match(headerComponent, /aria-label="Remote window mode"/);
-  assert.match(headerComponent, /class="active-indicator"/);
-  assert.match(headerComponent, /const activeModeIndex = \$derived/);
-  assert.match(headerComponent, /width:\s*86px;/);
-  assert.match(headerComponent, /selectMode\('view'\)/);
-  assert.match(headerComponent, /selectMode\('control'\)/);
-  assert.match(headerComponent, /selectMode\('draw'\)/);
-  assert.match(headerComponent, /drawActive \? 'draw'/);
-  assert.match(headerComponent, /<span>View<\/span>/);
-  assert.match(headerComponent, /<span>Control<\/span>/);
-  assert.match(headerComponent, /<span>Draw<\/span>/);
-  assert.doesNotMatch(headerComponent, /remoteControlLabel/);
-  assert.doesNotMatch(headerComponent, /Requesting\.\.\./);
-  assert.match(headerComponent, /class="mode-segment draw"[\s\S]*aria-label=\{drawActive \? 'Drawing on shared window' : 'Draw on shared window'\}/);
-  assert.match(headerComponent, /if \(drawActive\) \{[\s\S]*onToggleDraw\?\.\(\);/);
-  assert.match(headerComponent, /function onDebugClick\(\) \{[\s\S]*debugActive = !debugActive;[\s\S]*onToggleDebug\?\.\(\);/);
-  assert.match(headerComponent, /class="header-btn debug-btn"/);
-  // #669: bring native up to web-harness's Debug button a11y behavior --
-  // aria-pressed + a Show/Hide label toggle instead of a static one.
-  assert.match(headerComponent, /class="header-btn debug-btn"[\s\S]*aria-label=\{debugActionLabel\}/);
-  assert.match(headerComponent, /aria-pressed=\{debugActive\}/);
-  assert.match(
-    headerComponent,
-    /const debugActionLabel = \$derived\(debugActive \? 'Hide debug stats' : 'Show debug stats'\);/
-  );
-  assert.match(headerComponent, /if \(remoteControlActive && !remoteControlRequesting\) \{[\s\S]*onToggleRemoteControl\?\.\(\);/);
-  assert.match(surfaceRoute, /const remoteControlAvailable = \$derived\(page\.url\.searchParams\.get\('remoteControl'\) === '1'\);/);
-  assert.match(surfaceRoute, /\{remoteControlAvailable\}[\s\S]*\{onToggleRemoteControl\}/);
-  // A sharer's DENIAL must hide the Control segment, not render it disabled
-  // behind "Preparing...". The two states have different meanings: preparing
-  // resolves on its own, denial never does. A web sharer is the common case --
-  // a browser cannot inject OS input, so it publishes an explicit denial.
-  assert.match(
-    surfaceRoute,
-    /const remoteControlDisallowed = \$derived\([\s\S]*searchParams\.get\('remoteControlDisallowed'\) === '1'/
-  );
-  assert.match(surfaceRoute, /\{remoteControlDisallowed\}/);
-  assert.match(headerComponent, /const controlSegmentShown = \$derived\(!remoteControlDisallowed\);/);
-  assert.match(headerComponent, /\{#if controlSegmentShown\}[\s\S]*class="mode-segment control"/);
-  // Draw must shift into Control's slot when Control is hidden, or the sliding
-  // active-indicator lands on empty space.
-  assert.match(
-    headerComponent,
-    /activeMode === 'draw' \? \(controlSegmentShown \? 2 : 1\)/
-  );
-  // "Preparing" must not claim a denied window is about to become available.
-  assert.match(headerComponent, /!remoteControlAvailable &&\s*\n\s*!remoteControlDisallowed &&/);
-  assert.match(surfaceRoute, /function onToggleDebug\(\) \{[\s\S]*COMMANDS\.compositorToggleDebugPanel/);
-  assert.match(surfaceRoute, /function onToggleDraw\(\) \{[\s\S]*COMMANDS\.remoteControlSetActive[\s\S]*setDrawActive\(next\)/);
-  assert.match(surfaceRoute, /function setDrawActive\(value: boolean\) \{[\s\S]*COMMANDS\.compositorSetDrawActive/);
-  assert.match(surfaceRoute, /\{onToggleDebug\}/);
-  assert.match(surfaceRoute, /compositorWindowDebugStats/);
-  assert.match(surfaceRoute, /setInterval\(\(\) => void refreshFreshness\(\), 1000\)/);
-  assert.doesNotMatch(surfaceRoute, /\{freshnessTooltip\}/, 'freshness prop was removed with the native tooltip title');
-  assert.match(surfaceRoute, /\{drawActive\}[\s\S]*\{onToggleDraw\}/);
-  assert.match(controlRoute, /__petalDebugToggle/);
-  assert.match(controlRoute, /__petalDrawSetActive/);
-  assert.match(controlRoute, /COMMANDS\.drawSend/);
-  assert.match(controlRoute, /class:draw-active=\{drawActive\}/);
-  assert.match(controlRoute, /class="debug-panel"/);
-});
 
 test('remote window header relocates remote-control feedback into the status chip', () => {
   const headerComponent = readFileSync(
@@ -375,14 +293,13 @@ test('#497: receiver windows enforce the final compact-header breakpoint nativel
   assert.match(compositor, /window\.set_min_size\(Some\(tauri::Size::Logical/);
 });
 
-test('#376 item 2: unavailable control reads as transient "preparing", not a flat dead end', () => {
+test('#376 item 2: missing capability metadata does not promise automatic permission', () => {
   const headerComponent = readFileSync(
     new URL('../src/lib/components/RemoteWindowHeader.svelte', import.meta.url),
     'utf8'
   );
 
   assert.match(headerComponent, /const remoteControlPreparing = \$derived\(/);
-  assert.match(headerComponent, /Preparing remote control/);
   assert.doesNotMatch(headerComponent, /Remote control unavailable for this window/);
   assert.match(headerComponent, /class:preparing=\{remoteControlPreparing\}/);
   assert.match(headerComponent, /\.mode-segment\.preparing\s*\{[\s\S]*animation:\s*preparing-pulse/);

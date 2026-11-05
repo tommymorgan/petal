@@ -251,6 +251,18 @@ impl RemoteControlEngine {
         self.controller_requests.lock_unpoisoned().get(&(window_id, owner.to_string())).map(|attempt| attempt.id.clone())
     }
 
+    /// The request id when this controller's attempt for the window is
+    /// ACTIVE (not merely pending). Read when a recreated control overlay
+    /// boots, so a receiver window rebuilt after a reconnect re-arms from
+    /// engine truth instead of starting inactive.
+    pub(crate) fn controller_request_active(&self, window_id: u32, owner: &str) -> Option<String> {
+        self.controller_requests
+            .lock_unpoisoned()
+            .get(&(window_id, owner.to_string()))
+            .filter(|attempt| attempt.active)
+            .map(|attempt| attempt.id.clone())
+    }
+
     pub(crate) fn retire_controller_request(&self, window_id: u32, owner: &str) {
         self.controller_requests.lock_unpoisoned().remove(&(window_id, owner.to_string()));
     }
@@ -1003,6 +1015,8 @@ pub enum RemoteControlCapability {
     LegacyControl,
     DiscretePointerV1,
     DiscreteScrollV1,
+    /// Exact-instance continuous pointer stream, separate from discrete ops.
+    ScopedPointerStreamV1,
     WindowLocalPointer,
     GlobalKeyboard,
     UiaInvoke,
@@ -1804,7 +1818,30 @@ pub(crate) fn is_v2_discrete_attempt(message: &RemoteControlMessage) -> bool {
         || message.input_seq.is_some()
         || message.operation_fingerprint_version.is_some()
         || message.operation_fingerprint.is_some()
-        || message.has_capable_envelope()
+        || (message.has_capable_envelope() && !is_scoped_pointer_stream(message))
+}
+
+fn is_scoped_pointer_stream(message: &RemoteControlMessage) -> bool {
+    matches!((message.message_type, message.action),
+        (RemoteControlType::Pointer, Some(RemoteControlAction::Move | RemoteControlAction::Down | RemoteControlAction::Up)))
+        && message.target_kind == Some(RemoteControlTargetKind::Display)
+        && message.share_instance_id.as_deref().is_some_and(|id| !id.is_empty())
+        && message.host_capabilities.contains(&RemoteControlCapability::ScopedPointerStreamV1)
+}
+
+/// Controller shaping only, not authorization. Hosts still authenticate the
+/// exact scoped grant/token; partial discrete markers remain malformed.
+pub(crate) fn prepare_continuous_pointer_envelope(message: &mut RemoteControlMessage) {
+    message.control_session_id = None;
+    message.input_id = None;
+    message.input_seq = None;
+    message.operation_fingerprint_version = None;
+    message.operation_fingerprint = None;
+    if !is_scoped_pointer_stream(message) {
+        message.target_kind = None;
+        message.share_instance_id = None;
+        message.host_capabilities.clear();
+    }
 }
 pub(crate) fn canonical_operation_fingerprint(
     message: &RemoteControlMessage,
@@ -2462,6 +2499,36 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoped_continuous_pointer_retains_exact_grant_without_discrete_downgrade() {
+        use super::test_support::input_message;
+        let engine = RemoteControlEngine::new();
+        for action in [RemoteControlAction::Move, RemoteControlAction::Down, RemoteControlAction::Up] {
+            let mut message = input_message(42, "host", RemoteControlType::Pointer);
+            message.action = Some(action);
+            message.target_kind = Some(RemoteControlTargetKind::Display);
+            message.share_instance_id = Some("current-instance".into());
+            message.host_capabilities = vec![RemoteControlCapability::ScopedPointerStreamV1];
+            message.grant_token = Some("exact-token".into());
+            prepare_continuous_pointer_envelope(&mut message);
+            assert!(!is_v2_discrete_attempt(&message));
+            let key = ControlGrantKey {
+                window_id: 42,
+                controller_id: "local-controller".into(),
+                target_kind: Some(RemoteControlTargetKind::Display),
+                share_instance_id: Some("current-instance".into()),
+            };
+            engine.install_grant(key.clone(), "exact-token".into());
+            assert_eq!(
+                engine.active_grant_token(&ControlGrantKey::for_message(&message).unwrap()),
+                Some("exact-token".into()),
+            );
+            message.share_instance_id = Some("retired-instance".into());
+            assert_eq!(engine.active_grant_token(&ControlGrantKey::for_message(&message).unwrap()), None);
+            message.input_id = Some("partial-discrete".into());
+            assert!(is_v2_discrete_attempt(&message), "partial operation markers never downgrade");
+        }
+    }
     use super::*;
     #[test]
     fn consent_answers_and_releases_are_bound_to_the_exact_host_attempt() {

@@ -67,6 +67,8 @@
   import { installDismissibleLayer } from '@petal/shared/ui/dismissibleLayer';
   import type { IdentityColor } from './Avatar.svelte';
   import type { DrawUpdate, LinuxPictureShare } from '$lib/ipc';
+  import LinuxDesktopControl from './LinuxDesktopControl.svelte';
+  import type { LinuxDesktopControlState } from '$lib/ipc';
 
   type PillResizeDirection =
     | 'East'
@@ -117,6 +119,9 @@
     expanded?: boolean;
     onControl?: (icon: ControlIcon) => void;
     pictureShares?: LinuxPictureShare[];
+    desktopControlState?: LinuxDesktopControlState | null;
+    onPrepareDesktopControl?: (windowId: number) => void;
+    onStopDesktopControl?: (windowId: number) => void;
     onAddShare?: () => void;
     onChangeShare?: (windowId: number) => void;
     onStopShare?: (windowId: number) => void;
@@ -178,6 +183,9 @@
     expanded = $bindable(true),
     onControl,
     pictureShares = [],
+    desktopControlState = null,
+    onPrepareDesktopControl,
+    onStopDesktopControl,
     onAddShare,
     onChangeShare,
     onStopShare,
@@ -801,6 +809,9 @@
       {stateTone}
       {onControl}
       {pictureShares}
+      {desktopControlState}
+      {onPrepareDesktopControl}
+      {onStopDesktopControl}
       {onAddShare}
       {onChangeShare}
       {onStopShare}
@@ -848,6 +859,13 @@
       onmousedown={handlePillMousedown}
     >
       <Pill {orientation} scale="large">
+        {#if desktopControlState?.windowId != null && !['idle', 'failed'].includes(desktopControlState.phase)}
+          <LinuxDesktopControl
+            shares={pictureShares.filter((share) => share.windowId === desktopControlState?.windowId)}
+            state={desktopControlState}
+            onStop={onStopDesktopControl}
+          />
+        {/if}
         {#if selfVideoOn}
           <!-- issue #9: live circular webcam self-view as the docked
                identity circle. Mirrored (self-view convention, #7); same
@@ -997,6 +1015,7 @@
             <span>Add share</span>
           </button>
         {/if}
+        <LinuxDesktopControl shares={pictureShares} state={desktopControlState} onPrepare={onPrepareDesktopControl} onStop={onStopDesktopControl} />
         {#each pictureShares as share (share.windowId)}
           <button type="button" role="menuitem" class="more-item" onclick={() => {
             moreOpen = false;

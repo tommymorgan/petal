@@ -42,6 +42,7 @@
   import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import { writeText } from '@tauri-apps/plugin-clipboard-manager';
   import MeetingChrome from '$lib/components/MeetingChrome.svelte';
+  import { createLinuxDesktopControl } from '$lib/meeting/linuxDesktopControl';
   import ChatDrawer from '@petal/shared/ui/components/ChatDrawer.svelte';
   import { createChatHost } from '$lib/chat/chatHost.svelte';
   import type { ChatCommandOption } from '@petal/shared/logic/chat';
@@ -70,6 +71,7 @@
     CameraPublishStateSnapshot,
     DrawUpdate,
     LinuxPictureShare,
+    LinuxDesktopControlState,
     MenubarPillState,
     RemoteControlStatus,
     MicMuteChanged,
@@ -112,6 +114,35 @@
   let pictureShares = $state<LinuxPictureShare[]>([]);
   let shareStateRevision = 0;
   let shareStateRetired = false;
+  let desktopControlState = $state<LinuxDesktopControlState | null>(null);
+  let unlistenDesktopControl: UnlistenFn | undefined;
+  const desktopControl = createLinuxDesktopControl({
+    read: () => invoke<LinuxDesktopControlState>(COMMANDS.linuxDesktopControlState),
+    prepare: (windowId) => invoke<LinuxDesktopControlState>(COMMANDS.prepareLinuxDesktopControl, { windowId }),
+    stop: (windowId) => invoke<void>(COMMANDS.stopLinuxDesktopControl, { windowId }),
+    changed: (state) => { desktopControlState = state; },
+    failed: (message) => showShareToast(message)
+  });
+  onMount(() => {
+    if (!hasTauri || !isLinux()) return;
+    let retired = false;
+    void listen<LinuxDesktopControlState>(EVENTS.linuxDesktopControlStateChanged, (event) => {
+      if (retired || shareStateRetired) return;
+      desktopControl.receive(event.payload);
+      void refreshShareState();
+    }).then((unlisten) => {
+      if (retired) unlisten();
+      else {
+        unlistenDesktopControl = unlisten;
+        void desktopControl.refresh();
+      }
+    }).catch(() => {});
+    return () => {
+      retired = true;
+      unlistenDesktopControl?.();
+      desktopControl.dispose();
+    };
+  });
   let remoteControlAllowed = $state(session.remoteControlPolicy !== 'off');
 
   // In-meeting bug report (#786) — same build-time gate as MainMenu's home
@@ -583,6 +614,7 @@
 
   function retireShareState() {
     shareStateRetired = true;
+    desktopControl.dispose();
     shareStateRevision += 1;
     pictureShares = [];
     shareActive = false;
@@ -627,6 +659,18 @@
     } finally {
       void refreshShareState();
     }
+  }
+
+  async function prepareDesktopControl(windowId: number) {
+    if (shareStateRetired || !pictureShares.some((share) => share.windowId === windowId && share.sourceKind === 'display')) return;
+    await desktopControl.prepare(windowId);
+    void refreshShareState();
+  }
+
+  async function stopDesktopControl(windowId: number) {
+    if (shareStateRetired) return;
+    await desktopControl.stop(windowId);
+    void refreshShareState();
   }
 
   async function handleScreenshareControl() {
@@ -702,6 +746,7 @@
     } else if (icon === 'region') {
       await openRegionWindow();
     } else if (icon === 'remotecontrol') {
+      if (isLinux()) return; // Linux desktop approval is per prepared share and named request.
       remoteControlAllowed = !remoteControlAllowed;
       if (hasTauri) {
         try {
@@ -818,6 +863,9 @@
         bind:expanded={pill.expanded}
         onControl={handleControl}
         {pictureShares}
+        {desktopControlState}
+        onPrepareDesktopControl={hasTauri && isLinux() ? (windowId) => void prepareDesktopControl(windowId) : undefined}
+        onStopDesktopControl={hasTauri && isLinux() ? (windowId) => void stopDesktopControl(windowId) : undefined}
         onAddShare={hasTauri && isLinux() ? () => void openSharePicker(undefined, true) : undefined}
         onChangeShare={hasTauri && isLinux() ? (windowId) => void openSharePicker(windowId) : undefined}
         onStopShare={hasTauri && isLinux() ? (windowId) => void stopPictureShare(windowId) : undefined}

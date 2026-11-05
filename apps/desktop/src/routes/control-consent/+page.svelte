@@ -236,6 +236,8 @@
         <p class="detail" id="consent-detail">
           {#if isEscalation}
             They already have cursor-preserving control. Full control lets them move your pointer while controlling this window. Denies automatically in {secondsLeft}s.
+          {:else if current.controlScope === 'desktop'}
+            Keyboard and focus are desktop-wide, not confined to the selected monitor. Stop controlled share ends this monitor share. Denies automatically in {secondsLeft}s.
           {:else}
             They can click and type in that window until you stop sharing it. Denies automatically in {secondsLeft}s.
           {/if}

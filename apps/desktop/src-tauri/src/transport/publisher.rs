@@ -194,6 +194,24 @@ impl SharedSourceKind {
     }
 }
 
+/// Host-advertised source capability, separate from a mutable permission lock.
+/// Discovery only: every request and packet still passes host admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SharedControlCapability {
+    WindowViewOnly,
+    DesktopPreparationRequired,
+    DesktopReady,
+    #[serde(other)]
+    Unavailable,
+}
+
+impl SharedControlCapability {
+    pub fn allows_request(self) -> bool {
+        self == Self::DesktopReady
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RoomConnectionError {
     #[error("room connect failed: {0}")]
@@ -1876,6 +1894,8 @@ impl RoomConnection<Arc<Room>> {
                 .color_profiles
                 .insert(window_id, color_profile);
             share_metadata.kinds.insert(window_id, source_kind);
+            #[cfg(target_os = "linux")]
+            stage_linux_control_source(&mut share_metadata, window_id, source_kind);
             if source_kind == SharedSourceKind::DisplayRegion {
                 if let Some(region) = region_descriptor(window_id) {
                     share_metadata.regions.insert(window_id, region);
@@ -1915,6 +1935,8 @@ impl RoomConnection<Arc<Room>> {
             let mut share_metadata = self.share_metadata.lock_unpoisoned();
             share_metadata.titles.insert(window_id, title);
             share_metadata.generations.insert(window_id, started_seq);
+            #[cfg(target_os = "linux")]
+            share_metadata.share_instances.insert(window_id, started_seq.to_string());
             share_metadata.scales.insert(window_id, scale);
             match url.and_then(|u| crate::browser_url::privacy_minimized_openable_url(&u)) {
                 Some(url) => {
@@ -1928,6 +1950,8 @@ impl RoomConnection<Arc<Room>> {
                 .color_profiles
                 .insert(window_id, color_profile);
             share_metadata.kinds.insert(window_id, source_kind);
+            #[cfg(target_os = "linux")]
+            stage_linux_control_source(&mut share_metadata, window_id, source_kind);
             if source_kind == SharedSourceKind::DisplayRegion {
                 if let Some(region) = region_descriptor(window_id) {
                     share_metadata.regions.insert(window_id, region);
@@ -2020,6 +2044,25 @@ impl RoomConnection<Arc<Room>> {
         }
     }
 
+    /// Advertise readiness only for the exact committed Linux display generation.
+    pub async fn set_shared_linux_control_prepared(
+        &self,
+        window_id: u32,
+        started_seq: u64,
+        prepared: bool,
+    ) {
+        let metadata = {
+            let mut share_metadata = self.share_metadata.lock_unpoisoned();
+            if !stage_linux_control_prepared(&mut share_metadata, window_id, started_seq, prepared) {
+                return;
+            }
+            encode_window_metadata(&share_metadata)
+        };
+        if let Err(error) = self.room.local_participant().set_metadata(metadata).await {
+            log::warn!("publisher: failed to publish Linux control capability for {window_id}: {error}");
+        }
+    }
+
     /// Set or remove (`None`) this participant's `plugins[<plugin_id>]`
     /// advertisement, merging non-destructively with the rest of
     /// `ShareMetadata` via `encode_window_metadata`. The caller
@@ -2089,6 +2132,7 @@ impl RoomConnection<Arc<Room>> {
             share_metadata.urls.remove(&window_id);
             share_metadata.color_profiles.remove(&window_id);
             share_metadata.kinds.remove(&window_id);
+            share_metadata.control_capabilities.remove(&window_id);
             share_metadata.share_instances.remove(&window_id);
             share_metadata.regions.remove(&window_id);
             encode_window_metadata(&share_metadata)
@@ -3337,6 +3381,7 @@ const PETAL_WINDOW_REGIONS_METADATA_KEY: &str = "petalWindowRegions";
 /// receiver's affordance -- never the authorization itself, which stays on the
 /// host (`remote_control.rs`) where a peer cannot influence it.
 pub const PETAL_WINDOW_REMOTE_CONTROL_METADATA_KEY: &str = "petalWindowRemoteControl";
+pub const PETAL_WINDOW_CONTROL_CAPABILITIES_METADATA_KEY: &str = "petalWindowControlCapabilities";
 /// Marks a participant's metadata as coming from the web harness (mirrors
 /// web-harness/src/trackNames.ts's PETAL_SHARER_CLIENT_METADATA_KEY -- keep
 /// the two in sync by hand). This crate never writes it: absence means
@@ -3386,6 +3431,7 @@ struct ShareMetadata {
     kinds: HashMap<u32, SharedSourceKind>,
     share_instances: HashMap<u32, String>,
     control_modes: HashMap<u32, crate::remote_control_core::RemoteControlMode>,
+    control_capabilities: HashMap<u32, SharedControlCapability>,
     regions: HashMap<u32, SharedRegionDescriptor>,
     /// Per-share remote-control permission. Absent == allowed (see the key's
     /// doc); only `false` is ever encoded.
@@ -3442,8 +3488,45 @@ fn clear_share_metadata_for_generation(
     metadata.kinds.remove(&window_id);
     metadata.share_instances.remove(&window_id);
     metadata.control_modes.remove(&window_id);
+    metadata.control_capabilities.remove(&window_id);
     metadata.regions.remove(&window_id);
     metadata.remote_control_allowed.remove(&window_id);
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn stage_linux_control_source(
+    metadata: &mut ShareMetadata,
+    window_id: u32,
+    kind: SharedSourceKind,
+) {
+    let capability = match kind {
+        SharedSourceKind::Window => SharedControlCapability::WindowViewOnly,
+        SharedSourceKind::Display => SharedControlCapability::DesktopPreparationRequired,
+        SharedSourceKind::DisplayRegion => SharedControlCapability::Unavailable,
+    };
+    metadata.control_capabilities.insert(window_id, capability);
+}
+
+fn stage_linux_control_prepared(
+    metadata: &mut ShareMetadata,
+    window_id: u32,
+    started_seq: u64,
+    prepared: bool,
+) -> bool {
+    if metadata.generations.get(&window_id) != Some(&started_seq)
+        || metadata.kinds.get(&window_id) != Some(&SharedSourceKind::Display)
+    {
+        return false;
+    }
+    metadata.control_capabilities.insert(
+        window_id,
+        if prepared {
+            SharedControlCapability::DesktopReady
+        } else {
+            SharedControlCapability::DesktopPreparationRequired
+        },
+    );
     true
 }
 
@@ -3571,6 +3654,15 @@ fn encode_window_metadata(metadata: &ShareMetadata) -> String {
         PETAL_WINDOW_CONTROL_MODES_METADATA_KEY.to_string(),
         serde_json::Value::Object(encoded_control_modes),
     );
+    if !metadata.control_capabilities.is_empty() {
+        let capabilities = metadata.control_capabilities.iter().map(|(id, capability)| {
+            (id.to_string(), serde_json::to_value(capability).expect("control capability enum"))
+        }).collect();
+        root.insert(
+            PETAL_WINDOW_CONTROL_CAPABILITIES_METADATA_KEY.to_string(),
+            serde_json::Value::Object(capabilities),
+        );
+    }
     // Only DENIALS are encoded. Absence therefore means "allowed", which is
     // what keeps a pre-key sharer behaving as before, and keeps the common
     // case (everything allowed) off the wire entirely.
@@ -3763,6 +3855,22 @@ pub fn shared_window_remote_control_allowed_from_metadata(metadata: &str, window
         .and_then(|entries| entries.get(window_id.to_string()))
         .and_then(|value| value.as_bool())
         .unwrap_or(true)
+}
+
+pub fn shared_window_control_capability_from_metadata(
+    metadata: &str,
+    window_id: u32,
+) -> Option<SharedControlCapability> {
+    let value: serde_json::Value = serde_json::from_str(metadata).ok()?;
+    let entries = value.get(PETAL_WINDOW_CONTROL_CAPABILITIES_METADATA_KEY)?;
+    let Some(entries) = entries.as_object() else {
+        return Some(SharedControlCapability::Unavailable);
+    };
+    let capability = entries.get(&window_id.to_string())?;
+    Some(
+        serde::Deserialize::deserialize(capability)
+            .unwrap_or(SharedControlCapability::Unavailable),
+    )
 }
 
 /// Which kind of Petal client published a share, from
@@ -9926,6 +10034,44 @@ pub(crate) fn encoder_looks_software(implementation: &str, power_efficient: bool
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn linux_control_capability_rejects_stale_preparation_and_window_escalation() {
+        let mut metadata = ShareMetadata::default();
+        metadata.generations.insert(7, 42);
+        metadata.kinds.insert(7, SharedSourceKind::Display);
+        metadata.control_capabilities.insert(7, SharedControlCapability::DesktopPreparationRequired);
+        assert!(!stage_linux_control_prepared(&mut metadata, 7, 41, true));
+        assert_eq!(metadata.control_capabilities[&7], SharedControlCapability::DesktopPreparationRequired);
+        assert!(stage_linux_control_prepared(&mut metadata, 7, 42, true));
+        assert_eq!(metadata.control_capabilities[&7], SharedControlCapability::DesktopReady);
+        assert!(!clear_share_metadata_for_generation(&mut metadata, 7, 41));
+        assert_eq!(metadata.control_capabilities[&7], SharedControlCapability::DesktopReady);
+        assert!(clear_share_metadata_for_generation(&mut metadata, 7, 42));
+        assert!(!metadata.control_capabilities.contains_key(&7));
+
+        metadata.generations.insert(7, 43);
+        metadata.kinds.insert(7, SharedSourceKind::Window);
+        metadata.control_capabilities.insert(7, SharedControlCapability::WindowViewOnly);
+        assert!(!stage_linux_control_prepared(&mut metadata, 7, 43, true));
+        assert_eq!(metadata.control_capabilities[&7], SharedControlCapability::WindowViewOnly);
+    }
+
+    #[test]
+    fn control_capability_is_not_inferred_from_mutable_permission() {
+        let window = r#"{"petalWindowRemoteControl":{"7":true},"petalWindowControlCapabilities":{"7":"windowViewOnly"}}"#;
+        assert!(shared_window_remote_control_allowed_from_metadata(window, 7));
+        assert_eq!(shared_window_control_capability_from_metadata(window, 7), Some(SharedControlCapability::WindowViewOnly));
+        assert!(!shared_window_control_capability_from_metadata(window, 7).unwrap().allows_request());
+        let locked_desktop = r#"{"petalWindowRemoteControl":{"7":false},"petalWindowControlCapabilities":{"7":"desktopReady"}}"#;
+        assert!(!shared_window_remote_control_allowed_from_metadata(locked_desktop, 7));
+        assert!(shared_window_control_capability_from_metadata(locked_desktop, 7).unwrap().allows_request());
+        assert_eq!(shared_window_control_capability_from_metadata(r#"{"petalWindowRemoteControl":{"7":false}}"#, 7), None);
+        for value in [r#""futureCapability""#, "true", "null", "{}"] {
+            let metadata = format!(r#"{{"petalWindowControlCapabilities":{{"7":{value}}}}}"#);
+            assert_eq!(shared_window_control_capability_from_metadata(&metadata, 7), Some(SharedControlCapability::Unavailable));
+        }
+    }
+
 
     #[test]
     fn remote_control_permission_defaults_to_allowed_when_the_key_is_absent() {

@@ -10,15 +10,8 @@ const PICKER_LIMITATION: &str =
 const AUDIO_LIMITATION: &str =
     "Computer, system and application audio sharing are unsupported on Linux";
 pub(crate) const CONTROL_LIMITATION: &str =
-    "Acting as a remote-control host (granting, answering, or receiving input on this Linux desktop) is unsupported on Linux";
+    "Linux application-window shares are view-only; explicitly prepare a monitor and approve a named desktop controller";
 
-/// Host-side remote input stays refused on Linux (Task 4.1 owns that path).
-/// The controller role — requesting and using a sharer's explicit grant, and
-/// the controller-side clipboard — is a supported capability (Task 3.1) and is
-/// deliberately absent from this refusal list.
-pub(crate) fn require_remote_input() -> Result<(), String> {
-    Err(CONTROL_LIMITATION.to_string())
-}
 
 pub(crate) fn command_error(command: &str) -> Option<&'static str> {
     match command {
@@ -27,7 +20,6 @@ pub(crate) fn command_error(command: &str) -> Option<&'static str> {
         "open_system_content_picker" => Some(PICKER_LIMITATION),
         "set_share_audio_enabled" | "set_region_share_audio" => Some(AUDIO_LIMITATION),
         "remote_control_request_escalation"
-        | "remote_control_answer_consent"
         | "remote_control_answer_escalation"
         | "set_remote_control_allowed"
         | "set_remote_control_policy"
@@ -55,7 +47,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_host_role_commands_are_rejected_without_revoking_receive_or_audio() {
+    fn unsupported_features_remain_refused_without_blocking_named_desktop_consent() {
         for command in [
             "toggle_region_share",
             "open_region_window",
@@ -63,7 +55,6 @@ mod tests {
             "set_share_audio_enabled",
             "set_region_share_audio",
             "remote_control_request_escalation",
-            "remote_control_answer_consent",
             "remote_control_answer_escalation",
             "set_remote_control_allowed",
             "set_remote_control_policy",
@@ -73,7 +64,7 @@ mod tests {
             "ai_chat_control_resume",
         ] {
             let error = command_error(command).expect(command);
-            assert!(error.contains("unsupported on Linux"), "{command}: {error}");
+            assert!(error.contains("unsupported on Linux") || error.contains("view-only"), "{command}: {error}");
         }
         for command in ["share_window", "toggle_window_share"] {
             assert_eq!(command_error(command), Some(NATIVE_CONSENT_REQUIRED));
@@ -98,7 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn controller_role_commands_are_admitted_while_host_input_stays_refused() {
+    fn controller_and_explicit_desktop_consent_commands_are_admitted() {
         // Task 3.1: the Linux controller path (requesting and using a Windows
         // grant, plus controller-side clipboard) is a supported capability.
         for command in [
@@ -114,10 +105,10 @@ mod tests {
                 "{command} must be admitted"
             );
         }
-        // Host-side grant/consent/input stays refused (Task 4.1).
-        assert!(command_error("remote_control_answer_consent").is_some());
+        // Desktop consent is handled by the common grant core; arbitrary
+        // per-window/global enable toggles cannot manufacture portal authority.
+        assert!(command_error("remote_control_answer_consent").is_none());
         assert!(command_error("set_share_control_mode").is_some());
-        assert!(require_remote_input().is_err());
         assert!(command_error("set_share_audio_enabled").is_some());
         assert!(command_error("share_window").is_some());
     }

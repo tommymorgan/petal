@@ -109,6 +109,24 @@ async fn screencast_properties() -> Result<String, String> {
     result
 }
 
+async fn desktop_properties() -> Result<String, String> {
+    let connection = zbus::Connection::session().await.map_err(|e| e.to_string())?;
+    let result = async {
+        let bus = zbus::Proxy::new(&connection, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus")
+            .await.map_err(|e| e.to_string())?;
+        let owner: String = bus.call("GetNameOwner", &("org.freedesktop.portal.Desktop",)).await
+            .map_err(|_| "RemoteDesktop portal is not running; no service was started")?;
+        let portal = zbus::Proxy::new(&connection, owner.as_str(), "/org/freedesktop/portal/desktop", "org.freedesktop.portal.RemoteDesktop")
+            .await.map_err(|e| e.to_string())?;
+        let version: u32 = portal.get_property("version").await.map_err(|e| e.to_string())?;
+        let devices: u32 = portal.get_property("AvailableDeviceTypes").await.map_err(|e| e.to_string())?;
+        if version < 2 || devices & 3 != 3 { return Err("RemoteDesktop v2 with keyboard and pointer is required".into()); }
+        Ok(format!("RemoteDesktop v{version} advertises keyboard/pointer and EIS; explicit permission, unique mapping and live devices remain required"))
+    }.await;
+    let _ = connection.close().await;
+    result
+}
+
 #[tauri::command]
 pub(crate) async fn linux_native_prerequisites() -> Prerequisites {
     // Plugin registry work never runs on GTK's main thread and only loads
@@ -153,9 +171,18 @@ pub(crate) async fn linux_native_prerequisites() -> Prerequisites {
             (major, minor) >= MIN_CAMERA_GSTREAMER_VERSION
         }
     };
+    let desktop = tokio::time::timeout(Duration::from_secs(3), desktop_properties()).await
+        .unwrap_or_else(|_| Err("RemoteDesktop metadata query timed out".into()));
+    let input = monitor && desktop.is_ok();
+    components.push(Component { name: "remotedesktop-portal", available: desktop.is_ok(),
+        reason: desktop.unwrap_or_else(|e| e),
+        effect: "Desktop control requires explicit native permission and one uniquely mapped live EIS keyboard/pointer session" });
+    components.push(Component { name: "libei", available: true,
+        reason: "Native libei sender is linked; no input session or device was opened by this check".into(),
+        effect: "Desktop input uses libei only; no X11, uinput or private compositor fallback" });
     Prerequisites {
         components,
-        capabilities: Capabilities { monitor, camera, input: false },
-        scope: "Installed components and advertised portal interfaces on this GNOME Wayland computer only. Availability is not capture permission, a first frame, Windows rendering, or cross-distro acceptance. Desktop input is not implemented in this unit.",
+        capabilities: Capabilities { monitor, camera, input },
+        scope: "Installed components and advertised portal interfaces on this GNOME Wayland computer only. Availability is not capture/input permission, a first frame, device readiness, Windows rendering, or cross-distro acceptance.",
     }
 }

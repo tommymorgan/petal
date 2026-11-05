@@ -144,6 +144,7 @@ export const COMMANDS = {
   remoteClipboardPaste: 'remote_clipboard_paste',
   remoteControlSend: 'remote_control_send',
   remoteControlSetActive: 'remote_control_set_active',
+  remoteControlControllerState: 'remote_control_controller_state',
   renameRoom: 'rename_room',
   requestCamera: 'request_camera',
   requestAccessibility: 'request_accessibility',
@@ -194,6 +195,9 @@ export const COMMANDS = {
   sharedWindowIds: 'shared_window_ids',
   linuxPictureShares: 'linux_picture_shares',
   stopLinuxPictureShare: 'stop_linux_picture_share',
+  linuxDesktopControlState: 'linux_desktop_control_state',
+  prepareLinuxDesktopControl: 'prepare_linux_desktop_control',
+  stopLinuxDesktopControl: 'stop_linux_desktop_control',
   startTestCockpit: 'start_test_cockpit',
   linuxCameraPreviewOpen: 'linux_camera_preview_open',
   linuxCameraPreviewClose: 'linux_camera_preview_close',
@@ -273,6 +277,7 @@ export const EVENTS = {
    * the listener's refresh sees the CURRENT window set.
    */
   desktopWindowsChanged: 'desktop-windows-changed',
+  linuxDesktopControlStateChanged: 'linux-desktop-control-state-changed',
   hoverTabHide: 'hover-tab-hide',
   hoverTabUpdate: 'hover-tab-update',
   drawUpdate: 'draw-update',
@@ -1189,6 +1194,7 @@ export type RemoteControlCapability =
   | 'legacyControl'
   | 'discretePointerV1'
   | 'discreteScrollV1'
+  | 'scopedPointerStreamV1'
   | 'windowLocalPointer'
   | 'globalKeyboard'
   | 'uiaInvoke'
@@ -1215,6 +1221,7 @@ export type ControlConsentRequestedEvent =
       controllerName: string;
       windowTitle?: string;
       timeoutMs: number;
+      controlScope?: 'desktop';
     }
   | {
       kind: 'fullControlEscalation';
@@ -1224,6 +1231,7 @@ export type ControlConsentRequestedEvent =
       controllerName: string;
       windowTitle?: string;
       timeoutMs: number;
+      controlScope?: 'desktop';
     };
 
 
@@ -1645,6 +1653,9 @@ export interface CommandArgs {
   [COMMANDS.openWindowPickerWindow]: { color?: string; replaceWindowId?: number };
   [COMMANDS.linuxPictureShares]: Record<string, never>;
   [COMMANDS.stopLinuxPictureShare]: { windowId: number };
+  [COMMANDS.linuxDesktopControlState]: Record<string, never>;
+  [COMMANDS.prepareLinuxDesktopControl]: { windowId: number };
+  [COMMANDS.stopLinuxDesktopControl]: { windowId: number };
   [COMMANDS.toggleWindowPickerWindow]: Record<string, never>;
   [COMMANDS.recordVideoStreamState]: {
     participantIdentity: string;
@@ -1935,6 +1946,7 @@ export interface CommandReturns {
   [COMMANDS.remoteClipboardPaste]: void;
   [COMMANDS.remoteControlAnswerConsent]: boolean;
   [COMMANDS.remoteControlSetActive]: boolean;
+  [COMMANDS.remoteControlControllerState]: { requestId: string } | null;
   [COMMANDS.regionPlacementActive]: boolean;
   [COMMANDS.regionShareState]: RegionShareState;
   [COMMANDS.syncRegionWindowFrame]: void;
@@ -1978,6 +1990,9 @@ export interface CommandReturns {
   [COMMANDS.sharedWindowIds]: number[];
   [COMMANDS.linuxPictureShares]: LinuxPictureShare[];
   [COMMANDS.stopLinuxPictureShare]: void;
+  [COMMANDS.linuxDesktopControlState]: LinuxDesktopControlState;
+  [COMMANDS.prepareLinuxDesktopControl]: LinuxDesktopControlState;
+  [COMMANDS.stopLinuxDesktopControl]: void;
   [COMMANDS.toggleMenubarMic]: boolean;
   [COMMANDS.toggleWindowShare]: boolean;
 }
@@ -2037,4 +2052,12 @@ export interface LinuxPictureShare {
   windowId: number;
   title: string;
   sourceKind: 'display' | 'window';
+}
+
+export interface LinuxDesktopControlState {
+  phase: 'idle' | 'preparing' | 'ready' | 'awaitingApproval' | 'active' | 'stopping' | 'failed';
+  windowId: number | null;
+  controllerId: string | null;
+  controllerName: string | null;
+  error: string | null;
 }

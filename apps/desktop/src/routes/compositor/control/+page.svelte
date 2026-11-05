@@ -782,7 +782,11 @@
       windowId,
       ownerIdentity,
       grantToken: grantToken ?? undefined
-    }).catch(() => {});
+    }).catch(() => {
+      // Both halves of the chord are already consumed above, so a rejected
+      // invoke would otherwise vanish silently; surface it in the banner.
+      showFeedback('requestFailed', `Clipboard ${operation} failed`);
+    });
   }
 
   // #373: the composed result of an IME sequence (CJK, dead keys, emoji
@@ -892,13 +896,13 @@
   // (active/stopped) clear it; transient refusals (occluded, integrityBlocked,
   // secureField, …) replace any current banner and restart one 3-second
   // timer — never stacking DOM elements or global toasts.
-  function showFeedback(status: RemoteControlStatus) {
-    if (status.status === 'active' || status.status === 'stopped') {
+  function showFeedback(status: RemoteControlStatus['status'], message?: string | null) {
+    if (status === 'active' || status === 'stopped') {
       clearFeedback();
       return;
     }
-    feedbackStatus = status.status;
-    feedbackMessage = status.message ?? null;
+    feedbackStatus = status;
+    feedbackMessage = message ?? null;
     if (feedbackTimer) clearTimeout(feedbackTimer);
     feedbackTimer = setTimeout(() => {
       feedbackTimer = undefined;
@@ -996,7 +1000,7 @@
       } else if (event.payload.status === 'stopped') {
         grantToken = null;
       }
-      showFeedback(event.payload);
+      showFeedback(event.payload.status, event.payload.message);
     })
       .then((unlisten) => {
         unlistenRemoteControlStatus = unlisten;

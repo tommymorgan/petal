@@ -1,4 +1,4 @@
-//! Independent, picture-only Linux shares with private native consent.
+//! Independent Linux pictures; desktop control requires separate native consent.
 //! Four active owners, one pending, one retiring and one coalesced intent.
 
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -39,6 +39,7 @@ struct SelectionIntent {
     generation: RoomGeneration,
     ready: oneshot::Sender<Result<(), String>>,
     replace_id: Option<u32>,
+    desktop_control: bool,
 }
 
 #[derive(Default)]
@@ -150,6 +151,7 @@ impl PictureOwner {
     }
 
     pub fn cancel(&self) {
+        crate::linux_desktop_control::retire_all();
         let mut slots = self.slots.lock_unpoisoned();
         if let Some(intent) = slots.selection.take() {
             let _ = intent
@@ -219,6 +221,7 @@ impl PictureOwner {
     }
 
     pub(crate) async fn stop(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        crate::linux_desktop_control::retire_all();
         let (stopped, cutoff) = {
             let mut slots = self.slots.lock_unpoisoned();
             if let Some(intent) = slots.selection.take() {
@@ -261,9 +264,11 @@ impl PictureOwner {
     }
 
     fn cancel_one(
+        // Native authority admission retires before capture cancellation.
         &self,
         id: u32,
     ) -> Result<(watch::Receiver<bool>, Option<watch::Receiver<bool>>), String> {
+        crate::linux_desktop_control::retire(id);
         let mut slots = self.slots.lock_unpoisoned();
         let slot = slots
             .active
@@ -314,6 +319,20 @@ impl PictureOwner {
         generation: RoomGeneration,
         replace_id: Option<u32>,
     ) -> Result<(), String> {
+        self.start_mode(app, connection, generation, replace_id, false).await
+    }
+
+    pub(crate) async fn start_control(self: &Arc<Self>, app: tauri::AppHandle,
+        connection: Arc<RoomConnection>, generation: RoomGeneration, id: u32) -> Result<(), String> {
+        if self.source_kind(id) != Some(SharedSourceKind::Display) {
+            return Err("Application-window shares are view-only".into());
+        }
+        self.start_mode(app, connection, generation, Some(id), true).await
+    }
+
+    async fn start_mode(self: &Arc<Self>, app: tauri::AppHandle,
+        connection: Arc<RoomConnection>, generation: RoomGeneration,
+        replace_id: Option<u32>, desktop_control: bool) -> Result<(), String> {
         let (ready, result) = oneshot::channel();
         let (id, launch_driver) = {
             let mut slots = self.slots.lock_unpoisoned();
@@ -321,6 +340,9 @@ impl PictureOwner {
                 return Err("Join a room before sharing a picture".to_string());
             }
             slots.admit(replace_id)?;
+            if desktop_control && (slots.pending.is_some() || slots.selection.is_some()) {
+                return Err("Finish the current picture selection before preparing desktop control".into());
+            }
             let id = self
                 .next_id
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |id| id.checked_add(1))
@@ -336,6 +358,7 @@ impl PictureOwner {
                 generation,
                 ready,
                 replace_id,
+                desktop_control,
             }) {
                 let _ = previous
                     .ready
@@ -408,6 +431,7 @@ impl PictureOwner {
                             intent.id,
                             cancel,
                             intent.ready,
+                            intent.desktop_control,
                         )
                         .await;
                     done.send_replace(true);
@@ -464,16 +488,18 @@ impl PictureOwner {
         id: u32,
         cancel: CancellationToken,
         ready: oneshot::Sender<Result<(), String>>,
+        desktop_control: bool,
     ) {
         let mut ready = Some(ready);
         let mut portal = None;
         let mut capture = None;
         let mut publication = PublicationLease(None);
+        let mut eis = None;
         let mut publishing = None;
         let mut metadata_task = None;
         let mut metadata_written = false;
         let mut started = false;
-        let outcome: Result<(), String> = async {
+        let mut outcome: Result<(), String> = async {
             if !self.is_current(id, &generation) {
                 return Err("Screen sharing cancelled".to_string());
             }
@@ -486,9 +512,17 @@ impl PictureOwner {
             let stream = tokio::select! {
                 _ = cancel.cancelled() => return Err("Screen sharing cancelled".to_string()),
                 _ = closed.next() => return Err("Screen sharing access ended".to_string()),
-                result = session.select_picture(&cancel) => result?,
+                result = async {
+                    if desktop_control { session.select_desktop_control(&cancel).await }
+                    else { session.select_picture(&cancel).await }
+                } => result?,
             };
             let source_kind = stream.source_kind;
+            if desktop_control {
+                crate::linux_desktop_control::set_pending(id, cancel.clone())?;
+                let fd = session.eis_remote().await?;
+                eis = Some(crate::linux_eis::Eis::open(fd, stream.mapping_id.clone().ok_or("Missing monitor mapping")?, cancel.clone()).await?);
+            }
             if !self.is_current(id, &generation) { return Err("Screen sharing cancelled".to_string()); }
             let remote = tokio::select! {
                 _ = cancel.cancelled() => return Err("Screen sharing cancelled".to_string()),
@@ -517,7 +551,7 @@ impl PictureOwner {
                 metadata_connection.set_shared_window_info_for_generation(
                     id, id as u64, source_title(source_kind).to_string(), scale, None, profile, source_kind,
                 ).await;
-                metadata_connection.set_shared_remote_control_allowed(id, false).await;
+                metadata_connection.set_shared_remote_control_allowed(id, desktop_control).await;
             }));
             metadata_written = true;
             tokio::select! {
@@ -570,18 +604,37 @@ impl PictureOwner {
                 geometry.height = frame.height as i32;
                 accepted = timing.source_accepted;
             }
+            if desktop_control {
+                crate::linux_desktop_control::ready(id, eis.clone().ok_or("Missing EIS owner")?, session.clipboard.clone())?;
+            }
             let mut retiring = self.commit(id, &generation, geometry, source_kind)?;
+            if desktop_control {
+                connection.set_shared_linux_control_prepared(id, id as u64, true).await;
+            }
             started = true;
             emit_state(&app, id, true, None);
             if retiring.is_none() {
                 emit_picker(&app, id, false);
                 if let Some(ready) = ready.take() { let _ = ready.send(Ok(())); }
             }
+            // Keep this timer across frames; recreating it can postpone expiry forever.
+            let control_period = Duration::from_millis(100);
+            let mut control_watchdog = tokio::time::interval_at(
+                tokio::time::Instant::now() + control_period,
+                control_period,
+            );
+            control_watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 let awaiting_retirement = retiring.is_some();
                 let frame = tokio::select! {
                     biased;
                     _ = cancel.cancelled() => break,
+                    _ = control_watchdog.tick(), if desktop_control => {
+                        if !crate::linux_desktop_control::is_prepared(id) {
+                            return Err("Desktop control permission, device or grant expired; share again explicitly".into());
+                        }
+                        continue;
+                    },
                     result = wait_retirement(&mut retiring), if awaiting_retirement => {
                         result?;
                         retiring = None;
@@ -606,8 +659,24 @@ impl PictureOwner {
             }
             Ok(())
         }.await;
+        // Invalidate common application admission before releasing EIS/capture.
+        if desktop_control {
+            crate::linux_desktop_control::retire(id);
+            crate::remote_control::revoke_window(&app, id, "desktop session ended");
+            if let Some(eis) = eis.take() {
+                if let Ok(Some(error)) = tokio::task::spawn_blocking(move || { eis.close(); eis.error() }).await {
+                    if outcome.is_ok() { outcome = Err(error); }
+                }
+            }
+        }
         cancel.cancel();
-        // Release OS media authority before waiting on any delayed signaling.
+        if desktop_control {
+            // Remove the SDK publication before portal Close can wait. The
+            // SDK removes its local publication registry entry first, so a
+            // reconnect cannot republish this retired controlled picture.
+            publication.close().await;
+        }
+        // Release the remaining OS capture authority before later signaling cleanup.
         if let Some(capture) = capture.take() {
             let _ = tokio::task::spawn_blocking(move || drop(capture)).await;
         }
@@ -632,6 +701,7 @@ impl PictureOwner {
                 .await;
         }
         let (removed, close_picker) = self.finish(id);
+        if desktop_control { crate::linux_desktop_control::finish(id, outcome.as_ref().err().cloned()); }
         if removed {
             emit_state(
                 &app,
@@ -948,3 +1018,4 @@ mod tests {
         assert!(owner.is_current(2, &generation()));
     }
 }
+

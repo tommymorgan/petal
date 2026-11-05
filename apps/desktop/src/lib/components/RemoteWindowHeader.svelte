@@ -17,6 +17,7 @@
     type RemoteControlFeedbackStatus,
     remoteControlFeedbackIsNeutral
   } from '$lib/remoteControlFeedback';
+  import { desktopControlReceiverFeedback } from '$lib/meeting/linuxDesktopControl';
   import type { GlassToGlassChip } from '$lib/data/remoteWindowDebug';
   import {
     AI_CHAT_ACTIVE_BADGE_LABEL,
@@ -65,6 +66,8 @@
      *  `!remoteControlAvailable`, which only means metadata is still in
      *  flight -- so this HIDES the segment rather than showing 'Preparing…'. */
     remoteControlDisallowed?: boolean;
+    remoteControlViewOnly?: boolean;
+    remoteControlPreparationRequired?: boolean;
     onToggleRemoteControl?: () => void;
     /** Sharer-selected host mode for this share (read-only on the controller).
      * Absent => cursor-preserving. Drives the read-only mode chip and whether
@@ -158,6 +161,8 @@
     remoteControlStatusMessage = null,
     remoteControlAvailable = false,
     remoteControlDisallowed = false,
+    remoteControlViewOnly = false,
+    remoteControlPreparationRequired = false,
     onToggleRemoteControl,
     controlMode = 'cursorPreserving',
     onRequestEscalation,
@@ -286,32 +291,29 @@
   );
   // The sharer forbade control: don't offer it at all. Hiding beats a
   // disabled button, which invites clicking and then explains nothing.
-  const controlSegmentShown = $derived(!remoteControlDisallowed);
+  const desktopControlFeedback = $derived(desktopControlReceiverFeedback(remoteControlViewOnly, remoteControlPreparationRequired));
+  const controlSegmentShown = $derived(!remoteControlDisallowed || !!desktopControlFeedback);
   const activeModeIndex = $derived(
     activeMode === 'control' ? 1 : activeMode === 'draw' ? (controlSegmentShown ? 2 : 1) : 0
   );
-  // #376 item 2: `remoteControlAvailable` is false only while the sender's
-  // source-scale metadata hasn't arrived yet (transport/subscriber.rs) -- it
-  // is never a permanent "this window can't be controlled" signal, so the
-  // segment stays disabled but frames it as transient ("Preparing...")
-  // rather than a flat, alarming "unavailable". The prop flips true (and
-  // this button re-enables, with no user action needed) as soon as the
-  // metadata lands and the surface webview picks up the refreshed query
-  // string (compositor.rs `update_window_metadata` -> `refresh_header_webview`).
+  // Missing metadata is not evidence of preparation or future permission.
+  // Explicit Linux source metadata distinguishes permanent view-only windows
+  // from displays requiring the sharer's separate native preparation.
   const remoteControlPreparing = $derived(
     !remoteControlAvailable &&
       !remoteControlDisallowed &&
+      !desktopControlFeedback &&
       !remoteControlActive &&
       !remoteControlRequesting
   );
   const remoteControlTitle = $derived(
-    remoteControlRequesting
+    desktopControlFeedback ?? (remoteControlRequesting
       ? 'Requesting control'
       : remoteControlActive
         ? 'Remote control active'
         : remoteControlAvailable
           ? (remoteControlFeedbackTitleText ?? 'Request control')
-          : 'Preparing remote control… it will enable automatically.'
+          : 'Waiting for remote-control capability information')
   );
   // The control is only ever rendered when the HOST says so; it never
   // re-derives visibility from an unrelated prop, so the button and the badge
@@ -747,13 +749,13 @@
         aria-label={remoteControlTitle}
         aria-pressed={activeMode === 'control'}
         aria-haspopup={controlModesSupported && onOpenControlMenu ? 'menu' : undefined}
-        disabled={!remoteControlAvailable || remoteControlRequesting}
+        disabled={!!desktopControlFeedback || !remoteControlAvailable || remoteControlRequesting}
       >
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="m3 3 7.07 16.97 2.51-7.39 7.39-2.51L3 3Z"></path>
           <path d="m13 13 6 6"></path>
         </svg>
-        <span>Control</span>
+        <span>{desktopControlFeedback ? 'View only' : 'Control'}</span>
       </button>
       {/if}
       <button
