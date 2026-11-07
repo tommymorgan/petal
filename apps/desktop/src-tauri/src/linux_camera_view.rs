@@ -96,6 +96,47 @@ impl CameraViewStore {
     }
 }
 
+/// What the GTK pump should do with the room-owned self-view this tick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelfViewAction {
+    /// Publication is live and the user has not closed the viewer.
+    Show,
+    /// Publication is live but the user closed the viewer: stay hidden.
+    StayHidden,
+    /// Publication ended: retire the surface entirely.
+    Retire,
+}
+
+/// Self-view visibility across pump ticks. Closing the window is a user
+/// decision that must survive until the publication itself ends; the pump
+/// runs every 16ms, so re-showing whenever the window is merely invisible
+/// turned the close button into a ~150ms hide/re-map flash (observed live
+/// 2026-11-06: the self-view "popped" back on every close click).
+#[derive(Debug, Default)]
+struct SelfViewLifecycle {
+    dismissed: Arc<AtomicBool>,
+}
+
+impl SelfViewLifecycle {
+    /// Shared with the window's delete handler.
+    fn dismissal_flag(&self) -> Arc<AtomicBool> {
+        self.dismissed.clone()
+    }
+
+    fn tick(&self, publication: bool) -> SelfViewAction {
+        if !publication {
+            // A later publication is a new camera session: the viewer opens
+            // again, exactly like the first time.
+            self.dismissed.store(false, Ordering::SeqCst);
+            return SelfViewAction::Retire;
+        }
+        if self.dismissed.load(Ordering::SeqCst) {
+            SelfViewAction::StayHidden
+        } else {
+            SelfViewAction::Show
+        }
+    }
+}
 struct CameraSurface {
     window: gtk::Window,
     area: gtk::DrawingArea,
@@ -109,7 +150,14 @@ struct OwnedPixels {
 }
 
 impl CameraSurface {
-    fn new(title: &str, closable: bool, store: &CameraViewStore) -> Self {
+    /// `self_view_dismissal` is Some for the room-owned self-view (closing
+    /// it records a dismissal the pump honours) and None for the Settings
+    /// preview (closing it releases the preview lease).
+    fn new(
+        title: &str,
+        self_view_dismissal: Option<Arc<AtomicBool>>,
+        store: &CameraViewStore,
+    ) -> Self {
         let window = gtk::Window::new(gtk::WindowType::Toplevel);
         window.set_decorated(true);
         window.set_resizable(true);
@@ -151,19 +199,21 @@ impl CameraSurface {
             gtk::glib::Propagation::Proceed
         });
         window.add(&area);
-        if closable {
+        if let Some(dismissed) = self_view_dismissal {
+            // The self-view is room-owned: closing it hides the viewer for
+            // the rest of this publication but never stops the publication
+            // or starts another capture.
+            let hide_window = window.clone();
+            window.connect_delete_event(move |_, _| {
+                dismissed.store(true, Ordering::SeqCst);
+                hide_window.hide();
+                gtk::glib::Propagation::Stop
+            });
+        } else {
             let close_store = store.clone();
             window.connect_delete_event(move |_, _| {
                 close_store.preview_closed();
                 gtk::glib::Propagation::Proceed
-            });
-        } else {
-            // The self-view is room-owned: closing it hides the viewer but
-            // never stops the publication or starts another capture.
-            let hide_window = window.clone();
-            window.connect_delete_event(move |_, _| {
-                hide_window.hide();
-                gtk::glib::Propagation::Stop
             });
         }
         Self {
@@ -293,6 +343,7 @@ fn convert_nv12_bgra(frame: &CameraFrame) -> Option<OwnedPixels> {
 /// store's lease state, never a second capture.
 pub(super) fn start_camera_gtk_pump(app: tauri::AppHandle, store: CameraViewStore) {
     let mut self_view: Option<CameraSurface> = None;
+    let self_view_lifecycle = SelfViewLifecycle::default();
     let mut preview: Option<CameraSurface> = None;
     // Closing the preview surface releases its lease through the owner;
     // the owner updates the store's surface state itself.
@@ -306,23 +357,34 @@ pub(super) fn start_camera_gtk_pump(app: tauri::AppHandle, store: CameraViewStor
         let preview_active = store.preview_surface_active();
         let label = store.label().unwrap_or_default();
         let frame = store.take_new_frame();
-        // Self-view follows the publication lease exactly (C01/C07).
-        if publication {
-            let surface = self_view.get_or_insert_with(|| {
-                CameraSurface::new("Petal — Camera self-view", false, &store)
-            });
-            surface.show(&label, "Petal — Camera self-view");
-            if let Some(frame) = &frame {
-                surface.update(frame);
+        // Self-view follows the publication lease (C01/C07), except that a
+        // user close keeps it hidden until that publication ends.
+        match self_view_lifecycle.tick(publication) {
+            SelfViewAction::Show => {
+                let surface = self_view.get_or_insert_with(|| {
+                    CameraSurface::new(
+                        "Petal — Camera self-view",
+                        Some(self_view_lifecycle.dismissal_flag()),
+                        &store,
+                    )
+                });
+                surface.show(&label, "Petal — Camera self-view");
+                if let Some(frame) = &frame {
+                    surface.update(frame);
+                }
             }
-        } else if let Some(surface) = self_view.take() {
-            surface.hide();
+            SelfViewAction::StayHidden => {}
+            SelfViewAction::Retire => {
+                if let Some(surface) = self_view.take() {
+                    surface.hide();
+                }
+            }
         }
         // The Settings preview is explicitly visible and clearly titled
         // (C02); closing it releases the preview lease.
         if preview_active {
             let surface = preview
-                .get_or_insert_with(|| CameraSurface::new("Petal — Camera preview", true, &store));
+                .get_or_insert_with(|| CameraSurface::new("Petal — Camera preview", None, &store));
             surface.show(&label, "Petal — Camera preview");
             if let Some(frame) = &frame {
                 surface.update(frame);
@@ -412,5 +474,22 @@ mod tests {
         store.set_surface_state(false, true, None);
         assert_eq!(store.label().as_deref(), Some("Cam-A"));
         assert!(!store.publication_surface_active());
+    }
+
+    #[test]
+    fn closing_the_self_view_keeps_it_hidden_until_the_publication_ends() {
+        let lifecycle = SelfViewLifecycle::default();
+        assert_eq!(lifecycle.tick(true), SelfViewAction::Show);
+        // The user clicks the window's close button (delete handler).
+        lifecycle.dismissal_flag().store(true, Ordering::SeqCst);
+        // Every later 16ms pump tick of the SAME publication must leave it
+        // closed — re-showing here was the live "pops back" bug.
+        for _ in 0..100 {
+            assert_eq!(lifecycle.tick(true), SelfViewAction::StayHidden);
+        }
+        // Turning the camera off retires the viewer and clears the dismissal,
+        // so the next camera session opens it again.
+        assert_eq!(lifecycle.tick(false), SelfViewAction::Retire);
+        assert_eq!(lifecycle.tick(true), SelfViewAction::Show);
     }
 }
