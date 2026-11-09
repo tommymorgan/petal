@@ -108,6 +108,8 @@ pub(crate) fn run() {
                 crate::camera_session::log_camera_preview_state,
                 crate::linux_camera::linux_camera_preview_open,
                 crate::linux_camera::linux_camera_preview_close,
+                // The local meeting tile pulls the publication's frames.
+                crate::camera_self_view::next_self_view_frame,
                 crate::main_window::open_main_route,
                 crate::main_window::show_main_window,
                 crate::settings_window::open_settings_window,

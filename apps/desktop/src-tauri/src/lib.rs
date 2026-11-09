@@ -154,9 +154,9 @@ mod pipeline_stats;
 // cfg-free, one copy for both platforms.
 mod camera_session;
 mod room_generation;
-// Windows native→webview self-view feed: the module is
-// Windows-only; `camera_session` calls it under `#[cfg(target_os = "windows")]`.
-#[cfg(target_os = "windows")]
+// Native→webview self-view feed (Windows and Linux): `camera_session` calls
+// it from the publication's frame callback under the same cfg.
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod camera_self_view;
 mod platform;
 mod presence;

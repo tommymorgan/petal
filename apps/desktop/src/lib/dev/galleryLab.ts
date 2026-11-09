@@ -10,6 +10,7 @@
 // scenario maths can be unit-tested under node.
 
 import type { GalleryParticipant } from '$lib/components/Gallery.svelte';
+import { isCanvasFeed } from '$lib/videoAttachment';
 
 export type LabLayoutMode = 'grid' | 'spotlight';
 
@@ -170,7 +171,10 @@ export function syntheticCameraStream(spec: Pick<LabParticipantSpec, 'name' | 'c
 
 /** Stop every track a lab participant list owns. */
 export function stopLabStreams(participants: readonly GalleryParticipant[]): void {
-  for (const participant of participants) participant.videoStream?.getTracks().forEach((track) => track.stop());
+  for (const participant of participants) {
+    const feed = participant.videoStream;
+    if (feed && !isCanvasFeed(feed)) feed.getTracks().forEach((track) => track.stop());
+  }
 }
 
 /** The gallery participants the meeting route would pass for `specs`. */

@@ -29,7 +29,6 @@ test('desktop participant tile keeps video and placeholder layers mounted for cr
   assert.match(participantTile, /<div class="video-fill" class:active=\{showVideoFill\}/);
   assert.match(participantTile, /<div class="off-fill" class:active=\{showCameraOffFill\}/);
   assert.match(participantTile, /<video[\s\S]*class:ready=\{videoReady\}[\s\S]*onloadeddata=\{\(\) => markVideoFrameReady\(\)\}/);
-  assert.match(participantTile, /attachVideoStream\(videoEl, visibleVideoStream\)/);
 });
 
 test('desktop participant tile fades real video in only after decoded-frame readiness', () => {

@@ -19,9 +19,9 @@
     (`toggle_menubar_mic` -> real LocalAudioTrack::mute()), and screenshare
     (WindowPicker -> real capture+publish) are REAL.
   - The LOCAL tile renders a real webcam self-view when Video is on —
-    mirrored, device released on off/leave/unmount. Windows feeds it from
-    the SAME native Media Foundation capture via a same-process frame pull
-    (camera_self_view.rs -> `next_self_view_frame` -> canvas stream; one
+    mirrored, device released on off/leave/unmount. Windows and Linux feed
+    it from the SAME native capture that publishes, via a same-process frame
+    pull (camera_self_view.rs -> `next_self_view_frame` -> canvas stream; one
     camera client, no SFU round trip). macOS keeps its direct getUserMedia
     preview (two independent camera clients there, as before). Video ALSO
     publishes the webcam natively (shared camera_session.rs -> petal-camera-
@@ -55,7 +55,8 @@
   import { cameraPreviewConstraints } from '$lib/data/cameraConstraints';
   import { identityColorCss, identityInkCss } from '$lib/data/identityColor';
   import { ensureCameraAccess, openPrivacySettings } from '$lib/data/permissions';
-  import { startNativeSelfView, stopNativeSelfView } from '$lib/data/selfView';
+  import { startNativeSelfView, startNativeSelfViewFeed, stopNativeSelfView } from '$lib/data/selfView';
+  import { isCanvasFeed, type CameraFeed } from '$lib/videoAttachment';
   import { isLinux, isWindows } from '$lib/platform';
   import {
     cameraPublishSyncPlan,
@@ -104,7 +105,7 @@
   // authoritative; the WebView self-view is only a best-effort local preview.
   // In plain browser mode, getUserMedia still owns the preview-only state.
   let camActive = $state(false);
-  let localCameraStream = $state<MediaStream | null>(null);
+  let localCameraStream = $state<CameraFeed | null>(null);
   let shareActive = $state(false);
   // #875: local shared-window COUNT (not just the shareActive boolean) --
   // feeds the local tile's non-interactive multi-share count pill.
@@ -374,8 +375,7 @@
             return;
           }
           console.error('native camera publish failed or stopped', event.payload.error);
-          localCameraStream?.getTracks().forEach((t) => t.stop());
-          localCameraStream = null;
+          dropLocalCameraFeed();
           camActive = false;
           if (event.payload.error) {
             showCameraRetryToast('Camera publish failed — others can’t see your video');
@@ -438,14 +438,20 @@
     }
   });
 
-  function releaseSelfViewPreview() {
-    localCameraStream?.getTracks().forEach((t) => t.stop());
+  /** Release whatever feeds the local self-view: getUserMedia tracks, or the
+   * native frame pull (Windows stream / Linux canvas feed). */
+  function dropLocalCameraFeed() {
+    if (localCameraStream && !isCanvasFeed(localCameraStream)) {
+      localCameraStream.getTracks().forEach((t) => t.stop());
+    }
     localCameraStream = null;
+    if (hasTauri && (isWindows() || isLinux())) stopNativeSelfView();
+  }
+
+  function releaseSelfViewPreview() {
+    dropLocalCameraFeed();
     camActive = false;
     dismissCameraToast();
-    if (hasTauri && isWindows()) stopNativeSelfView();
-    // Linux self-view is a native room-owned window (ADR 0003): nothing is
-    // acquired from this webview, so nothing needs releasing here.
   }
 
   // Stop the self-view camera and release the device (camera light must go
@@ -457,29 +463,24 @@
     if (hasTauri) invoke(COMMANDS.stopCameraPublish).catch(() => {});
   }
 
-  // Real self-view acquisition. Windows: the native Media Foundation capture
-  // feeds the preview directly (single camera client — the
-  // same frames the publish path sends are pulled via `next_self_view_frame`
-  // onto a canvas stream). macOS/browser: getUserMedia, which can HANG with no
+  // Real self-view acquisition. Windows/Linux: the native capture feeds the
+  // preview directly (single camera client — the same frames the publish
+  // path sends are pulled via `next_self_view_frame`; Windows plays them as a
+  // canvas stream, Linux draws them onto tile canvases).
+  // macOS/browser: getUserMedia, which can HANG with no
   // prompt and no rejection when the camera is held by another app — raced
   // against a timeout so the control never silently wedges. In native mode
   // this is only local preview; native publication is the source of truth.
   async function acquireSelfView(): Promise<boolean> {
-    if (hasTauri && isLinux()) {
-      // The native self-view window opens with the publication (C01) and
-      // retires with it; this webview never acquires camera media.
-      camActive = true;
-      return true;
-    }
     if (localCameraStream) {
       // Already holding a live self-view (e.g. Retry after a publish-only
       // failure) — never open a second stream on top of it.
       camActive = true;
       return true;
     }
-    if (hasTauri && isWindows()) {
+    if (hasTauri && (isWindows() || isLinux())) {
       try {
-        localCameraStream = await startNativeSelfView();
+        localCameraStream = isLinux() ? await startNativeSelfViewFeed() : await startNativeSelfView();
         camActive = true;
         return true;
       } catch (err) {
@@ -531,6 +532,9 @@
         if (result.published) {
           camActive = true;
           dismissCameraToast();
+          // Linux captures only inside the native publish path (portal
+          // permission first), so the tile's frame pull starts after it.
+          if (!localCameraStream) void acquireSelfView();
         }
         // published:false -> the bounded self-heal is running; the terminal
         // camera-publish-state event owns the retry surface.

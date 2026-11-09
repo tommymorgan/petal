@@ -11,6 +11,7 @@ import { goto } from '$app/navigation';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { GalleryParticipant } from '$lib/components/Gallery.svelte';
+import type { CameraFeed } from '$lib/videoAttachment';
 import { session } from '$lib/stores/session.svelte';
 import {
   joinRoom,
@@ -58,7 +59,7 @@ export interface MeetingSessionOptions {
    * non-interactive count pill. The route derives this from the same
    * `sharedWindowIds` command that already backs `shareActive`. */
   localShareCount: () => number;
-  localCameraStream: () => MediaStream | null;
+  localCameraStream: () => CameraFeed | null;
   /** Best-effort restore of the /main window geometry before the route
    * swap back (Tauri only); the meeting route passes the pill's
    * restoreHomeWindow. Gallery mode only — pill mode must not pre-restore

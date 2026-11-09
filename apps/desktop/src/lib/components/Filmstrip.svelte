@@ -31,6 +31,7 @@
   import { fade } from 'svelte/transition';
   import ParticipantTile from './ParticipantTile.svelte';
   import { tileTransitionDuration } from '$lib/motion';
+  import type { CameraFeed } from '$lib/videoAttachment';
 
   export interface FilmstripParticipant {
     /** Stable identity key (the room identity). Two participants can share
@@ -39,8 +40,8 @@
     id?: string;
     name: string;
     videoOn?: boolean;
-    /** Live MediaStream for this tile (local self-view). */
-    videoStream?: MediaStream;
+    /** Live camera feed for this tile (local self-view). */
+    videoStream?: CameraFeed;
     /** Mirror the video (local self-view convention only). */
     mirrored?: boolean;
     speaking?: boolean;

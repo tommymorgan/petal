@@ -1,13 +1,14 @@
-#![cfg(target_os = "windows")]
+#![cfg(any(target_os = "windows", target_os = "linux"))]
 
-//! Native camera → webview self-view feed: the Media Foundation
-//! camera's NV12 frames are copied into a single latest-wins buffer and
-//! pulled by the meeting route's self-view canvas via `next_self_view_frame`.
+//! Native camera → webview self-view feed: the publication capture's NV12
+//! frames (Media Foundation on Windows, the PipeWire/GStreamer owner on
+//! Linux) are copied into a single latest-wins buffer and pulled by the
+//! meeting route's self-view canvas via `next_self_view_frame`.
 //!
-//! This replaces the old SFU round trip (MF capture → H.264 publish → SFU
-//! relay → hidden webview subscriber → `<video>` tile) with a same-process
-//! feed: no encode/SFU/decode/network latency, no freeze watchdog, and the
-//! camera light is on exactly once (one capture client).
+//! This replaces the old SFU round trip (capture → H.264 publish → SFU
+//! relay → hidden webview subscriber → `<video>` tile) and, on Linux, the
+//! floating GTK self-view window: no encode/SFU/decode/network latency, and
+//! the camera light is on exactly once (one capture client).
 //!
 //! Buffer layout (little-endian, all planes tightly packed, stride == width):
 //! `[width: u32][height: u32][capture_wall_time_us: u64][y: w*h][uv: w*h/2]`

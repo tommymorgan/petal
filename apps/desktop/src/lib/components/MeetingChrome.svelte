@@ -53,7 +53,7 @@
   import { linuxMeetingLimitation } from '$lib/platform';
   import type { Snippet } from 'svelte';
   import { onDestroy } from 'svelte';
-  import { attachVideoStream } from '$lib/videoAttachment';
+  import { attachVideoStream, isCanvasFeed, type CameraFeed } from '$lib/videoAttachment';
   import Gallery, { type GalleryParticipant } from './Gallery.svelte';
   import Pill from '@petal/shared/ui/components/Pill.svelte';
   import Avatar from './Avatar.svelte';
@@ -160,7 +160,7 @@
      * OWNED by the parent (the meeting route's #7 getUserMedia self-view) —
      * this component never opens its own capture, so collapsing/expanding
      * never restarts the camera. */
-    localVideoStream?: MediaStream | null;
+    localVideoStream?: CameraFeed | null;
   }
 
   let {
@@ -220,19 +220,28 @@
   // srcObject can't be set via a template attribute — bind the element and
   // assign in an effect (same pattern as ParticipantTile/Settings).
   let selfVideoEl = $state<HTMLVideoElement | null>(null);
+  let selfCanvasEl = $state<HTMLCanvasElement | null>(null);
+  const selfCanvasFeed = $derived(isCanvasFeed(localVideoStream) ? localVideoStream : null);
   let pillInteractive = $state(false);
   let pillCompactTimer: ReturnType<typeof setTimeout> | null = null;
   $effect(() => {
     const el = selfVideoEl;
     if (!el) return;
-    const changed = attachVideoStream(el, localVideoStream);
-    if (changed && localVideoStream) {
+    const stream = isCanvasFeed(localVideoStream) ? null : localVideoStream;
+    const changed = attachVideoStream(el, stream);
+    if (changed && stream) {
       // Belt-and-suspenders next to the `autoplay` attribute: Chromium
       // doesn't always honor autoplay for a framework-set `muted` on a
       // freshly (re)mounted element (observed live: paused=true after a
       // camera off→on remount). play() on a muted element needs no gesture.
       void el.play().catch(() => {});
     }
+  });
+  $effect(() => {
+    const feed = selfCanvasFeed;
+    const canvas = selfCanvasEl;
+    if (!feed || !canvas) return;
+    return feed.attach(canvas);
   });
 
   /** Natural (layout) size of the pill itself — offsetWidth/offsetHeight, NOT
@@ -877,8 +886,12 @@
             class:speaking={participants[0]?.speaking}
             style:--ring-color={activeColor ?? `var(--id-${activeIdentity})`}
           >
-            <!-- svelte-ignore a11y_media_has_caption -->
-            <video bind:this={selfVideoEl} autoplay muted playsinline></video>
+            {#if selfCanvasFeed}
+              <canvas bind:this={selfCanvasEl} aria-hidden="true"></canvas>
+            {:else}
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video bind:this={selfVideoEl} autoplay muted playsinline></video>
+            {/if}
           </div>
         {:else}
           <Avatar
@@ -1161,7 +1174,8 @@
     pointer-events: none;
   }
 
-  .self-video video {
+  .self-video video,
+  .self-video canvas {
     width: 100%;
     height: 100%;
     border-radius: var(--radius-pill);

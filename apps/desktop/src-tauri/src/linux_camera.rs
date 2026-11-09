@@ -986,13 +986,15 @@ impl LinuxCameraOwner {
                 return;
             }
             core.note_negotiated(generation, negotiated);
-            self.view.publish(frame.clone());
+            // The GTK store feeds only the Settings preview window; the
+            // in-room self-view pulls the publication's frames instead.
+            if self.view.preview_surface_active() {
+                self.view.publish(frame.clone());
+            }
             (generation, core.publication
                 .as_ref()
                 .map(|lease| (lease.id, lease.generation)))
         };
-        self.view
-            .set_surface_state(current.is_some(), self.view.preview_surface_active(), None);
         let Some((lease_id, lease_generation)) = current else {
             return;
         };
@@ -1033,7 +1035,7 @@ impl LinuxCameraOwner {
         if let Some(capture) = capture {
             capture.cancel.cancel();
         }
-        self.view.set_surface_state(false, false, None);
+        self.view.set_preview_state(false, None);
         self.view.clear();
     }
 
@@ -1061,11 +1063,7 @@ impl LinuxCameraOwner {
             core.preview.take();
             core.lease_preview(&self.next_lease)?
         };
-        self.view.set_surface_state(
-            self.core.lock_unpoisoned().publication.is_some(),
-            true,
-            Some(label.as_str()),
-        );
+        self.view.set_preview_state(true, Some(label.as_str()));
         self.emit_preview_state(true, Some((device_id.clone(), label.clone())), None);
         Ok((device_id, label))
     }
@@ -1096,10 +1094,8 @@ impl LinuxCameraOwner {
             if let Some(capture) = capture {
                 capture.cancel.cancel();
             }
-            self.view.set_surface_state(core.publication.is_some(), false, None);
-            if core.publication.is_none() {
-                self.view.clear();
-            }
+            self.view.set_preview_state(false, None);
+            self.view.clear();
             self.emit_preview_state(false, None, Some(error.as_str()));
             return Err(error);
         }
@@ -1122,7 +1118,7 @@ impl LinuxCameraOwner {
         }
         // Keep the original lease rather than manufacturing a replacement.
         // Visibility is committed under the same lock close_preview uses.
-        self.view.set_surface_state(core.publication.is_some(), true, Some(&selection.label));
+        self.view.set_preview_state(true, Some(&selection.label));
         self.emit_preview_state(true, Some((selection.device_id.clone(), selection.label.clone())), None);
         true
     }
@@ -1138,11 +1134,6 @@ impl LinuxCameraOwner {
         let capture = self.core.lock_unpoisoned().publication_retired_by_room();
         if let Some(capture) = &capture {
             capture.cancel.cancel();
-        }
-        let preview_active = self.core.lock_unpoisoned().preview.is_some();
-        self.view.set_surface_state(false, preview_active, None);
-        if !preview_active {
-            self.view.clear();
         }
     }
 
@@ -1189,11 +1180,6 @@ impl LinuxCameraOwner {
         }
         if let Some(capture) = &capture {
             capture.cancel.cancel();
-        }
-        let preview_active = self.core.lock_unpoisoned().preview.is_some();
-        self.view.set_surface_state(false, preview_active, None);
-        if !preview_active {
-            self.view.clear();
         }
     }
 
@@ -1255,11 +1241,8 @@ impl LinuxCameraOwner {
         if let Some(capture) = &capture {
             capture.cancel.cancel();
         }
-        let publication_active = self.core.lock_unpoisoned().publication.is_some();
-        self.view.set_surface_state(publication_active, false, None);
-        if !publication_active {
-            self.view.clear();
-        }
+        self.view.set_preview_state(false, None);
+        self.view.clear();
         self.emit_preview_state(false, None, None);
     }
 
@@ -1476,7 +1459,7 @@ mod tests {
         owner.close_preview();
         assert!(!owner.complete_preview_refresh(lease, &selection));
         assert!(!owner.view.preview_surface_active());
-        assert!(owner.view.publication_surface_active());
+        assert!(owner.core.lock_unpoisoned().publication.is_some());
         assert!(owner.snapshot().capture_active);
         assert!(publication.status.terminal_error().is_none());
         assert!(owner.core.lock_unpoisoned().capture_matches(
@@ -1511,12 +1494,12 @@ mod tests {
 
         owner.frame_arrived(&capture_status, solid_frame(41), (2, 2, 30, 1));
         assert_eq!(received.try_recv(), Ok(41));
-        assert!(owner.view.publication_surface_active());
+        assert!(owner.core.lock_unpoisoned().publication.is_some());
         // A failure of this same, adopted pipeline must still retire its leases.
         owner.capture_failed(&capture_status, "fixture camera disconnected");
         assert_eq!(publication_status.terminal_error().as_deref(), Some(CAMERA_ACCESS_LOST));
         assert!(!owner.core.lock_unpoisoned().snapshot().capture_active);
-        assert!(!owner.view.publication_surface_active());
+        assert!(owner.core.lock_unpoisoned().publication.is_none());
     }
 
     #[test]
@@ -1584,7 +1567,7 @@ mod tests {
             assert!(snapshot.capture_active);
             assert!(snapshot.publication);
             assert!(snapshot.preview);
-            assert!(owner.view.publication_surface_active());
+            assert!(owner.core.lock_unpoisoned().publication.is_some());
             assert!(snapshot.last_error.is_none());
         }
     }

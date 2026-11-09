@@ -501,7 +501,7 @@ async fn prepare_camera_capture(
             preferred_device_id.as_deref(),
             preferred_mode,
             move |frame| {
-                #[cfg(target_os = "windows")]
+                #[cfg(any(target_os = "windows", target_os = "linux"))]
                 crate::camera_self_view::feed_frame(&frame);
                 let size = (frame.width, frame.height);
                 let is_first = !callback_first_frame_sent.swap(true, Ordering::SeqCst);
@@ -835,7 +835,7 @@ pub(crate) async fn stop_camera_publish(
     if let Some(camera) = state.take_active_camera() {
         log::info!("session: stop_camera_publish begin");
         teardown_active_camera(camera, true).await;
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         crate::camera_self_view::clear();
         log::info!("session: stop_camera_publish done (camera released)");
     }

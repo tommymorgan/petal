@@ -31,7 +31,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { cameraOffNameLabelForFit, firstGrapheme, nameChipLabelForFit } from '$lib/data/nameChipFit';
   import { colorForIdentity, identityColorCss, identityColorFromPaletteIndex } from '$lib/data/identityColor';
-  import { attachVideoStream } from '$lib/videoAttachment';
+  import { attachVideoStream, isCanvasFeed, type CameraFeed } from '$lib/videoAttachment';
   import { COMMANDS } from '$lib/ipc';
   import type { DrawUpdate } from '$lib/ipc';
   import { isStrokeExpired, strokeFadeOpacity } from '$lib/data/strokeExpiry';
@@ -49,10 +49,11 @@
     name: string;
     /** Whether this participant's video feed is on. */
     videoOn?: boolean;
-    /** Live MediaStream to render as the tile's real video (local webcam
-     * self-view today). When unset, `videoOn: true` keeps the
+    /** Live camera feed to render as the tile's real video (local webcam
+     * self-view today): a MediaStream plays in `<video>`, a canvas feed
+     * (Linux) draws onto `<canvas>`. When unset, `videoOn: true` keeps the
      * static silhouette placeholder (the remote-participant stand-in). */
-    videoStream?: MediaStream;
+    videoStream?: CameraFeed;
     /** Mirror the video horizontally — the universal convention for a LOCAL
      * self-view only; remote streams must render unmirrored. */
     mirrored?: boolean;
@@ -136,12 +137,13 @@
   // assign in an effect (same pattern as Settings.svelte's camera preview).
   let tileEl = $state<HTMLDivElement | null>(null);
   let videoEl = $state<HTMLVideoElement | null>(null);
+  let canvasEl = $state<HTMLCanvasElement | null>(null);
   let nameChipEl = $state<HTMLDivElement | null>(null);
   let nameMeasureEl = $state<HTMLSpanElement | null>(null);
   let centeredNameMeasureEl = $state<HTMLSpanElement | null>(null);
   let measuredNameChipLabel = $state<string | null>(null);
   let measuredCenteredNameLabel = $state<string | null>(null);
-  let visibleVideoStream = $state<MediaStream | null>(null);
+  let visibleVideoStream = $state<CameraFeed | null>(null);
   let videoFrameReady = $state(false);
   // #248: `cover` fills the tile only while the crop stays inside the shared
   // caps (a third of the width off the sides, 10% off top and bottom); past
@@ -153,6 +155,7 @@
   const nameChipLabel = $derived(measuredNameChipLabel ?? firstGrapheme(name));
   const centeredNameLabel = $derived(measuredCenteredNameLabel ?? firstGrapheme(name));
   const hasVisibleVideoStream = $derived(!!visibleVideoStream);
+  const visibleCanvasFeed = $derived(isCanvasFeed(visibleVideoStream) ? visibleVideoStream : null);
   const showVideoFill = $derived(videoOn && !videoFrameReady);
   const showCameraOffFill = $derived(!videoOn);
   const showCameraOffName = $derived(!videoOn);
@@ -284,8 +287,12 @@
   });
 
   function syncVideoFit() {
-    if (!tileEl || !videoEl) return;
-    const media = { width: videoEl.videoWidth, height: videoEl.videoHeight };
+    const surface = visibleCanvasFeed ? canvasEl : videoEl;
+    if (!tileEl || !surface) return;
+    const media =
+      surface instanceof HTMLCanvasElement
+        ? { width: surface.width, height: surface.height }
+        : { width: surface.videoWidth, height: surface.videoHeight };
     const box = { width: tileEl.clientWidth, height: tileEl.clientHeight };
     if (media.width !== videoIntrinsicSize.width || media.height !== videoIntrinsicSize.height) {
       videoIntrinsicSize = media;
@@ -387,12 +394,28 @@
     });
   }
 
-  function markVideoFrameReady(stream: MediaStream | null = visibleVideoStream) {
+  function markVideoFrameReady(stream: CameraFeed | null = visibleVideoStream) {
     if (stream && stream === visibleVideoStream && videoOn) videoFrameReady = true;
   }
 
   $effect(() => {
-    attachVideoStream(videoEl, visibleVideoStream);
+    attachVideoStream(videoEl, isCanvasFeed(visibleVideoStream) ? null : visibleVideoStream);
+  });
+
+  $effect(() => {
+    const feed = visibleCanvasFeed;
+    const canvas = canvasEl;
+    if (!feed || !canvas) return;
+    // Every new frame draws here; the first one fades the picture in, and a
+    // size change (camera mode switch) re-decides cover vs contain.
+    let size = { width: 0, height: 0 };
+    return feed.attach(canvas, () => {
+      untrack(() => markVideoFrameReady(feed));
+      if (canvas.width !== size.width || canvas.height !== size.height) {
+        size = { width: canvas.width, height: canvas.height };
+        untrack(syncVideoFit);
+      }
+    });
   });
 
   $effect(() => {
@@ -533,6 +556,16 @@
     playsinline
     onloadeddata={() => markVideoFrameReady()}
   ></video>
+  {#if visibleCanvasFeed}
+    <canvas
+      class="video-el"
+      class:mirrored
+      class:ready={videoReady}
+      class:contain={videoFit === 'contain'}
+      bind:this={canvasEl}
+      aria-hidden="true"
+    ></canvas>
+  {/if}
 
   {#if drawStrokes.length > 0}
     <svg class="draw-layer" class:mirrored viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true"
